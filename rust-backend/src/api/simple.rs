@@ -9,7 +9,7 @@ use crate::{
     models::{MarketSignal, SignalContext, SignalContextRecord, SignalType},
     scrapers::polymarket::OrderBook,
     signals::wallet_analytics::{
-        get_or_compute_wallet_analytics, WalletAnalytics, WalletAnalyticsParams,
+        get_or_compute_wallet_analytics, FrictionMode, WalletAnalytics, WalletAnalyticsParams,
     },
     AppState,
 };
@@ -123,6 +123,8 @@ pub struct SignalContextQuery {
 pub struct WalletAnalyticsQuery {
     pub wallet_address: String,
     pub force: Option<bool>,
+    /// Friction mode for copy trading simulation: "optimistic", "base", or "pessimistic"
+    pub friction_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,13 +225,23 @@ pub async fn get_wallet_analytics(
     let now = Utc::now().timestamp();
     let force = params.force.unwrap_or(false);
 
+    // Parse friction mode from query param (defaults to Base)
+    let friction_mode = params
+        .friction_mode
+        .as_ref()
+        .map(|s| FrictionMode::from_str(s))
+        .unwrap_or(FrictionMode::Base);
+
+    let mut analytics_params = WalletAnalyticsParams::default();
+    analytics_params.friction_mode = friction_mode;
+
     let analytics = get_or_compute_wallet_analytics(
         &state.signal_storage,
         rest,
         &params.wallet_address,
         force,
         now,
-        WalletAnalyticsParams::default(),
+        analytics_params,
     )
     .await
     .map_err(|_| StatusCode::BAD_GATEWAY)?;

@@ -168,8 +168,16 @@ class ApiClient {
     return this.fetch<MarketSnapshotResponse>(`/api/market/snapshot?${query.toString()}`, {}, 2_000);
   }
 
-  async getWalletAnalytics(walletAddress: string, force: boolean = false): Promise<WalletAnalyticsResponse> {
-    const query = new URLSearchParams({ wallet_address: walletAddress, force: String(force) });
+  async getWalletAnalytics(
+    walletAddress: string,
+    force: boolean = false,
+    frictionMode: 'optimistic' | 'base' | 'pessimistic' = 'base'
+  ): Promise<WalletAnalyticsResponse> {
+    const query = new URLSearchParams({
+      wallet_address: walletAddress,
+      force: String(force),
+      friction_mode: frictionMode,
+    });
     return this.fetch<WalletAnalyticsResponse>(`/api/wallet/analytics?${query.toString()}`, {}, 2_500);
   }
 

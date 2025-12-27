@@ -136,6 +136,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [analyticsSource, setAnalyticsSource] = useState<'cache' | 'network' | null>(null);
+  const [frictionMode, setFrictionMode] = useState<'optimistic' | 'base' | 'pessimistic'>('base');
 
   const [bookData, setBookData] = useState<MarketSnapshotResponse | null>(null);
   const [bookLoading, setBookLoading] = useState(false);
@@ -215,7 +216,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
   const fetchWalletAnalytics = useCallback(
     async (force: boolean = false) => {
       if (!walletAddress) return;
-      const key = `${walletAddress.toLowerCase()}`;
+      const key = `${walletAddress.toLowerCase()}:${frictionMode}`;
       setAnalyticsError(null);
 
       try {
@@ -230,7 +231,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
         const nowMs = Date.now();
         const existing = walletAnalyticsInFlight.get(key);
         if (!existing || force || nowMs - existing.startedAtMs > INFLIGHT_WALLET_TTL_MS) {
-          const promise = api.getWalletAnalytics(walletAddress, force);
+          const promise = api.getWalletAnalytics(walletAddress, force, frictionMode);
           walletAnalyticsInFlight.set(key, { startedAtMs: nowMs, promise });
         }
         const data = await walletAnalyticsInFlight.get(key)!.promise;
@@ -245,7 +246,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
         setAnalyticsLoading(false);
       }
     },
-    [walletAddress]
+    [walletAddress, frictionMode]
   );
 
   const fetchBook = useCallback(
@@ -313,6 +314,19 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
     if (walletAnalytics || analyticsLoading) return;
     fetchWalletAnalytics(false);
   }, [open, canFetchAnalytics, walletAnalytics, analyticsLoading, fetchWalletAnalytics]);
+
+  // Refetch when friction mode changes - force fresh data from backend
+  const prevFrictionModeRef = React.useRef(frictionMode);
+  useEffect(() => {
+    if (!open || !canFetchAnalytics) return;
+    // Only refetch if friction mode actually changed (not on initial mount)
+    if (prevFrictionModeRef.current !== frictionMode) {
+      prevFrictionModeRef.current = frictionMode;
+      // Clear cache entry for old friction mode and force fetch with new mode
+      setWalletAnalytics(null);
+      fetchWalletAnalytics(true); // Force fresh fetch from backend
+    }
+  }, [frictionMode, open, canFetchAnalytics, fetchWalletAnalytics]);
 
   useEffect(() => {
     if (!open) return;
@@ -754,7 +768,26 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
               </button>
             </div>
 
-            {!canFetchAnalytics && <div className="text-[11px] text-grey/70 font-mono">No wallet address</div>}
+            {/* Friction mode selector */}
+            <div className="flex items-center gap-2">
+              <div className="text-[10px] font-mono text-grey/80">FRICTION:</div>
+              {(['optimistic', 'base', 'pessimistic'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setFrictionMode(mode)}
+                  className={`px-2 py-0.5 text-[10px] font-mono transition-colors ${
+                    frictionMode === mode
+                      ? 'bg-white text-black'
+                      : 'text-grey/80 hover:text-white'
+                  }`}
+                >
+                  {mode.toUpperCase()}
+                </button>
+              ))}
+            </div>
+
+            {!canFetchAnalytics && <div className="text-[11px] text-grey/80 font-mono">No wallet address</div>}
             {analyticsError && <div className="text-[11px] text-danger font-mono">{analyticsError}</div>}
 
             {/* Never blank: show a fixed skeleton container while loading/no-data */}
@@ -770,7 +803,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                   <div className="mt-2 h-[36px] w-[210px] bg-white/10 rounded animate-pulse" />
                   <div className="mt-2 h-[10px] w-full bg-white/10 rounded animate-pulse" />
                 </div>
-                {analyticsLoading && <div className="text-[11px] text-grey/70 font-mono">Loading…</div>}
+                {analyticsLoading && <div className="text-[11px] text-grey/80 font-mono">Loading…</div>}
               </div>
             )}
 
@@ -862,7 +895,35 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                   </div>
                 </div>
 
-                <div className="text-[9px] font-mono text-grey/70">
+                {/* Friction stats */}
+                <div className="bg-white/5 rounded p-2 mt-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[9px] text-better-blue-light/90 uppercase">
+                      Est. Friction ({walletAnalytics.copy_friction_mode?.toUpperCase() || 'BASE'})
+                    </div>
+                    <div className="text-[9px] font-mono text-grey/80">
+                      {walletAnalytics.copy_friction_pct_per_trade?.toFixed(2) || '1.00'}% per trade
+                    </div>
+                  </div>
+                  <div className="mt-1 grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[9px] text-better-blue-light/90">Total Friction</div>
+                      <div className="text-[11px] font-mono text-warning tabular-nums">
+                        {typeof walletAnalytics.copy_total_friction_usd === 'number'
+                          ? `-$${walletAnalytics.copy_total_friction_usd.toFixed(2)}`
+                          : '---'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[9px] text-better-blue-light/90">Trades</div>
+                      <div className="text-[11px] font-mono text-white tabular-nums">
+                        {walletAnalytics.copy_trade_count ?? '---'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-[9px] font-mono text-grey/80">
                   ROE denom ≈ {walletAnalytics.copy_roe_denom_usd ? formatVolumeCompact(walletAnalytics.copy_roe_denom_usd) : '---'} gross buys
                 </div>
               </div>
@@ -885,10 +946,10 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
             </div>
 
             {!canFetchBook && (
-              <div className="text-[11px] text-grey/70 font-mono">Missing token_id or (market_slug, outcome)</div>
+              <div className="text-[11px] text-grey/80 font-mono">Missing token_id or (market_slug, outcome)</div>
             )}
             {bookError && <div className="text-[11px] text-danger font-mono">{bookError}</div>}
-            {bookLoading && <div className="text-[11px] text-grey/70 font-mono">Loading…</div>}
+            {bookLoading && <div className="text-[11px] text-grey/80 font-mono">Loading…</div>}
 
             {bookData && (
               <div className="space-y-2">

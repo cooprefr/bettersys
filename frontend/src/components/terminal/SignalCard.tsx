@@ -270,7 +270,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
   }, [ctx?.order?.title, signal.details.market_title, signal.market_slug]);
 
   const pnlColor = (val: number | undefined) => {
-    if (val === undefined) return 'text-grey/50';
+    if (val === undefined) return 'text-grey/80';
     if (val > 0) return 'text-success';
     if (val < 0) return 'text-danger';
     return 'text-white';
@@ -517,7 +517,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
             {/* Price Delta */}
             <div>
               <div className="text-[9px] text-better-blue-light/70 uppercase">Δ Price</div>
-              <div className={`font-mono text-xs ${typeof ctxDeltaBps === 'number' ? (ctxDeltaBps > 0 ? 'text-success' : ctxDeltaBps < 0 ? 'text-danger' : 'text-white') : 'text-grey/40'}`}>
+              <div className={`font-mono text-xs ${typeof ctxDeltaBps === 'number' ? (ctxDeltaBps > 0 ? 'text-success' : ctxDeltaBps < 0 ? 'text-danger' : 'text-white') : 'text-grey/70'}`}>
                 {typeof ctxDeltaBps === 'number' ? `${ctxDeltaBps > 0 ? '+' : ''}${ctxDeltaBps.toFixed(0)} bps` : '---'}
               </div>
               <div className="font-mono text-[10px] text-better-blue-lavender">
@@ -769,24 +769,24 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                 </button>
               </div>
 
-              {!canFetchAnalytics && <div className="text-[10px] text-grey/40 font-mono">No wallet address</div>}
+              {!canFetchAnalytics && <div className="text-[10px] text-grey/70 font-mono">No wallet address</div>}
               {analyticsError && <div className="text-[10px] text-danger font-mono">{analyticsError}</div>}
-              {analyticsLoading && <div className="text-[10px] text-grey/40 font-mono">Loading…</div>}
+              {analyticsLoading && <div className="text-[10px] text-grey/70 font-mono">Loading…</div>}
 
               <div className="space-y-2">
                 <div className="bg-white/5 rounded p-2 flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[9px] text-better-blue-light/60 uppercase">Wallet (Realized) — USD PnL-to-date</div>
                     <div className="flex items-center gap-2">
-                      <div className="w-[46px] text-right text-[9px] font-mono text-grey/50">
+                      <div className="w-[46px] text-right text-[9px] font-mono text-grey/80">
                         {typeof walletCurveMeta?.min === 'number' ? formatPnL(walletCurveMeta.min) : ''}
                       </div>
                       <Sparkline values={walletCurveSeries} width={170} height={32} />
-                      <div className="w-[46px] text-left text-[9px] font-mono text-grey/50">
+                      <div className="w-[46px] text-left text-[9px] font-mono text-grey/80">
                         {typeof walletCurveMeta?.max === 'number' ? formatPnL(walletCurveMeta.max) : ''}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mt-1 text-[9px] font-mono text-grey/50">
+                    <div className="flex items-center justify-between mt-1 text-[9px] font-mono text-grey/80">
                       <span>{formatDayLabel(walletCurveMeta?.start)}</span>
                       <span>{formatDayLabel(walletCurveMeta?.end)}</span>
                     </div>
@@ -820,15 +820,15 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                       Copy (Fixed ${walletAnalytics?.fixed_buy_notional_usd ?? 1}/ORDER) — USD PnL-to-date
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="w-[46px] text-right text-[9px] font-mono text-grey/50">
+                      <div className="w-[46px] text-right text-[9px] font-mono text-grey/80">
                         {typeof copyCurveMeta?.min === 'number' ? formatPnL(copyCurveMeta.min) : ''}
                       </div>
                       <Sparkline values={copyCurveSeries} width={170} height={32} />
-                      <div className="w-[46px] text-left text-[9px] font-mono text-grey/50">
+                      <div className="w-[46px] text-left text-[9px] font-mono text-grey/80">
                         {typeof copyCurveMeta?.max === 'number' ? formatPnL(copyCurveMeta.max) : ''}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mt-1 text-[9px] font-mono text-grey/50">
+                    <div className="flex items-center justify-between mt-1 text-[9px] font-mono text-grey/80">
                       <span>{formatDayLabel(copyCurveMeta?.start)}</span>
                       <span>{formatDayLabel(copyCurveMeta?.end)}</span>
                     </div>
@@ -857,7 +857,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                 </div>
 
                 {walletAnalytics?.copy_roe_denom_usd && (
-                  <div className="text-[9px] font-mono text-grey/40">
+                  <div className="text-[9px] font-mono text-grey/70">
                     ROE denom ≈ {formatVolumeCompact(walletAnalytics.copy_roe_denom_usd)} gross buys (copy)
                     {walletAnalytics.wallet_roe_denom_usd
                       ? ` • ${formatVolumeCompact(walletAnalytics.wallet_roe_denom_usd)} gross buys (wallet)`
@@ -926,10 +926,10 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
               </div>
 
               {!canFetchBook && (
-                <div className="text-[10px] text-grey/40 font-mono">Missing token_id or (market_slug, outcome)</div>
+                <div className="text-[10px] text-grey/70 font-mono">Missing token_id or (market_slug, outcome)</div>
               )}
               {bookError && <div className="text-[10px] text-danger font-mono">{bookError}</div>}
-              {bookLoading && <div className="text-[10px] text-grey/40 font-mono">Loading…</div>}
+              {bookLoading && <div className="text-[10px] text-grey/70 font-mono">Loading…</div>}
 
               {bookData && (
                 <div className="bg-white/5 rounded p-2">

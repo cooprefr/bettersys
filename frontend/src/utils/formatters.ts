@@ -95,7 +95,7 @@ export function metricColorClass(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 'text-white';
   if (value > 0) return 'text-success';
   if (value < 0) return 'text-danger';
-  return 'text-grey/60';
+  return 'text-grey/80';
 }
 
 function formatSignedNumber(value: number, digits: number): string {

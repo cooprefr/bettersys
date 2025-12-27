@@ -42,7 +42,7 @@ export const LoginScreen: React.FC = () => {
         {/* Logo */}
         <div className="text-center mb-12">
           <img src="/logo-better.svg" alt="BETTER" className="h-14 w-auto mx-auto mb-4" />
-          <div className="text-grey/50 font-mono text-xs tracking-widest">
+          <div className="text-grey/80 font-mono text-xs tracking-widest">
             POLYMARKET SIGNAL TERMINAL
           </div>
         </div>
@@ -62,7 +62,7 @@ export const LoginScreen: React.FC = () => {
               }`}
             >
               <span className="text-xs font-mono text-white">METAMASK</span>
-              <span className="text-[9px] font-mono text-grey/50">BASE CHAIN</span>
+              <span className="text-[9px] font-mono text-grey/80">BASE CHAIN</span>
               {walletConnected && walletType === 'metamask' && (
                 <span className="text-[9px] font-mono text-success mt-1">
                   {formatAddress(walletAddress!)}
@@ -79,7 +79,7 @@ export const LoginScreen: React.FC = () => {
               }`}
             >
               <span className="text-xs font-mono text-white">PHANTOM</span>
-              <span className="text-[9px] font-mono text-grey/50">SOLANA</span>
+              <span className="text-[9px] font-mono text-grey/80">SOLANA</span>
               {walletConnected && walletType === 'phantom' && (
                 <span className="text-[9px] font-mono text-success mt-1">
                   {formatAddress(walletAddress!)}
@@ -98,7 +98,7 @@ export const LoginScreen: React.FC = () => {
 
           <div className="relative flex items-center gap-4 mb-8">
             <div className="h-px bg-grey/20 flex-1"></div>
-            <div className="text-[10px] text-grey/40 font-mono">OR LOGIN</div>
+            <div className="text-[10px] text-grey/70 font-mono">OR LOGIN</div>
             <div className="h-px bg-grey/20 flex-1"></div>
           </div>
 
@@ -106,7 +106,7 @@ export const LoginScreen: React.FC = () => {
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Username */}
             <div className="space-y-1">
-              <label className="block text-[10px] font-mono text-grey/50 tracking-widest">
+              <label className="block text-[10px] font-mono text-grey/80 tracking-widest">
                 USERNAME
               </label>
               <input
@@ -122,7 +122,7 @@ export const LoginScreen: React.FC = () => {
 
             {/* Password */}
             <div className="space-y-1">
-              <label className="block text-[10px] font-mono text-grey/50 tracking-widest">
+              <label className="block text-[10px] font-mono text-grey/80 tracking-widest">
                 PASSWORD
               </label>
               <input
@@ -157,7 +157,7 @@ export const LoginScreen: React.FC = () => {
         </div>
 
         {/* Status */}
-        <div className="mt-8 flex justify-between text-[10px] font-mono text-grey/30">
+        <div className="mt-8 flex justify-between text-[10px] font-mono text-grey/70">
           <div>STATUS: ONLINE</div>
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-1.5 rounded-full bg-success"></div>
@@ -167,7 +167,7 @@ export const LoginScreen: React.FC = () => {
 
         {/* Dev hint */}
         {import.meta.env.DEV && (
-          <div className="mt-4 text-center text-[10px] font-mono text-grey/20">
+          <div className="mt-4 text-center text-[10px] font-mono text-grey/60">
             DEV: admin / admin123
           </div>
         )}

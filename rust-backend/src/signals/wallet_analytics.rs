@@ -8,6 +8,39 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tracing::warn;
 
+/// Friction mode for copy trading simulation.
+/// Models realistic execution costs for a follower strategy.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FrictionMode {
+    /// Optimistic: 0.35% per trade (0.25% spread + 0.10% slippage)
+    Optimistic,
+    /// Base case: 1.00% per trade (0.75% spread + 0.25% slippage)
+    #[default]
+    Base,
+    /// Pessimistic: 2.00% per trade (1.50% spread + 0.50% slippage)
+    Pessimistic,
+}
+
+impl FrictionMode {
+    /// Total friction cost as a percentage per trade.
+    pub fn total_friction_pct(&self) -> f64 {
+        match self {
+            Self::Optimistic => 0.35,
+            Self::Base => 1.00,
+            Self::Pessimistic => 2.00,
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "optimistic" => Self::Optimistic,
+            "pessimistic" => Self::Pessimistic,
+            _ => Self::Base,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EquityPoint {
     pub timestamp: i64,
@@ -55,6 +88,16 @@ pub struct WalletAnalytics {
     pub copy_sharpe_30d: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copy_sharpe_90d: Option<f64>,
+
+    // Friction modeling for realistic copy trading simulation
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_friction_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_friction_pct_per_trade: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_total_friction_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_trade_count: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +106,7 @@ pub struct WalletAnalyticsParams {
     pub warmup_days: u32,
     pub fixed_buy_notional_usd: f64,
     pub max_orders: usize,
+    pub friction_mode: FrictionMode,
 }
 
 impl Default for WalletAnalyticsParams {
@@ -73,6 +117,7 @@ impl Default for WalletAnalyticsParams {
             fixed_buy_notional_usd: 1.0,
             // Keep this modest so /api/wallet/analytics stays responsive even for very active wallets.
             max_orders: 2_000,
+            friction_mode: FrictionMode::Base,
         }
     }
 }
@@ -81,9 +126,14 @@ impl Default for WalletAnalyticsParams {
 const CACHE_TTL_SECONDS: i64 = 120;
 
 #[inline]
-fn cache_key(wallet: &str) -> String {
-    // v3: adds ROE / win-rate / profit-factor fields
-    format!("wallet_analytics_v3:{}", wallet.to_lowercase())
+fn cache_key(wallet: &str, friction_mode: FrictionMode) -> String {
+    // v4: includes friction mode in cache key
+    let mode_str = match friction_mode {
+        FrictionMode::Optimistic => "opt",
+        FrictionMode::Base => "base",
+        FrictionMode::Pessimistic => "pess",
+    };
+    format!("wallet_analytics_v4:{}:{}", wallet.to_lowercase(), mode_str)
 }
 
 pub async fn get_or_compute_wallet_analytics(
@@ -95,7 +145,7 @@ pub async fn get_or_compute_wallet_analytics(
     params: WalletAnalyticsParams,
 ) -> Result<WalletAnalytics> {
     let wallet_norm = wallet.to_lowercase();
-    let key = cache_key(&wallet_norm);
+    let key = cache_key(&wallet_norm, params.friction_mode);
 
     // If cache exists but is stale, keep it around as a fallback when upstream APIs fail.
     let mut stale_fallback: Option<WalletAnalytics> = None;
@@ -211,30 +261,81 @@ pub async fn compute_wallet_analytics(
         }
     };
 
-    let mut copy_trade_curve = compute_copy_trade_curve(
+    let mut copy_result = compute_copy_trade_curve(
         &orders,
         &activities,
         start_time,
         params.fixed_buy_notional_usd,
         now,
+        params.friction_mode,
     );
 
-    // If event-based simulation produces nothing useful (common for wallets whose realized PnL is
-    // dominated by on-chain MERGE/REDEEM flows that don't cleanly map to order-side events), fall
-    // back to a fast heuristic: scale the wallet's realized curve by an estimated notional-per-
-    // order ratio so the UI never shows an empty copy curve.
-    let wallet_total = wallet_realized_curve.last().map(|p| p.value).unwrap_or(0.0);
-    let copy_total = copy_trade_curve.last().map(|p| p.value).unwrap_or(0.0);
-    if wallet_total.abs() > 1e-6 && copy_total.abs() <= 1e-9 {
-        copy_trade_curve = compute_scaled_copy_curve(
-            &wallet_realized_curve,
-            &orders,
-            params.fixed_buy_notional_usd,
-        );
+    // Settle open positions using market resolution data.
+    // This is the key difference from the wallet curve - we simulate what a copy trader
+    // would actually realize based on market outcomes, not the whale's actual sizing.
+    let friction_pct = params.friction_mode.total_friction_pct() / 100.0;
+    if !copy_result.open_positions.is_empty() {
+        let (settlement_pnl, daily_settlements) = settle_open_positions(
+            rest,
+            storage,
+            &copy_result.open_positions,
+            now,
+            friction_pct,
+        )
+        .await;
+
+        // Merge settlement PnL into the curve
+        if !daily_settlements.is_empty() {
+            // Convert existing curve to a mutable map
+            let mut daily_pnl: BTreeMap<i64, f64> = BTreeMap::new();
+            let mut running_equity = 0.0;
+            
+            // First, convert curve back to daily deltas
+            let mut prev_value = 0.0;
+            for point in &copy_result.curve {
+                let delta = point.value - prev_value;
+                *daily_pnl.entry(point.timestamp).or_insert(0.0) += delta;
+                prev_value = point.value;
+            }
+            
+            // Add settlement deltas
+            for (day, delta) in daily_settlements {
+                *daily_pnl.entry(day).or_insert(0.0) += delta;
+            }
+            
+            // Rebuild curve from merged deltas
+            copy_result.curve.clear();
+            for (day, delta) in daily_pnl {
+                running_equity += delta;
+                copy_result.curve.push(EquityPoint {
+                    timestamp: day,
+                    value: running_equity,
+                });
+            }
+            
+            // Update friction total with exit friction from settlements
+            copy_result.total_friction_usd += settlement_pnl.abs() * (friction_pct / 2.0);
+        }
+    }
+
+    // Ensure curve has at least start/end points for UI rendering
+    if copy_result.curve.is_empty() {
+        let start = day_bucket(start_time);
+        let end = day_bucket(now);
+        copy_result.curve.push(EquityPoint {
+            timestamp: start,
+            value: 0.0,
+        });
+        if end != start {
+            copy_result.curve.push(EquityPoint {
+                timestamp: end,
+                value: 0.0,
+            });
+        }
     }
 
     let wallet_total_pnl = curve_total_pnl(&wallet_realized_curve);
-    let copy_total_pnl = curve_total_pnl(&copy_trade_curve);
+    let copy_total_pnl = curve_total_pnl(&copy_result.curve);
 
     let wallet_roe_denom_usd = compute_wallet_roe_denom_usd(&orders, start_time);
     let wallet_roe_pct = compute_roe_pct(wallet_total_pnl, wallet_roe_denom_usd);
@@ -245,12 +346,19 @@ pub async fn compute_wallet_analytics(
         compute_copy_roe_denom_usd(&orders, start_time, params.fixed_buy_notional_usd);
     let copy_roe_pct = compute_roe_pct(copy_total_pnl, copy_roe_denom_usd);
     let (copy_win_rate, copy_profit_factor) =
-        compute_curve_win_rate_profit_factor(&copy_trade_curve);
+        compute_curve_win_rate_profit_factor(&copy_result.curve);
 
-    let sharpe_7d = compute_curve_sharpe(&copy_trade_curve, now, 7);
-    let sharpe_14d = compute_curve_sharpe(&copy_trade_curve, now, 14);
-    let sharpe_30d = compute_curve_sharpe(&copy_trade_curve, now, 30);
-    let sharpe_90d = compute_curve_sharpe(&copy_trade_curve, now, 90);
+    let sharpe_7d = compute_curve_sharpe(&copy_result.curve, now, 7);
+    let sharpe_14d = compute_curve_sharpe(&copy_result.curve, now, 14);
+    let sharpe_30d = compute_curve_sharpe(&copy_result.curve, now, 30);
+    let sharpe_90d = compute_curve_sharpe(&copy_result.curve, now, 90);
+
+    // Friction stats for the copy trading simulation
+    let friction_mode_str = match params.friction_mode {
+        FrictionMode::Optimistic => "optimistic",
+        FrictionMode::Base => "base",
+        FrictionMode::Pessimistic => "pessimistic",
+    };
 
     Ok(WalletAnalytics {
         wallet_address: wallet.to_string(),
@@ -258,7 +366,7 @@ pub async fn compute_wallet_analytics(
         lookback_days: params.lookback_days,
         fixed_buy_notional_usd: params.fixed_buy_notional_usd,
         wallet_realized_curve,
-        copy_trade_curve,
+        copy_trade_curve: copy_result.curve,
         wallet_total_pnl,
         wallet_roe_pct,
         wallet_roe_denom_usd,
@@ -273,6 +381,10 @@ pub async fn compute_wallet_analytics(
         copy_sharpe_14d: sharpe_14d,
         copy_sharpe_30d: sharpe_30d,
         copy_sharpe_90d: sharpe_90d,
+        copy_friction_mode: Some(friction_mode_str.to_string()),
+        copy_friction_pct_per_trade: Some(params.friction_mode.total_friction_pct()),
+        copy_total_friction_usd: Some(copy_result.total_friction_usd),
+        copy_trade_count: Some(copy_result.trade_count),
     })
 }
 
@@ -396,6 +508,16 @@ fn compute_curve_win_rate_profit_factor(curve: &[EquityPoint]) -> (Option<f64>, 
 struct Position {
     shares: f64,
     cost_usd: f64,
+    token_label: Option<String>, // "Yes", "No", "Up", "Down" - which side trader bet on
+    last_price: f64,             // Last known price for mark-to-market
+}
+
+#[derive(Debug, Clone, Default)]
+struct CopyCurveResult {
+    curve: Vec<EquityPoint>,
+    total_friction_usd: f64,
+    trade_count: u64,
+    open_positions: HashMap<String, Position>, // condition_id -> position (for settlement)
 }
 
 fn compute_copy_trade_curve(
@@ -404,12 +526,19 @@ fn compute_copy_trade_curve(
     min_realized_ts: i64,
     fixed_buy_notional_usd: f64,
     now: i64,
-) -> Vec<EquityPoint> {
-    // Follower strategy (v1): fixed notional per order (BUY or SELL).
+    friction_mode: FrictionMode,
+) -> CopyCurveResult {
+    // Follower strategy (v3): fixed notional per order with friction + settlement tracking.
     //
-    // - BUY: buy shares = notional / price
+    // - BUY: buy shares = (notional - friction_cost) / price, track token_label
     // - SELL: sell shares = notional / price (clamped to available shares)
     // - Average-cost basis for realized PnL
+    // - Friction cost applied on each BUY (spread + slippage)
+    // - Open positions tracked for market resolution settlement
+    let friction_pct = friction_mode.total_friction_pct() / 100.0;
+    let mut total_friction_usd = 0.0;
+    let mut trade_count: u64 = 0;
+
     let mut follower_pos: HashMap<String, Position> = HashMap::new();
 
     let mut daily_realized: BTreeMap<i64, f64> = BTreeMap::new();
@@ -422,6 +551,7 @@ fn compute_copy_trade_curve(
             side: String,
             price: f64,
             timestamp: i64,
+            token_label: Option<String>,
         },
         Redeem {
             instrument_id: String,
@@ -439,6 +569,7 @@ fn compute_copy_trade_curve(
             side: o.side.clone(),
             price: o.price,
             timestamp: o.timestamp,
+            token_label: o.token_label.clone(),
         });
     }
     for a in activities {
@@ -464,6 +595,7 @@ fn compute_copy_trade_curve(
                 side,
                 price,
                 timestamp,
+                token_label,
             } => {
                 let price = price;
                 if !price.is_finite() || price <= 0.0 {
@@ -472,10 +604,22 @@ fn compute_copy_trade_curve(
                 let side = side.to_uppercase();
 
                 if side == "BUY" {
+                    // Apply friction cost on entry (spread + slippage)
+                    let friction_cost = fixed_buy_notional_usd * friction_pct;
+                    let effective_notional = fixed_buy_notional_usd - friction_cost;
+                    let shares = (effective_notional / price).max(0.0);
+
                     let p = follower_pos.entry(instrument_id).or_default();
-                    let shares = (fixed_buy_notional_usd / price).max(0.0);
                     p.shares += shares;
-                    p.cost_usd += fixed_buy_notional_usd;
+                    p.cost_usd += fixed_buy_notional_usd; // Track full cost for ROE calc
+                    p.last_price = price;
+                    // Track which side trader bet on (for market resolution settlement)
+                    if p.token_label.is_none() {
+                        p.token_label = token_label;
+                    }
+
+                    total_friction_usd += friction_cost;
+                    trade_count += 1;
                 } else if side == "SELL" {
                     let in_window = timestamp >= min_realized_ts;
                     let day = day_bucket(timestamp);
@@ -569,7 +713,128 @@ fn compute_copy_trade_curve(
         }
     }
 
-    curve
+    // Return open positions for market resolution settlement
+    let open_positions: HashMap<String, Position> = follower_pos
+        .into_iter()
+        .filter(|(_, p)| p.shares > 1e-9)
+        .collect();
+
+    CopyCurveResult {
+        curve,
+        total_friction_usd,
+        trade_count,
+        open_positions,
+    }
+}
+
+/// Settle open positions using market resolution data.
+/// Returns additional realized PnL from settled positions.
+async fn settle_open_positions(
+    rest: &DomeRestClient,
+    storage: &DbSignalStorage,
+    open_positions: &HashMap<String, Position>,
+    now: i64,
+    friction_pct: f64,
+) -> (f64, BTreeMap<i64, f64>) {
+    let mut total_settlement_pnl = 0.0;
+    let mut daily_settlements: BTreeMap<i64, f64> = BTreeMap::new();
+
+    for (condition_id, position) in open_positions {
+        if position.shares <= 1e-9 {
+            continue;
+        }
+
+        // Check cache first
+        let cache_key = format!("market_resolution_v1:{}", condition_id);
+        let cached = storage.get_cache(&cache_key).ok().flatten();
+        
+        let market = if let Some((json, fetched_at)) = cached {
+            // Use cache if less than 1 hour old
+            if now - fetched_at < 3600 {
+                serde_json::from_str::<crate::scrapers::dome_rest::DomeMarket>(&json).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let market = match market {
+            Some(m) => Some(m),
+            None => {
+                // Fetch from API with timeout
+                match tokio::time::timeout(
+                    Duration::from_millis(500),
+                    rest.get_market_by_condition_id(condition_id),
+                )
+                .await
+                {
+                    Ok(Ok(Some(m))) => {
+                        // Cache the result
+                        if let Ok(json) = serde_json::to_string(&m) {
+                            let _ = storage.upsert_cache(&cache_key, &json, now);
+                        }
+                        Some(m)
+                    }
+                    _ => None,
+                }
+            }
+        };
+
+        let Some(market) = market else {
+            // Can't fetch market, use mark-to-market with last known price
+            let mtm_value = position.shares * position.last_price;
+            let unrealized = mtm_value - position.cost_usd;
+            // Don't add unrealized to curve (would be misleading)
+            continue;
+        };
+
+        // Check if market resolved
+        let winning_label = match (&market.winning_side, &market.side_a, &market.side_b) {
+            (Some(winner), Some(side_a), Some(side_b)) => {
+                if winner.to_lowercase() == "a" || winner == &side_a.id {
+                    Some(side_a.label.clone())
+                } else if winner.to_lowercase() == "b" || winner == &side_b.id {
+                    Some(side_b.label.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        let Some(winning_label) = winning_label else {
+            // Market not resolved yet, skip
+            continue;
+        };
+
+        // Determine if position won or lost
+        let position_won = position
+            .token_label
+            .as_ref()
+            .map(|label| label.to_lowercase() == winning_label.to_lowercase())
+            .unwrap_or(false);
+
+        // Settlement price: $1.00 if won, $0.00 if lost
+        let settlement_price = if position_won { 1.0 } else { 0.0 };
+        let proceeds = position.shares * settlement_price;
+        
+        // Apply exit friction (slippage on redemption is minimal, but include spread)
+        let exit_friction = proceeds * (friction_pct / 2.0); // Half friction on exit
+        let net_proceeds = proceeds - exit_friction;
+        
+        let realized = net_proceeds - position.cost_usd;
+        total_settlement_pnl += realized;
+
+        // Add to settlement day (use market completed_time or now)
+        let settlement_day = market
+            .completed_time
+            .map(|t| day_bucket(t))
+            .unwrap_or_else(|| day_bucket(now));
+        *daily_settlements.entry(settlement_day).or_insert(0.0) += realized;
+    }
+
+    (total_settlement_pnl, daily_settlements)
 }
 
 fn compute_scaled_copy_curve(

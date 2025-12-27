@@ -143,6 +143,11 @@ export interface WalletAnalyticsResponse {
   copy_sharpe_14d?: number;
   copy_sharpe_30d?: number;
   copy_sharpe_90d?: number;
+  // Friction modeling
+  copy_friction_mode?: string;
+  copy_friction_pct_per_trade?: number;
+  copy_total_friction_usd?: number;
+  copy_trade_count?: number;
 }
 
 export interface SignalContextPrice {

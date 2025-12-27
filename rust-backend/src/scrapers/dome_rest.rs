@@ -81,6 +81,41 @@ impl DomeRestClient {
             .context("Failed to parse markets response")
     }
 
+    /// Get market by condition_id for resolution lookup
+    pub async fn get_market_by_condition_id(
+        &self,
+        condition_id: &str,
+    ) -> Result<Option<DomeMarket>> {
+        let url = self.url("/polymarket/markets");
+        let qp = [("condition_id", condition_id), ("limit", "1")];
+
+        let resp = self
+            .client
+            .get(url)
+            .query(&qp)
+            .send()
+            .await
+            .context("GET /polymarket/markets by condition_id failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "GET /polymarket/markets?condition_id={} {}: {}",
+                condition_id,
+                status,
+                text
+            ));
+        }
+
+        let markets_resp = resp
+            .json::<MarketsResponse>()
+            .await
+            .context("Failed to parse markets response")?;
+
+        Ok(markets_resp.markets.into_iter().next())
+    }
+
     pub async fn get_orders(
         &self,
         filter: OrdersFilter,
