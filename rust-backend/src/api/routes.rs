@@ -1,155 +1,183 @@
+//! API Routes
+//! Pilot in Command: API Interface
+//! Mission: Expose high-performance endpoints for signal consumption
+
+#![allow(dead_code, unused_imports, unused_variables)]
+
+use anyhow::Result;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Query, State as AxumState},
     http::StatusCode,
-    response::{IntoResponse, Json, Response},
-    routing::get,
-    Router,
+    response::Json,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::sync::Arc;
 
-use crate::signals::Database;
+use crate::{
+    backtest::{BacktestConfig, BacktestEngine},
+    models::MarketSignal,
+    risk::RiskStats,
+    AppState,
+};
 
-/// Shared application state
-#[derive(Clone)]
-pub struct AppState {
-    pub db: Arc<Database>,
+#[derive(Debug, Deserialize)]
+pub struct SignalQuery {
+    pub limit: Option<usize>,
+    pub signal_type: Option<String>,
+    pub min_confidence: Option<f64>,
 }
 
-/// Create the API router
-pub fn create_router(db: Arc<Database>) -> Router {
-    let state = AppState { db };
-
-    Router::new()
-        .route("/health", get(health_check))
-        .route("/api/signals", get(get_signals))
-        .route("/api/signals/:id", get(get_signal_by_id))
-        .route("/api/stats", get(get_stats))
-        .with_state(state)
+#[derive(Debug, Serialize)]
+pub struct SignalResponse {
+    pub signals: Vec<MarketSignal>,
+    pub count: usize,
+    pub timestamp: String,
 }
 
-// ===== Route Handlers =====
-
-/// Health check endpoint
-async fn health_check() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "healthy".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-    })
-}
-
-/// Get recent signals with optional filters
-async fn get_signals(
-    State(state): State<AppState>,
+/// Get signals with optional filtering
+pub async fn get_signals(
     Query(params): Query<SignalQuery>,
-) -> Result<Json<SignalsResponse>, ApiError> {
-    let signals = if let Some(signal_type) = params.signal_type {
-        let limit = params.limit.unwrap_or(50).min(500);
-        state.db.get_signals_by_type(&signal_type, limit as i32)?
-    } else if let Some(hours) = params.hours {
-        let limit = params.limit.unwrap_or(50).min(500);
-        state.db.get_recent_signals(hours as i32, limit as i32)?
-    } else {
-        // Default: last 24 hours, max 50 signals
-        let limit = params.limit.unwrap_or(50).min(500);
-        state.db.get_recent_signals(24, limit as i32)?
-    };
+    AxumState(state): AxumState<AppState>,
+) -> Result<Json<SignalResponse>, StatusCode> {
+    let limit = params.limit.unwrap_or(100);
+    let min_confidence = params.min_confidence.unwrap_or(0.0);
 
-    Ok(Json(SignalsResponse {
-        count: signals.len(),
-        signals,
+    let all_signals = state.signal_storage.get_recent(limit).unwrap_or_default();
+
+    // Filter signals by confidence
+    let filtered_signals: Vec<MarketSignal> = all_signals
+        .into_iter()
+        .filter(|s| s.confidence >= min_confidence)
+        .collect();
+
+    Ok(Json(SignalResponse {
+        count: filtered_signals.len(),
+        signals: filtered_signals,
+        timestamp: Utc::now().to_rfc3339(),
     }))
 }
 
-/// Get a specific signal by ID (efficient single-row lookup)
-async fn get_signal_by_id(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<crate::models::Signal>, ApiError> {
-    state.db
-        .get_signal_by_id(id)?
-        .map(Json)
-        .ok_or(ApiError::NotFound(format!("Signal {} not found", id)))
+#[derive(Debug, Deserialize)]
+pub struct BacktestRequest {
+    pub initial_bankroll: f64,
+    pub kelly_fraction: f64,
+    pub start_date: String,
+    pub end_date: String,
+    pub slippage_bps: f64,
+    pub transaction_cost: f64,
+    pub max_positions: usize,
+    #[serde(default)]
+    pub walk_forward_window_days: Option<i64>,
+    #[serde(default)]
+    pub test_window_days: Option<i64>,
+    #[serde(default)]
+    pub embargo_hours: Option<i64>,
+    #[serde(default)]
+    pub min_training_signals: Option<usize>,
 }
 
-/// Get statistics about signals
-async fn get_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    let stats = state.db.get_stats()?;
-    Ok(Json(stats))
+#[derive(Debug, Serialize)]
+pub struct BacktestResponse {
+    pub total_pnl: f64,
+    pub win_rate: f64,
+    pub sharpe_ratio: f64,
+    pub max_drawdown: f64,
+    pub total_trades: usize,
+    pub profit_factor: f64,
 }
 
-// ===== Request/Response Types =====
+/// Run backtest with provided configuration
+pub async fn run_backtest_handler(
+    Json(request): Json<BacktestRequest>,
+    AxumState(state): AxumState<AppState>,
+) -> Result<Json<BacktestResponse>, StatusCode> {
+    // Parse dates
+    let start_date = DateTime::parse_from_rfc3339(&request.start_date)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .with_timezone(&Utc);
 
-#[derive(Deserialize)]
-struct SignalQuery {
-    /// Filter by signal type ("insider_edge" or "arbitrage")
-    signal_type: Option<String>,
-    /// Get signals from last N hours
-    hours: Option<u32>,
-    /// Limit number of results
-    limit: Option<u32>,
+    let end_date = DateTime::parse_from_rfc3339(&request.end_date)
+        .map_err(|_| StatusCode::BAD_REQUEST)?
+        .with_timezone(&Utc);
+
+    let config = BacktestConfig {
+        initial_bankroll: request.initial_bankroll,
+        kelly_fraction: request.kelly_fraction,
+        start_date,
+        end_date,
+        slippage_bps: request.slippage_bps,
+        transaction_cost: request.transaction_cost,
+        max_positions: request.max_positions,
+        walk_forward_window_days: request.walk_forward_window_days.unwrap_or(30),
+        test_window_days: request.test_window_days.unwrap_or(7),
+        embargo_hours: request.embargo_hours.unwrap_or(12),
+        min_training_signals: request.min_training_signals.unwrap_or(25),
+    };
+
+    let mut engine = BacktestEngine::new(config);
+
+    // Get historical signals (Phase 2: Direct DB call)
+    let signals = state.signal_storage.get_recent(10000).unwrap_or_default();
+
+    let result = engine
+        .run(signals)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(BacktestResponse {
+        total_pnl: result.total_pnl,
+        win_rate: result.win_rate,
+        sharpe_ratio: result.sharpe_ratio,
+        max_drawdown: result.max_drawdown,
+        total_trades: result.total_trades,
+        profit_factor: result.profit_factor,
+    }))
 }
 
-#[derive(Serialize)]
-struct HealthResponse {
-    status: String,
-    version: String,
+#[derive(Debug, Serialize)]
+pub struct RiskStatsResponse {
+    pub var_95: f64,
+    pub cvar_95: f64,
+    pub current_bankroll: f64,
+    pub kelly_fraction: f64,
+    pub win_rate: f64,
+    pub sample_size: usize,
 }
 
-#[derive(Serialize)]
-struct SignalsResponse {
-    count: usize,
-    signals: Vec<crate::models::Signal>,
+/// Get current risk statistics
+pub async fn get_risk_stats_handler(
+    AxumState(state): AxumState<AppState>,
+) -> Result<Json<RiskStatsResponse>, StatusCode> {
+    let risk_manager = state.risk_manager.read(); // parking_lot - no await needed
+
+    let var_stats = risk_manager.var.get_stats();
+    let win_rate = risk_manager.kelly.get_win_rate();
+
+    Ok(Json(RiskStatsResponse {
+        var_95: var_stats.var_95,
+        cvar_95: var_stats.cvar_95,
+        current_bankroll: risk_manager.kelly.bankroll,
+        kelly_fraction: risk_manager.kelly.fraction,
+        win_rate,
+        sample_size: var_stats.sample_size,
+    }))
 }
 
-// ===== Error Handling =====
-
-#[derive(Debug)]
-enum ApiError {
-    Database(anyhow::Error),
-    NotFound(String),
-    #[allow(dead_code)] // Reserved for input validation
-    BadRequest(String),
-}
-
-impl From<anyhow::Error> for ApiError {
-    fn from(err: anyhow::Error) -> Self {
-        ApiError::Database(err)
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            ApiError::Database(err) => {
-                tracing::error!("Database error: {}", err);
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
-            }
-            ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
-            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-        };
-
-        let body = Json(json!({
-            "error": message,
-        }));
-
-        (status, body).into_response()
-    }
+/// WebSocket message types
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum WsMessage {
+    Signal(MarketSignal),
+    RiskUpdate(RiskStats),
+    Heartbeat { timestamp: String },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_error_conversion() {
-        let err = anyhow::anyhow!("Test error");
-        let api_err: ApiError = err.into();
-        
-        match api_err {
-            ApiError::Database(_) => (),
-            _ => panic!("Expected Database error"),
-        }
+    #[tokio::test]
+    async fn test_signal_filtering() {
+        // Add test cases
     }
 }

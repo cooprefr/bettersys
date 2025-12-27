@@ -3,6 +3,12 @@
 .env.local
 .env.*.local
 
+# Node dependencies (NEVER COMMIT THESE)
+node_modules/
+
+# Build outputs
+dist/
+
 # Database files
 *.db
 *.db-shm

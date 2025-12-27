@@ -1,130 +1,1862 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+//! Core Data Models
+//! Mission: Define physics-constrained data structures for maximum performance
 
-/// Signal types
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+/// Polymarket event structure  
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+pub struct PolymarketEvent {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub end_date_iso: Option<String>,
+    pub volume: Option<f64>,
+    pub liquidity: Option<f64>,
+    pub markets: Vec<Market>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Market {
+    pub id: String,
+    pub question: String,
+    pub outcome_prices: Vec<f64>,
+    pub volume: Option<f64>,
+    pub liquidity: Option<f64>,
+}
+
+/// Core signal structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketSignal {
+    pub id: String,
+    pub signal_type: SignalType,
+    pub market_slug: String,
+    pub confidence: f64,
+    pub risk_level: String,
+    pub details: SignalDetails,
+    pub detected_at: String,
+    #[serde(default = "default_source")]
+    pub source: String, // "polymarket", "hashdive", "dome", "detector"
+}
+
+fn default_source() -> String {
+    "detector".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum SignalType {
-    InsiderEdge,
-    Arbitrage,
-    WhaleCluster,
-    PriceDeviation,
-    ExpiryEdge,
+    PriceDeviation {
+        market_price: f64,
+        fair_value: f64,
+        deviation_pct: f64,
+    },
+    MarketExpiryEdge {
+        hours_to_expiry: f64,
+        volume_spike: f64,
+    },
+    WhaleFollowing {
+        whale_address: String,
+        position_size: f64,
+        confidence_score: f64,
+    },
+    EliteWallet {
+        wallet_address: String,
+        win_rate: f64,
+        total_volume: f64,
+        position_size: f64,
+    },
+    InsiderWallet {
+        wallet_address: String,
+        early_entry_score: f64,
+        win_rate: f64,
+        position_size: f64,
+    },
+    WhaleCluster {
+        cluster_count: usize,
+        total_volume: f64,
+        consensus_direction: String,
+    },
+    CrossPlatformArbitrage {
+        polymarket_price: f64,
+        kalshi_price: Option<f64>,
+        spread_pct: f64,
+    },
+    TrackedWalletEntry {
+        wallet_address: String,
+        wallet_label: String, // insider_sports, insider_politics, insider_crypto, etc.
+        position_value_usd: f64,
+        order_count: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token_label: Option<String>, // "Up", "Down", "Yes", "No" - outcome type
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalDetails {
+    pub market_id: String,
+    pub market_title: String,
+    pub current_price: f64,
+    pub volume_24h: f64,
+    pub liquidity: f64,
+    pub recommended_action: String,
+    pub expiry_time: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardrail_flags: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended_size: Option<f64>,
+}
+
+/// Additional contextual data for a signal (primarily for tracked-wallet WebSocket orders).
+///
+/// Stored in SQLite (`signal_context`) and pushed to the frontend via websocket updates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalContext {
+    pub order: SignalContextOrder,
+
+    /// Market metadata from `/polymarket/markets`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub market: Option<Value>,
+
+    /// Price at entry time + latest price from `/polymarket/market-price/{token_id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<SignalContextPrice>,
+
+    /// Trade history summaries from `/polymarket/orders`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trade_history: Option<SignalContextTradeHistory>,
+
+    /// Orderbook history summary from `/polymarket/orderbooks`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orderbook: Option<SignalContextOrderbook>,
+
+    /// Activity summary (MERGE/SPLIT/REDEEM) from `/polymarket/activity`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<SignalContextActivity>,
+
+    /// Candlestick raw payload from `/polymarket/candlesticks/{condition_id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candlesticks: Option<Value>,
+
+    /// Wallet mapping from `/polymarket/wallet`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet: Option<Value>,
+
+    /// Wallet realized PnL from `/polymarket/wallet/pnl/{wallet_address}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet_pnl: Option<Value>,
+
+    /// Derived fields computed by BetterBot.
+    #[serde(default)]
+    pub derived: SignalContextDerived,
+
+    /// Any enrichment errors (non-fatal). Keeps debugging out of logs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalContextOrder {
+    pub user: String,
+    pub market_slug: String,
+    pub condition_id: String,
+    pub token_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_label: Option<String>,
+    pub side: String,
+    pub price: f64,
+    pub shares_normalized: f64,
+    pub timestamp: i64,
+    pub order_hash: String,
+    pub tx_hash: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SignalContextDerived {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_delta_abs: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_delta_bps: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_value_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spread_at_entry: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnl_7d: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnl_14d: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnl_30d: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pnl_90d: Option<f64>,
+
+    // Sharpe-like ratios computed on realized daily PnL deltas (no AUM normalization).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharpe_7d: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharpe_14d: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharpe_30d: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharpe_90d: Option<f64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_trade_value_24h: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trade_count_24h: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalContextPrice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_entry: Option<MarketPriceSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<MarketPriceSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketPriceSnapshot {
+    pub price: f64,
+    pub at_time: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalContextTradeHistory {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub market_flow_1h: Option<TradeFlowSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet_flow_24h: Option<TradeFlowSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_market_orders: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_wallet_orders: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeFlowSummary {
+    pub count: usize,
+    pub buy_count: usize,
+    pub sell_count: usize,
+    pub total_shares: f64,
+    pub total_value_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_trade_value_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalContextOrderbook {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_bid: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_ask: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mid: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spread: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_count: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalContextActivity {
+    pub count: usize,
+    pub merge_count: usize,
+    pub split_count: usize,
+    pub redeem_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<Value>,
+}
+
+/// WebSocket server events pushed to authenticated frontend clients.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum WsServerEvent {
+    #[serde(rename = "signal")]
+    Signal(MarketSignal),
+    #[serde(rename = "signal_context")]
+    SignalContext(SignalContextUpdate),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalContextUpdate {
+    pub signal_id: String,
+    pub context_version: i64,
+    pub enriched_at: i64,
+    pub status: String,
+    pub context: SignalContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalContextRecord {
+    pub signal_id: String,
+    pub context_version: i64,
+    pub enriched_at: i64,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub context: SignalContext,
 }
 
 impl SignalType {
-    pub fn as_str(&self) -> &str {
+    #[inline]
+    pub fn family(&self) -> &'static str {
         match self {
-            SignalType::InsiderEdge => "insider_edge",
-            SignalType::Arbitrage => "arbitrage",
-            SignalType::WhaleCluster => "whale_cluster",
-            SignalType::PriceDeviation => "price_deviation",
-            SignalType::ExpiryEdge => "expiry_edge",
+            SignalType::PriceDeviation { .. } => "price_deviation",
+            SignalType::MarketExpiryEdge { .. } => "expiry_edge",
+            SignalType::WhaleFollowing { .. } => "whale_following",
+            SignalType::EliteWallet { .. } => "elite_wallet",
+            SignalType::InsiderWallet { .. } => "insider_wallet",
+            SignalType::WhaleCluster { .. } => "whale_cluster",
+            SignalType::CrossPlatformArbitrage { .. } => "cross_platform_arbitrage",
+            SignalType::TrackedWalletEntry { .. } => "tracked_wallet_entry",
         }
     }
 }
 
-/// A trading signal
+impl MarketSignal {
+    #[inline]
+    pub fn signal_family(&self) -> String {
+        self.signal_type.family().to_string()
+    }
+}
+
+/// Hashdive whale data
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Signal {
-    pub id: Option<i64>,
-    pub signal_type: SignalType,
-    pub source: String,
-    pub market_name: Option<String>,
-    pub description: String,
-    pub confidence: f32,
-    pub metadata: Option<String>, // JSON string
-    pub created_at: DateTime<Utc>,
+pub struct HashdiveWhale {
+    pub wallet_address: String,
+    pub total_volume: f64,
+    pub win_rate: f64,
+    pub recent_trades: Vec<WhaleTrade>,
 }
 
-impl Signal {
-    pub fn new(
-        signal_type: SignalType,
-        source: String,
-        description: String,
-        confidence: f32,
-    ) -> Self {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhaleTrade {
+    pub market_id: String,
+    pub side: String,
+    pub size: f64,
+    pub price: f64,
+    pub timestamp: i64,
+}
+
+/// Legacy structures for compatibility
+pub type Signal = MarketSignal;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub polymarket_api_url: String,
+    pub hashdive_api_url: String,
+    pub dome_api_url: Option<String>,
+    pub dome_api_key: Option<String>,
+    pub signal_threshold: f64,
+    pub max_concurrent_requests: usize,
+    pub tracked_wallets: std::collections::HashMap<String, String>,
+    pub poll_interval_secs: u64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
         Self {
-            id: None,
-            signal_type,
-            source,
-            market_name: None,
-            description,
-            confidence,
-            metadata: None,
-            created_at: Utc::now(),
+            polymarket_api_url: "https://clob.polymarket.com".to_string(),
+            hashdive_api_url: "https://hashdive.com/api".to_string(),
+            dome_api_url: Some("https://api.domeapi.io".to_string()),
+            dome_api_key: None,
+            signal_threshold: 0.05,
+            max_concurrent_requests: 10,
+            tracked_wallets: Config::default_tracked_wallets(),
+            poll_interval_secs: 2700, // 45 minutes
         }
     }
-
-    pub fn with_market(mut self, market_name: String) -> Self {
-        self.market_name = Some(market_name);
-        self
-    }
-
-    pub fn with_metadata(mut self, metadata: String) -> Self {
-        self.metadata = Some(metadata);
-        self
-    }
-}
-
-/// Application configuration
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub database_path: String,
-    pub port: u16,
-    pub twitter_accounts: Vec<String>,
-    pub twitter_scrape_interval: u64,
-    pub hashdive_scrape_interval: u64,
-    pub hashdive_api_key: Option<String>,
-    pub hashdive_whale_min_usd: u32,
 }
 
 impl Config {
-    pub fn from_env() -> anyhow::Result<Self> {
-        dotenv::dotenv().ok();
+    /// Verified insider wallet list - auto-generated
+    /// Total: 357 unique wallets
+    pub fn default_tracked_wallets() -> std::collections::HashMap<String, String> {
+        let mut wallets = std::collections::HashMap::with_capacity(357);
 
-        let database_path = std::env::var("DATABASE_PATH")
-            .unwrap_or_else(|_| "./betterbot.db".to_string());
+        // HIGH FREQUENCY TEST WALLET - for WebSocket verification
+        wallets.insert(
+            "0x6031b6eed1c97e853c6e0f03ad3ce3529351f96d".to_string(),
+            "high_frequency_test".to_string(),
+        );
 
-        let port = std::env::var("PORT")
-            .unwrap_or_else(|_| "8080".to_string())
-            .parse()
-            .unwrap_or(8080);
+        // INSIDER CRYPTO (23 wallets)
+        wallets.insert(
+            "0x0172e87fa93125e9ebd3d657ed6ce62cc85884a4".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x067c809ae22d5045aa1f01616b2c53caed1ec1ac".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x1d6d98a6e64c7cbd046979b59d271bb0372f7b9a".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x23af9600caa6b8144a42ac3ea049cbe50d99134d".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x2dd96adf70887dda898eb07ea13695bf2c6b8df1".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x3f583f273973854a465c33f9a4de021288c7238b".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x41c55f8a6be3f27a1999687a2106c4019e2e0d43".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x530a3acd6b509d8d81c389f9e821a6386f1de41d".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x6910a08a94ce5faa960424361e34692eaeabc679".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x6ca7a5a8bdbafd5dd16e78ff229a917898604428".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x6e2f6cd392e26d054cd21030a7c91027456e322e".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x767ebc83dbf2d9ddb32fbbb8af33ca00ba5a00f8".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x91a1e17f8cf0967c566cfa9feee419841fca8fc3".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0x98009921271623a77e967de26e9b2dc5da24532c".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xa5daf4a9ea914d172a179e9fe7d1ab0e4f75fd4a".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xb3a394a0a5e5d8d4afd7d9b83a6d301bfed83e2c".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xb80e5841554a5721fc9834aa18379d6fda50eab7".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xb8f30bdd8fcd6ddd6f38d8b8de33fe3306cb3bbd".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xbdee0ca548e9ad8c99d5ea4d56c693706ebf0e85".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xd87555a44de68f9d751c5daf144dd97f67a55f0c".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xf2c156520d5f36818374d3e76327e9c802dc3957".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xf43c04b7208b5fc73f8af909771f8560a713cab9".to_string(),
+            "insider_crypto".to_string(),
+        );
+        wallets.insert(
+            "0xf79369743c12e36c47bdafb7604f1dfd77bc0d93".to_string(),
+            "insider_crypto".to_string(),
+        );
 
-        let twitter_accounts = std::env::var("TWITTER_ACCOUNTS")
-            .unwrap_or_else(|_| {
-                "PolyWhaleWatch,PolymarketWhale,PolyInsider_,PloyPulseBot,PredWhales,polyalerthub"
-                    .to_string()
-            })
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
+        // INSIDER ENTERTAINMENT (39 wallets)
+        wallets.insert(
+            "0x01046d6fb175354dd9f3e5a238b1534d1fe8c9be".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x03ec4cfa95061a9cfad44a5a188d16e6a6d380c8".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x04d157392f5f7a6ee1bfc0bdf9a5bbc8d0fb8546".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x0d4950aefa8b45cabd10982dbe5eaf590031c2a5".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x14d231682abd17d23c713defea91dfb67ddd4a57".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x22e543e9cdb73ad132889c7342cce93895eadde0".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x2ab65ca9d13a2f43df89313a94537723834a753b".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x315c2ca2d453583490ee2d514e9a6576ad0a3bca".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x387e4cf9040ed23efa474f6bb9116c8c6994c514".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x3e8b45f5df96f9628519e707514bc4f7c5331b12".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x3f822e1cf5ca988d8c41d2df28cac53cda8c3f9c".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x42a2b0ca4e6f4a2781b97cb291a752e283dd8796".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x4a3c8673d691adad3dd5535b1d4ee56b945b17ab".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x4fdb7972050ee0d29075ba58f4b7bd379d28b9db".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x513d4fa5fafc5a90af81d158a96c6e71e8ee5d75".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x536ef9b09f8c0fb8d9119aa08b1988fc03742680".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x550f98893d038ad0f8011340439933f1be0b7b1f".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x5bb497bf647418bfbd0bbee8cd7d62b441c98f1a".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x5fd6cde20bcde2b8297bb8a8ec0e9dfe200e6de6".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x617934b61f0a7f3d5097c6522a31190bdc37e5a5".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x63d30d38d4de3c699107a4b36dde387fba846ea6".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x6db39b786b6a724f20b1c79a0ab70330be6e20d5".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x73931fa8f5cdbf752f18f18f43ca937b15820008".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x7a288b9618d0a0e6da92d59bc0c800ada2305b5e".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x7e7e9467009981feae6d7b6c759f753424403565".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x827573e8bedcdb591a22e773ae378ffe66c837bd".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x920770615a922a74b390ab9ef6231cd353e47dc2".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x967b5f9427309d5786a706bb22cee6d25bdde638".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x9abce78360d4e2252431c7e8c515384b5bb54871".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0x9f7451200e720a9c93bab1196a3d4303eb4ddfe4".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xb13e6403f1eefe52a0625ef0aee30679c81fcf76".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xbc6f2f225f9c49c874f11619c85d8bb438f8eec7".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xbd929ac1f502c401451b122a1115d7418ffca644".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xd55c1a932c95ab20edfe23d359244dc55e38935d".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xd7c00154dd2f08668cb36be2b13f2c135443a13f".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xd99679ae071330f0a6719435ef874e1bcab2ea1e".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xd9dfcf7be4c8cc397616691b1d383013f0f55c7d".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xe7b7d037fd0f334ca56fb2f5f1af286cb35f1865".to_string(),
+            "insider_entertainment".to_string(),
+        );
+        wallets.insert(
+            "0xebf03e85ea2488b44b87c1f176227298d3f4d9da".to_string(),
+            "insider_entertainment".to_string(),
+        );
 
-        let twitter_scrape_interval = std::env::var("TWITTER_SCRAPE_INTERVAL")
-            .unwrap_or_else(|_| "30".to_string())
-            .parse()
-            .unwrap_or(30);
+        // INSIDER FINANCE (65 wallets)
+        wallets.insert(
+            "0x009d141bb2cb3d9a1b484a169a828bac84fabceb".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x0a7bc971d0179a74d573661e2e25f8b8379a1575".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x0d3f948e19e2b3ff5031bb416d72815a07e2c461".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x0e1d01759cfa75782134472a7af5963da9d50c53".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x11679f2a4c3d527d103426bc0315c661189781cd".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x188d1ac5d249db6dd115e39d802676b370a8dad8".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x194287e27c081b6af7ba0546721035a3b6a717ed".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x27a20e71b3ff155c1aa390f0d5a5510b8ef0dd48".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x2f111db82266d880d07a3e6d6e57668bcb8418e3".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x3a6f2e33ecd4e2c6bf399de285ea38a9e74a087d".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x4318e079259a36a0ced41fd53139bea4955efbeb".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x431a7a08f622537f86308c78cba51e27be37b795".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x43ce12ade978f57a23c1ad0adc3cc0760ef4b5dc".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x4e3c2f90c99ac1dc871f314e490bb1193e5120e4".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x4e454141fc1a98c90c3f131500dae76e5c527eb5".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x4e66d90b3b40f318534c3e8e804f98918dc8668f".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x4ee25443ecef95b30fc92af99c6aa1f83eacac40".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x5375c751dd5a03a0395f77489d8afa24ce62c1a1".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x5da923de69de84b638d8751094945ee333d2f4e6".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x606a1842d1bc29fd44d0f089664cbeed0f2adbc2".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x63c2df23cdd924bbdf0f2cb4995349c3ab66afd4".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x6441aa579f5894158be9e2cf6515df4b85e333b7".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x682b5d5c7dd24c541dbee9b7db918f6d8bd259d8".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x6bdc2efdc66b99b6fbf5c5e00c95b42eab7a2dbd".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x6db3166e3a81d204097d6c7117ccefe820db5a94".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x72307d615b77ce286cc194c49a54ba60f5847fe5".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x76c3135f3498416a697d84ba336dca008203c9ce".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x7a69f3789c5ba8812e639581087adc90b61e07ef".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x7bdde50e31edb560a1a660573144bdf0f64643c6".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x7d02a6eca1ee0531fa28e0f4c6564be76837d07b".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x7deb2b78c632361841645f5e4dd086e03b5a2682".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x8028c8a161b8c209dfde6d443135e1fb318a6117".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x818be089cfab5eb6c0942396c0374bfa5c15ccc8".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x8c88dbdc6151f4d3dde2c1a233d0dffa496ea548".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x8db66b7d73be670c93bc2ae82c9c91c82f6ddfd0".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x938cc02f656d438ec16fc8d1a4aceba13222a65e".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x93af11d1fe419cafd2119f0ab1ac025d20fe6065".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0x994ff6482aa479efe4b3aaa5f763b0d7b7f609ac".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xa2efd413103c360a1f6799bc3ae554f209df3d93".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xa30e0dd3894597e05feb2a8960c30dc32f4a9525".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xa5c6ab71fb4ab152ecce4c3392cdcd6dea503a85".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xa60bcd200723e874128ce2739a523141c256abd2".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xa752cbb95cee1ad747eef209d2635aaee558a7b9".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xa8cb1c966c7975466f6e6bd8f6098e5ef0dfea19".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xa9b40b8d8eb21a4f3150a11c00ab54b2cfba7668".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xabc2b63f4ac3a28126587218695d34378d7ff61f".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xb35f175126d753e8045e99e9bed979b7b71fab70".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xbe0d80348dc12c2d2fd2cb650a25fbce45d4a071".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xbea065dc0ba3ca65ef9c3eab3004f9356f93a00e".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xc4aa6db4c5c85e95a3d47b8f3fa839bc407dc5f8".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xc5962c08526ad2a0e321fee8c2dee84eca97cbef".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xd83365c9d7300f108570ef0bb7a2be07d53fdf12".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xd8aa77843f788d2e18d4b36bc728737daac2da56".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xe0c05f7e1a10a3d33ca7d76cdf6dcb6ec4662d97".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xe302386af696af12e83069fce873504538cafc55".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xe4d7015fcb715c96f2ee6c1ca3fd625eaf9fc62e".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xe7e7c315532f2d9e673786e058aa59ac816ac0e2".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xf05ce19ec779623dab0d5b32ce2c8ca0c68c6dcd".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xf33d2aab3dd3af01829f5bbaafd8ab6511cbc852".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xf3d3b29dc7bcdcd7a11acd34f9cb10e28bda80b9".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xf62edd970286d58d6aff29755e888699e51d7f62".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xf6d3d938197fcecbbfa47a8ef7e1418477f5a550".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xf7bc49e311d001d0b45a176fa01bb2c45c18e6fc".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xfaa45b7d86fa682091564d5d867d23b77d7034e5".to_string(),
+            "insider_finance".to_string(),
+        );
+        wallets.insert(
+            "0xfc5a1e721364b6788f6a29045c37a53cb6990b6c".to_string(),
+            "insider_finance".to_string(),
+        );
 
-        let hashdive_scrape_interval = std::env::var("HASHDIVE_SCRAPE_INTERVAL")
-            .unwrap_or_else(|_| "120".to_string())
-            .parse()
-            .unwrap_or(120);
+        // INSIDER POLITICS (134 wallets)
+        wallets.insert(
+            "0x00441a73991f65d0c5b9e2d3ef16c2c572eac8bb".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x04850bac22993a0f2a0000ba804024cf512c1557".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x05ac480879bff50f853869c92492011f7b1606a8".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x08e7bb819c3b8e9aaaadc97e8144f5aa6d48aa79".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x09e8e842c8db68a76cc4cae13e3ab9a1e94383c5".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x0a74829dcf589652c676c1081b2a00960c1e267a".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x0a82661c5d58630b88dc5bb1c6333716e7445076".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x0c1fbf0900b615691b956ea9bdecd2d1d47cd472".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x0d38a44518fb42876a6cf6cf0c4f46dcf4974cab".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x10ef765e7d15f8ccad61959e83ca7f16efc4439d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x10f359d24c807a6755c4b85ddd1f99e22cbefead".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x13e1cc5dc207fb9b2f9f774f215caf86c041c592".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x17caefd7fb933d96c0c0e8fb3e18ba0be60f26f2".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x196bbbc493319683c6f2b68126b1220e834cc223".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x197a4fa5e9a75d0e566a3038f2078c7cd00ebe93".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x1c44bf10b977c9725dfd5850d00fd19739f69af7".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x1d3cbeae4547f6053922101f69d4db7ce5824337".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x1d56fdc2847d06fdc0cefe4e9ddabe264bca2e0c".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x2255cb62e3e0f08ddb6ac448ae2b60dc40e0a5d6".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x242f5eb8ec7022315ef8f0c957d83084106626c8".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x2446a01957028c6d4e9618898518c8b53c9064e2".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x2628a9dd9d77b85c43e3c247444f0731db6886a9".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x26fb5e36bc3e7e6d18ee215f11525a29c0e432c1".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x2900f1fd8e242f29f85646a2366bc6bc271c30f4".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x30a97630f2e86312657d6ee1910d8adcf5a1941b".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x3426cd135c5d89cadcbdcc258c4f447ed90abf5d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x384cc0b7a5c693e07c2d3fdf5f66a66d7394969f".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x3a77d93ba9608b0f536ea1aec2af8f0cf8556d58".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x410757ab3e756427e6e9b4e170cfbc434f54fcb2".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x42b13869d970865f47b11fa54c409a85e132cf90".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x42fdf30a4be45b284e54775819a294af7ffe9074".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x45eaa281befec9dc97704e46fa4ed856efeb6338".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x497f43cc18d13795ffbf4072b8f49e9e7432b113".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x49caa430ad69b96e852baf05bffebc2ab5c0bb0f".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x4d7477c9e16c03709ee930ba95120bcb0d32e462".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x4f9d98203e991e0e95cc846a596d71d649ce3836".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x50c9feda3e7f78c6b6c590ff3b6e33288c00c9b6".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x51d29aa03369ce5fd8f5ff80b7eb7e56f30a44f4".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x542c2b469dad6df8fbd88040e347c933ceb26f8c".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x548432594bd34c20b018a1aed550a8c0ac693426".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x57b1fc189b6947487f0c20b512338967f68adad7".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x58d0c42d0e9118274e1fedceb042e5fd893c2e80".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x5992310ce6e8440ff5be50c840cb0527abe275ef".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x5b036fc05da7f612c1667a696edd16e130070fbd".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x5bb330941496acb6d5f3ec4ec2d0e1dcb96602d5".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x5e80a458ae5caad3f43421309a44f55ed5b764b3".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x5eb080e29708a151277702debdf85e1c2682310c".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x5f000e5e2fcaab51f408da3344ac1e8cb5900ee9".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x617b397b18752ab4bf812be9dc9986484b40c1ff".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x65536ef518ac0d555ba68ce40581bb7f99bb3c9c".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x6662050acf4eb9efafc929378303e1aa085d2848".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x68dd2eb867e043eb4aabf2f3205cffded1552fa4".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x69eaa5912eb5944cdf0ff0de669c1feae8693508".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x7a52fcdbc99e3ff3e14eacd01641d532ac361b08".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x7ce61b04551ddb6faae92ca75ba744e6bba56b12".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x7d67d0de5778db6f1d01d7603de30429ec831b0d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x7d91c11dd89b8b0b933cf6b0d6a0ded1db8fc711".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x7e634a7e616d24910816a8da6640c37c3c771bf1".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x7e6d6d2b9cdcf743e1dd55485ff618f8a1716824".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x7ecee2888c4410a6cccf0933a6657bed18792993".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x7f58de93b627a305d18f238c2aabb5a01b551906".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x80f8cc9da2fa308c969fd28def2e9cf3e748dccf".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x812721f69ad2a3b468b6fcf89f32b814c4e1ec2d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x81864f1dffcb0dbe2267a1cb7eafe18f71e2c998".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x83f4187bab232d49a61c12b3cb5f62bb399e6548".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x85c4e1a09c6ec60eebad0344aef210667a4133cb".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x86d504765e29ba0cf8d7d28a9095fe906c3e29e9".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x87d85086107bfd61dc62b61316cddc36af72ba33".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x88790c2b40790f8e195546dd76932ab8da736fb7".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x88dcc6f5feefeb33ad5911aa50bc8e6d4000eb22".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x8a1bb9a029608d5327829e7eacda6ff42c03722a".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x8f15a54a4ffb33611e7a45cf991ddd622f92c363".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x8f5aa74637188fba7d30adb6ea92b852df12c586".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x941beb2fd9ba6b83825ff8af61e516004893e07d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x959b417659f86af67dcea4c300a59c6e831f97e7".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x99bcafb22654e130443eeaede21557f3cc0e1c78".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0x9a6c22fbff8c6819ac29213cdfe934eb509340f7".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xa1791deeaaa596722683387e1d4fee36ea6f180d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xa3cd084abb5bf7fce7694d4d2224e5f4fc49005f".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xa3fac59e7ed9e3deecd54266a2a25707b94cbf34".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xa40e42eed49ebb6ffb9f3d903f617b0656efd857".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xa57d41e4e6e005006e415b2ea1cd264b27efa893".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xa6a77e0ec4a1ffea1420e436677ec4e6ae70f965".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xa8a8c6dd36f53d9b7b6cf7905fb761f47c8bbdc6".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xa8cfbe223d676909640084fa368170652d20689e".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xac1df3c9e567040527e5a11b82ead3a6b7c0f862".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xac9c4c382974034bdc2f5ed6ccc85ff1a9156a15".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xaca758eecb53ad1316c10db84a36b77338abf25f".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xade7ecb65f7b57620e0f00b5ff7e7be38c412b4b".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xb1b49be1be4debce02397c1d721b223d92165353".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xb96c855a0f93b1933f5cbd33f4a59748d66a7abd".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xbbb274704cc41b78ee1d4ac82078ce54a6080bd2".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xbc3bb18ee85a87b025e6eef3c3e2b2b6d0852d7c".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xbf79941c07f6a86ed41c27dd904744871da3605f".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xbf93685817e45892b17aac0abd0a1a4bdfba933c".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xc3d5950f0405c93e8a049045516ffa23404205ac".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xc4ecd5578c0c9faabd0495858bf3a7e49055acf0".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xc52dcdd0a56fbc688c5f9f6443264169a6acfa66".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xc6826b131225055d2435bf0822b196e6281b563b".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xc772be0a052081402b3a154584c3ec13cdba45f5".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xc7e16e2c188bdedfc770b078eeaab1bcad3c354d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xc8e4fb4c38a859fd39edbea067d339ca6dd08638".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xca18f8e563f887f015dcc82fe8b9a1480271cbf2".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xca92667a8e1e71abb7ee0ccebfc6a46ef8745493".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xcc6f4ff3e28e3596a699d673ad75c9b2906f4987".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xcc725e1258d64c84efe9ff2f71fd3afff6af9e4b".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xcd8fd5d8d5db66b09bec011d176cd3c652ec828b".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd0e203106ef983db69480ee039578a6a8233c132".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd0ffb6dedc690e947cccfa8f5acc44badeb3eb8d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd25b5b2846ca105adf20bb82f385216ef8e7ae92".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd2ad216b52a5556f69b961d7f026a4cf485d08af".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd3788666db097a65a353f5841e24f00d574c29a4".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd3ae2498ac79363b061b1420f4291569a1d6c73c".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd4acbc54f89a31c92ea6fabfff627b5642506ff2".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd774bc7dcec973281ac8d8a08bef1827b66d9cb8".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd7954e587ea03d32a672c134b4497439b5356ad5".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xd9b5d41d018a75a1cae386563b1a264a2f52e36d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xe090e87f35ffcb212f4a22762e17beea14b0342d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xe126926b6a5afd3342606c3f4dbeac489eab6110".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xe13a515ec952078edeef2956c1a5d7da5104f284".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xe1b5920c9d192a7cb74887529ea6caa640928378".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xe258c02a1ed5c159f3268cf7728ba5706f8bd084".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xe5a25ebce5538a48a4c7ba21588639e8be728b5b".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xe9063d83df7801d10d9944627664dd1cc04b9b0b".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xec8ec693fd44642d59b8ec14032bb87bd81a109a".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xee045ae7811a90ef4db0d8f266386b9b9efde683".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xf2440b4a1d10ce9d9c06daf0c3b1daafc72fc30e".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xf5720664aef3087fb0fc064e8e6e5441f5d59085".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xf80873315ce762817b30b9548a6ce162d59daf6c".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xf94c69f27e25acb49d2e7ef5892b6c5990d559dc".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xfa8024ff90e4216da4a4de385272287be7056398".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xfc45ac77b295b4bbc8accfe2c5809afc0cc08bd6".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xfc9c9ca14977bec8e2745a4e613b16bc75b9c23d".to_string(),
+            "insider_politics".to_string(),
+        );
+        wallets.insert(
+            "0xfe9e566464bcdee6bcf2c46089830187e2d900de".to_string(),
+            "insider_politics".to_string(),
+        );
 
-        let hashdive_api_key = std::env::var("HASHDIVE_API_KEY").ok();
+        // INSIDER SPORTS (5 wallets)
+        wallets.insert(
+            "0x394935db91b8a03dd681bf67be9c94bbc16c753d".to_string(),
+            "insider_sports".to_string(),
+        );
+        wallets.insert(
+            "0x98aa2086469c679d0130005da896834041a23356".to_string(),
+            "insider_sports".to_string(),
+        );
+        wallets.insert(
+            "0xa8680bbabe33fa844767217e670ca9e55d34867a".to_string(),
+            "insider_sports".to_string(),
+        );
+        wallets.insert(
+            "0xbd810a483eb846da535405a442532f86dcfe1f7f".to_string(),
+            "insider_sports".to_string(),
+        );
+        wallets.insert(
+            "0xc37002d5a6307806d3b2fcfb3c2c205a11305c89".to_string(),
+            "insider_sports".to_string(),
+        );
 
-        let hashdive_whale_min_usd = std::env::var("HASHDIVE_WHALE_MIN_USD")
-            .unwrap_or_else(|_| "10000".to_string())
-            .parse()
-            .unwrap_or(10000);
+        // INSIDER TECH (91 wallets)
+        wallets.insert(
+            "0x07b93d962a4c8565494c10cbce7005028ad6245e".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x09bb2ab1c72871fd3d206cd36bf29a87ec9b1c5c".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x0a1f223bf61606650c42b76e161d3c27e939cb88".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x0d1cace607f3165274b7b8123967fc3e818c7783".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x0d23de74e639c8c5917019436ea7e29b3c1cdb63".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x1310abeefcf90eb3a693bb5110f6466acc6b5bcc".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x131ba396405a640b64e19947ff3e1d9874f8170a".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x136a5fc29dd939c9c2340a63bcab19c70fb688ee".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x1809d1379bf8770e77eef675524542c3f3d1018f".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x1835cfeed8d8dc29f4dda3e5e8950eac01ee37c5".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x1b2bac8c5f1875c5edea83a9723c603d344d9115".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x1c727e09617f0c845d7ef9f1613fa4407fb9683b".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x1e2700a8626e800f031c1227a085cc32c890bc64".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x1f555795246bd7a3e097050000c6cc9d4342fe67".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x20f2885308bed6377bf14d31fca705825875a981".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x2218763ccfb88335c17feebf6f849aa70f9d3e73".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x25b4e9b4be486d8ca553e965043ee6fabd47cc15".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x292d921ad508d955f4d02859bf18b20e66e32971".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x2adb6e27c4218fabc149d4ca7596a7a9dcc03088".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x2b2d87247778d7c689bbe9b4eb4549aa8863b074".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x2c16d7f51d2265f8b26fe3c5565191e10d1b998a".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x31cf1b95bd80b402a0cf236c2758148384807570".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x369c58102462cc901e72b4d8ba7ed097dd9f73a1".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x373d132e995f1c2f2eacf4dd9668c0cb5e5146f5".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x3afda735bd7ab2e6e81d6244f49a60ea45814775".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x3eb49bff15e79391783ef720b2fb8d4bf8dfb3fc".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x40fb9d9af7bee9d3cb225a7eaee769c5a30b8577".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x482f3370dbe1031e1f2225a768c4570bb5a9f849".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x4c3d5d03c441f9e1215ecfdc598987b5f3850bee".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x4cfa0da8e05cf93a48b185f6dbc0a470b1b45827".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x4dc4122358bb57cec6ae7a5f4ca3f04c1ed1483b".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x5231ec1b16f6de8bf08e279b6a83768d3c76326d".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x5293ab23feefdfd65e3323c0112de8a18a081b18".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x596ac7863897df6610ccefc5a7bec753b0074207".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x59dbdb4c69d20c4dd053146e9865cc5c9ce0f2fe".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x5a2bf9f746409dddbd848ffd862b6d7af1dda5cf".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x5b615c7d608fa790b7460a8806940958f0d58759".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x5b731f56cc256b532b1003ec4d96c00ba36a7c2f".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x603ccf2cea522f3a10c3f1b3094a9e5f5c70ac70".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x63afa0695a62a52b6b0b798c5b2a300dd1363438".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x6f2756feec8b263ffbd9180e18a7d1d1a976dc33".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x726c8ac2f2a69e007b3f309074fb12b4ce082558".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x743beec1270e1f4a468658bf628ac8cb94e6b802".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x7c7a40fefe3c570b7086df6589d04fdc88882cd2".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x80928e069eb4c7fd2b67ee6def1c41219bcc4efc".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x83f39de6d95ee46f9dd79cd629d9183ab91ef766".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x840a87e9eda9a607d4c0c0f3449a67650504ef52".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x870df22f84f0fd6aca507a2240a6ff6ad27741a2".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x87724cfa410a75a0552c3f1ab6d3b6fb5d710129".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x88f48ff46d5c37a8ae09e29089fffa597fb69d7a".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x8bf55181ae41302bef76b27996c436c8df53c411".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x8cb27bead686b03f280ed30cd272284f83541607".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x8d918585fc1080d6c9b170eb904e0ce8928c87cc".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x9255c895fc51a99ec8e855f558e05765797d3749".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x990a84fcf971ceb835db7e8df3885a2020f381d8".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x9a630502a44e048533962e628881efdbf7444fc1".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0x9c1648834ee717cb967d32a31d7b9cf9534ea981".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xa1b2debeb1fcd853e94aed625baf7fd2f65be855".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xa2393f717709cb9478f55b1f1d5c4d11a39c9733".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xa5092272db5c4794b4012d83a4b6944f35eba82f".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xaf4200c5a0bc7e603f46047f22cca2fa479f939f".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xb242191050482d80fdf717ec9547c9267bc5c70d".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xb93e1ee2f0e75da434fef356c11e533b7813b8fd".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xbb3030a0ff2371e514093894245b6dc2166db84c".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xbe065f327c1ee9694878db54496b8aa9e3fec982".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xbe37de8afd5031a718bb75d4e9126371c77f69cd".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xc042b35b26fdde934d18969687ca3c956c16ea55".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xc084a9f4fc8138c4ab402b9773d761966351fa88".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xc0dbce1ad12e6be83bb34cd80aa2d36cf7346b54".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xc309579c29eb1b41d647c2005e501425d3c057da".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xc6df56de934fcb04531b76bb085c36da4466db7e".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xc79ae4f0a5c995da8c77ec324bc1c4cbe9accf32".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xccd90a463bafcfe329364245a8980fe889754563".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xcfe5a2b175e980c8d0c033292ee916a803e13912".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xd5081048fefcbb5a5ccde89d30fdcd6c85e48b7d".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xd62fb3a5a509b81dcbf3f36f7403ace111d57643".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xd81365e5b8914d97c50b25021544c13603ae7b0d".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xd8d18a1582775c0dc0c23a112eca9a59b1057de6".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xd95a0d18ec481d1ac3aa837d0cf478eec8198aad".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xdad1c4bb91050f0054e6625902439b4a1fbc0377".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xdd55d1e0aaf20143fb86990936de7d600870697c".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xdd56630ffbbf6c6e5834bcc5d78daba4e97e4da0".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xddb0433436c1a66156b5e1d8b6c08cb03d9d591f".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xe0203e8f473dfea416700b6534ba20bd95d33455".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xe755d341c5c4039fe54f944ce0ccc68bcaca3aeb".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xe9a16d3a413a14c3bad20e77dd8db3039f89185d".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xec562ded0dff9f19d19267f321e9c4a411c384db".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xf607b5d83abde6e21c5ce678c43ba5dc804ef0a6".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xf7bee7be49389e05b27951bd251d5433a3339105".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xfb9c18e0b6bfd399b217d606de1652853d0e2f94".to_string(),
+            "insider_tech".to_string(),
+        );
+        wallets.insert(
+            "0xfffac3b4d2db94d7c61a67bef8ac6542d48becfe".to_string(),
+            "insider_tech".to_string(),
+        );
 
-        Ok(Self {
-            database_path,
-            port,
-            twitter_accounts,
-            twitter_scrape_interval,
-            hashdive_scrape_interval,
-            hashdive_api_key,
-            hashdive_whale_min_usd,
-        })
+        wallets
+    }
+
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        // Override from environment if provided
+        if let Ok(key) = std::env::var("DOME_API_KEY") {
+            let trimmed = key.trim().to_string();
+            if !trimmed.is_empty() {
+                config.dome_api_key = Some(trimmed);
+            }
+        }
+
+        if let Ok(interval) = std::env::var("POLL_INTERVAL_SECS") {
+            if let Ok(secs) = interval.parse::<u64>() {
+                config.poll_interval_secs = secs;
+            }
+        }
+
+        // Parse custom wallet list from JSON if provided
+        if let Ok(wallets_json) = std::env::var("TRACKED_WALLETS_JSON") {
+            if let Ok(wallets) =
+                serde_json::from_str::<std::collections::HashMap<String, String>>(&wallets_json)
+            {
+                config.tracked_wallets = wallets;
+            }
+        }
+
+        config
     }
 }

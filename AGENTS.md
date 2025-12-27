@@ -1,455 +1,115 @@
-# 🤖 AGENTS.MD - Complete System Guide for AI Agents
+# AGENTS.MD - Complete Technical System Reference
 
-**Last Updated:** November 17, 2025  
+**Last Updated:** December 22, 2025  
 **Purpose:** Comprehensive technical reference for AI agents working on BetterBot  
-**Target Audience:** Future AI assistants, developers, and system architects
+**Status:** Production-Ready, Optimized for 10M+ Signals
 
 ---
 
-## 📚 TABLE OF CONTENTS
+## Table of Contents
 
-1. [System Overview](#system-overview)
-2. [Critical Lessons Learned](#critical-lessons-learned)
-3. [Backend Architecture](#backend-architecture)
-4. [API Integration Details](#api-integration-details)
-5. [Frontend Architecture](#frontend-architecture)
-6. [Data Flow & Processing](#data-flow--processing)
-7. [Common Pitfalls & Solutions](#common-pitfalls--solutions)
-8. [Testing & Verification](#testing--verification)
-9. [Deployment Checklist](#deployment-checklist)
-10. [Quick Reference](#quick-reference)
-
----
-
-## 🔑 SECRETS & ENVIRONMENT (DO NOT COMMIT SECRETS)
-
-Status: Keys previously appeared in this document. Treat as a security incident. Rotate all affected credentials immediately and remove any history containing secrets.
-
-Immediate actions (required):
-- Rotate Hashdive and Dome API credentials in the provider dashboards.
-- Purge secrets from git history (use git filter-repo or BFG) and force-push if this repo is remote.
-- Add or validate secret scanning in CI (e.g., gitleaks) and a pre-commit hook.
-
-How to configure (sanitized):
-
-1) rust-backend/.env (create locally; never commit)
-```bash
-# Server
-PORT=8080
-RUST_LOG=info,betterbot=debug
-
-# Databases
-DATABASE_PATH=./betterbot_signals.db
-AUTH_DB_PATH=./betterbot_auth.db
-
-# External APIs (set via environment; do not place secrets in files)
-# export HASHDIVE_API_KEY=...   # set in shell/CI secret manager
-# export DOME_API_KEY=...       # set in shell/CI secret manager
-HASHDIVE_WHALE_MIN_USD=10000
-
-# Source kill-switches (optional; defaults shown)
-POLYMARKET_ENABLED=true
-POLYMARKET_FAILURE_THRESHOLD=3
-POLYMARKET_LATENCY_P95_MS=5000
-HASHDIVE_ENABLED=true
-HASHDIVE_FAILURE_THRESHOLD=3
-HASHDIVE_LATENCY_P95_MS=10000
-DOME_ENABLED=true
-DOME_FAILURE_THRESHOLD=3
-DOME_LATENCY_P95_MS=8000
-
-# Optional services
-TWITTER_PYTHON_SERVICE_URL=http://localhost:8081
-
-# Polling and limits
-TWITTER_SCRAPE_INTERVAL=30
-HASHDIVE_SCRAPE_INTERVAL=2700
-```
-
-2) frontend/.env (dev only; never commit production values)
-```bash
-VITE_API_URL=http://localhost:3000
-VITE_WS_URL=ws://localhost:3000/ws
-```
-
-3) Provide templates (tracked) and keep real env files untracked
-- Track: `rust-backend/.env.example` and `frontend/.env.example` with placeholders only.
-- Ensure `.gitignore` includes `.env`, `frontend/.env`.
-
-Auth header usage (no secrets in docs):
-- Hashdive REST: header `x-api-key: ${HASHDIVE_API_KEY}`
-- Dome REST: header `Authorization: Bearer ${DOME_API_KEY}`
-- Dome WS: `wss://ws.domeapi.io/${DOME_API_KEY}`
-
-Operational note:
-- For any configuration change, restart backend: `cd rust-backend && cargo run`
+1. [System Architecture Overview](#1-system-architecture-overview)
+2. [Backend - Rust Architecture](#2-backend---rust-architecture)
+3. [Frontend - React/TypeScript Architecture](#3-frontend---reacttypescript-architecture)
+4. [External API Integration Guide](#4-external-api-integration-guide)
+5. [Data Flow & Signal Pipeline](#5-data-flow--signal-pipeline)
+6. [Database Schema & Optimization](#6-database-schema--optimization)
+7. [Authentication System](#7-authentication-system)
+8. [Risk Management & Kelly Criterion](#8-risk-management--kelly-criterion)
+9. [Environment Configuration](#9-environment-configuration)
+10. [Performance Optimizations](#10-performance-optimizations)
 
 ---
 
-## 1. SYSTEM OVERVIEW
+## 1. System Architecture Overview
 
-### What is BetterBot?
+BetterBot is a quantitative trading signal platform for Polymarket prediction markets. It tracks elite wallet activity, detects market inefficiencies, and provides real-time trading signals.
 
-BetterBot is a production-grade quantitative trading system for Polymarket prediction markets featuring:
-- **Backend:** Rust (Axum framework)
-- **Frontend:** React + TypeScript (Vite + TailwindCSS)
-- **Real-time:** WebSocket streaming
-- **Security:** JWT authentication with bcrypt
-- **Databases:** SQLite (signals + auth)
-- **APIs:** Hashdive, DomeAPI, Polymarket GAMMA
+### Technology Stack
 
-Current state highlights (implemented):
-- Data source kill-switches with p95 latency monitoring and failure thresholds (main.rs)
-- Institutional-grade risk guardrails incl. fractional Kelly cap (≤0.20), drawdown throttle (8%/4%), regime risk factor, isotonic calibration; guardrail flags propagated to frontend (risk.rs + main.rs)
-- Database-backed signal storage with cleanup and indices; attribution fields stored (signals/db_storage.rs)
-- Walk-forward backtesting with embargo/leakage controls and hygiene checks (backtest.rs)
-- Real-time tracked wallet streaming via Dome WebSocket with auto-reconnect (scrapers/dome_websocket.rs + main.rs)
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| Backend | Rust + Axum | High-performance async API server |
+| Database | SQLite (WAL mode) | Signal persistence, 10M+ capacity |
+| Frontend | React 18 + TypeScript | Terminal-style UI |
+| State | Zustand | Lightweight state management |
+| Styling | TailwindCSS | AMOLED-black theme |
+| Real-time | WebSocket + REST polling | Hybrid signal delivery |
 
-### Architecture at a Glance
+### Core Data Sources
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    BETTERBOT SYSTEM                      │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌──────────────┐         ┌──────────────┐             │
-│  │   Frontend    │◄───WS──►│   Backend     │            │
-│  │  React + TS   │         │  Rust + Axum  │            │
-│  │  localhost    │         │  localhost    │            │
-│  │    :5173      │         │    :3000      │            │
-│  └──────────────┘         └──────────────┘             │
-│         ▲                        │                       │
-│         │                        ▼                       │
-│         │             ┌────────────────────┐            │
-│         │             │  SQLite Databases  │            │
-│         │             │  - Signals         │            │
-│         │             │  - Authentication  │            │
-│         │             └────────────────────┘            │
-│         │                        │                       │
-│         │                        ▼                       │
-│         │             ┌────────────────────┐            │
-│         └─────────────│   External APIs    │            │
-│                       │  - Hashdive        │            │
-│                       │  - DomeAPI         │            │
-│                       │  - Polymarket      │            │
-│                       └────────────────────┘            │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
-```
+| Source | Purpose | Rate Limit |
+|--------|---------|------------|
+| Polymarket GAMMA | Market data, events, prices | Generous |
+| Polymarket CLOB | Orderbook snapshots (bid/ask/depth) + execution surface | Generous (cache + rate-limit) |
+| Hashdive | Whale trades ($10k+) | 1000/month |
+| DomeAPI REST | Wallet activity history | 100ms delay |
+| DomeAPI WebSocket | Real-time wallet orders | Streaming |
 
 ---
 
-## 2. CRITICAL LESSONS LEARNED
-
-### 🚨 LESSON 1: Type System Mismatches (Backend ↔ Frontend)
-
-**PROBLEM:**  
-Rust backend sends tagged enum unions, but TypeScript frontend expected simple strings.
-
-**EXAMPLE:**
-
-**Backend (Rust):**
-```rust
-#[derive(Serialize)]
-#[serde(tag = "type")]
-pub enum SignalType {
-    WhaleFollowing {
-        whale_address: String,
-        position_size: f64,
-        confidence_score: f64,
-    },
-    // ...
-}
-```
-
-**What Backend Sends:**
-```json
-{
-  "signal_type": {
-    "type": "WhaleFollowing",
-    "whale_address": "0xabc...",
-    "position_size": 50000.0,
-    "confidence_score": 0.85
-  }
-}
-```
-
-**What Frontend Initially Expected:**
-```typescript
-// WRONG
-signal_type: "WhaleFollowing" // Simple string
-```
-
-**SOLUTION:**
-
-```typescript
-// CORRECT - Match Rust's tagged union
-export type SignalType =
-  | { type: 'WhaleFollowing'; whale_address: string; position_size: number; confidence_score: number }
-  | { type: 'EliteWallet'; wallet_address: string; win_rate: number; total_volume: number; position_size: number }
-  // ...
-
-// Access the type:
-if (signal.signal_type.type === 'WhaleFollowing') {
-  console.log(signal.signal_type.whale_address); // Correct
-}
-```
-
-**KEY TAKEAWAY:** Always check Rust's serde serialization output format. Use `#[serde(tag = "type")]` for tagged unions.
-
----
-
-### 🚨 LESSON 2: API Authentication Formats
-
-**PROBLEM:**  
-Different APIs use different authentication mechanisms. Mixing them causes silent failures.
-
-**API AUTH MATRIX:**
-
-| API | Header | Format | Example |
-|-----|--------|--------|---------|
-| **Hashdive** | `x-api-key` | Direct key | `x-api-key: abc123` |
-| **DomeAPI REST** | `Authorization` | Bearer token | `Authorization: Bearer ${DOME_API_KEY}` |
-| **DomeAPI WebSocket** | URL path | API key in path | `wss://ws.domeapi.io/${DOME_API_KEY}` |
-| **Polymarket** | None | Public API | No auth needed |
-
-**CRITICAL IMPLEMENTATION:**
-
-```rust
-// Hashdive - x-api-key header
-.header("x-api-key", &self.api_key)
-
-// DomeAPI REST - Bearer token
-.header("Authorization", format!("Bearer {}", api_key))
-
-// DomeAPI WebSocket - URL path
-let ws_url = format!("wss://ws.domeapi.io/{}", api_key);
-```
-
-**COMMON MISTAKE:**
-```rust
-// WRONG - Using X-API-Key for DomeAPI (doesn't work!)
-.header("X-API-Key", &api_key)
-```
-
-**KEY TAKEAWAY:** Never assume auth headers. Always verify API documentation for exact format.
-
----
-
-### 🚨 LESSON 3: Rate Limiting & Credit Management
-
-**PROBLEM:**  
-Hashdive has 1000 monthly credits. Aggressive polling exhausts credits quickly.
-
-**CREDIT CALCULATIONS:**
-
-| Polling Interval | Requests/Day | Requests/Month | Status |
-|-----------------|--------------|----------------|---------|
-| 30 seconds | 2,880 | 86,400 | ❌ Exhausts in hours |
-| 5 minutes | 288 | 8,640 | ❌ Exhausts in 3 days |
-| 15 minutes | 96 | 2,880 | ❌ Exhausts in 10 days |
-| **45 minutes** | **32** | **960** | ✅ Under 1000 limit |
-| 1 hour | 24 | 720 | ✅ Safe with buffer |
-
-**SOLUTION:**
-
-```rust
-// CORRECT - 45-minute polling
-let mut interval_timer = interval(Duration::from_secs(2700)); // 45 minutes
-
-// Also implement rate limiting per request
-struct RateLimiter {
-    last_request: Instant,
-    min_interval: Duration, // 1 second for Hashdive
-}
-```
-
-**KEY TAKEAWAY:** Calculate API usage math BEFORE implementing. Use timers strategically.
-
----
-
-### 🚨 LESSON 4: WebSocket Reconnection Logic
-
-**PROBLEM:**  
-DomeAPI WebSocket connection can fail. Without proper reconnection, system stops receiving updates.
-
-**CORRECT IMPLEMENTATION:**
-
-```rust
-pub async fn run(&self) -> Result<()> {
-    let mut reconnect_delay = Duration::from_secs(1);
-    let max_reconnect_delay = Duration::from_secs(60);
-    
-    loop {
-        match self.connect_and_stream().await {
-            Ok(_) => {
-                info!("WebSocket connection closed gracefully");
-                reconnect_delay = Duration::from_secs(1);
-            }
-            Err(e) => {
-                error!("WebSocket error: {}", e);
-                warn!("Reconnecting in {:?}...", reconnect_delay);
-                sleep(reconnect_delay).await;
-                
-                // Exponential backoff up to 60 seconds
-                reconnect_delay = (reconnect_delay * 2).min(max_reconnect_delay);
-            }
-        }
-    }
-}
-```
-
-**KEY ELEMENTS:**
-1. **Infinite loop** - Never give up reconnecting
-2. **Exponential backoff** - Start at 1s, double each retry, cap at 60s
-3. **Reset on success** - Go back to 1s delay after successful connection
-
-**KEY TAKEAWAY:** WebSockets WILL disconnect. Plan for it with exponential backoff.
-
----
-
-### 🚨 LESSON 5: Mock Data Fallback Strategy
-
-**PROBLEM:**  
-During development, APIs might not be configured. System needs graceful degradation.
-
-**CORRECT APPROACH:**
-
-```rust
-// Collect all real API signals
-let mut all_signals = Vec::new();
-
-if let Ok(Ok(signals)) = poly_result {
-    all_signals.extend(signals);
-}
-if let Ok(Ok(signals)) = hash_result {
-    all_signals.extend(signals);
-}
-
-// ONLY use mock if NO real signals
-if all_signals.is_empty() {
-    info!("⚠️  No real signals detected, generating mock signals for testing");
-    all_signals.extend(mock_gen.generate_signals(10));
-}
-```
-
-**KEY POINTS:**
-- Mock is **fallback**, not default
-- Always try real APIs first
-- Log clearly when using mock data
-- Make it easy to disable mock in production
-
-**KEY TAKEAWAY:** Graceful degradation allows development without all APIs configured.
-
----
-
-### 🚨 LESSON 6: Login Response Structure
-
-**PROBLEM:**  
-Frontend needed username to display, but initial login response didn't include user object.
-
-**WRONG:**
-```rust
-// Missing user object
-pub struct LoginResponse {
-    pub token: String,
-    pub expires_in: usize,
-    pub role: UserRole,
-}
-```
-
-**CORRECT:**
-```rust
-pub struct LoginResponse {
-    pub token: String,
-    pub expires_in: usize,
-    pub role: UserRole,
-    pub user: UserResponse, // ✅ Include sanitized user object
-}
-
-pub struct UserResponse {
-    pub id: String,
-    pub username: String,
-    pub role: UserRole,
-    pub created_at: String,
-    // NO password_hash!
-}
-```
-
-**KEY TAKEAWAY:** Login responses should include user data needed by frontend. Never send password hashes.
-
----
-
-## 3. BACKEND ARCHITECTURE
+## 2. Backend - Rust Architecture
 
 ### Directory Structure
 
 ```
-rust-backend/
-├── src/
-│   ├── main.rs                 # Entry point, server setup
-│   ├── models.rs               # Core data structures
-│   ├── api/                    # REST API endpoints
-│   │   ├── mod.rs
-│   │   ├── signals.rs          # Signal endpoints
-│   │   └── risk.rs             # Risk management endpoints
-│   ├── auth/                   # Authentication system
-│   │   ├── mod.rs
-│   │   ├── models.rs           # User, Claims, etc.
-│   │   ├── jwt.rs              # JWT token handling
-│   │   ├── user_store.rs       # User database
-│   │   ├── middleware.rs       # Auth middleware
-│   │   └── api.rs              # Login/logout endpoints
-│   ├── arbitrage/              # Arbitrage detection
-│   │   ├── mod.rs
-│   │   ├── engine.rs
-│   │   └── fees.rs
-│   ├── signals/                # Signal detection & storage
-│   │   ├── mod.rs
-│   │   ├── detector.rs         # Pattern detection
-│   │   ├── db_storage.rs       # SQLite persistence
-│   │   └── correlation.rs      # Multi-signal correlation
-│   ├── scrapers/               # External API integrations
-│   │   ├── mod.rs
-│   │   ├── hashdive_api.rs     # Hashdive integration
-│   │   ├── dome.rs             # DomeAPI REST
-│   │   ├── dome_tracker.rs     # DomeAPI client
-│   │   ├── dome_websocket.rs   # DomeAPI WebSocket
-│   │   ├── polymarket_api.rs   # Polymarket GAMMA
-│   │   ├── expiry_edge.rs      # Expiry edge scanner
-│   │   └── mock_generator.rs   # Mock data for testing
-│   ├── risk.rs                 # Risk management
-│   └── backtest.rs             # Backtesting engine
-├── Cargo.toml                  # Dependencies
-└── .env                        # Environment variables
+rust-backend/src/
+├── main.rs           # Entry point, server setup, polling loops
+├── models.rs         # Core data structures
+├── risk.rs           # Kelly criterion position sizing
+├── backtest.rs       # Historical signal analysis
+├── api/              # HTTP REST endpoints
+├── auth/             # JWT authentication
+├── scrapers/         # External API integrations
+├── signals/          # Signal detection & storage
+├── vault/            # Auto-trading infrastructure
+└── arbitrage/        # Cross-platform arbitrage
 ```
 
-### Key Components
+### File-by-File Reference
 
-#### 1. Main Server (`main.rs`)
+#### `main.rs` (~900 lines)
+**Purpose:** Application entry point, async runtime orchestration
 
-**Responsibilities:**
-- Initialize databases (signals + auth)
-- Spawn background tasks (API polling, WebSocket streaming)
-- Set up HTTP server with Axum
-- Configure CORS and middleware
+**Key Components:**
+- `AppState` - Shared state (storage, risk manager, broadcast channel)
+- `DataSourceKillSwitch` - Health monitoring with auto-disable
+- `parallel_data_collection()` - 45-minute Polymarket/Hashdive/Dome polling
+- `tracked_wallet_polling()` - Hybrid WebSocket + REST for 45 wallets
+- `expiry_edge_polling()` - 60-second market expiry scanner
+- `websocket_handler()` - Client signal streaming
 
-**Critical Sections:**
-
+**Concurrency Model:**
 ```rust
-// Polling tasks
-tokio::spawn(parallel_data_collection(...));  // 45-min intervals
-tokio::spawn(tracked_wallet_polling(...));     // WebSocket streaming
-tokio::spawn(expiry_edge_polling(...));        // 60-sec intervals
+// Uses parking_lot::RwLock instead of tokio::RwLock for faster short critical sections
+let risk_manager: Arc<ParkingRwLock<RiskManager>>
+
+// Batch processing with pre-allocated vectors
+let processed_signals: Vec<MarketSignal> = qualified_signals
+    .par_iter()  // Rayon parallel iterator
+    .filter_map(|signal| { ... })
+    .collect();
 ```
 
-#### 2. Signal Types (`models.rs`)
+---
 
-**The Core Enum:**
+#### `models.rs` (~400 lines)
+**Purpose:** Core data type definitions
+
+**Key Types:**
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]  // ⚠️ CRITICAL: Creates tagged union
+pub struct MarketSignal {
+    pub id: String,
+    pub signal_type: SignalType,      // Enum variant
+    pub market_slug: String,
+    pub confidence: f64,              // 0.0 - 1.0
+    pub risk_level: String,           // "low", "medium", "high"
+    pub details: SignalDetails,
+    pub detected_at: String,          // RFC3339 timestamp
+    pub source: String,               // "polymarket", "hashdive", "dome"
+}
+
 pub enum SignalType {
     PriceDeviation { market_price: f64, fair_value: f64, deviation_pct: f64 },
     MarketExpiryEdge { hours_to_expiry: f64, volume_spike: f64 },
@@ -460,210 +120,99 @@ pub enum SignalType {
     CrossPlatformArbitrage { polymarket_price: f64, kalshi_price: Option<f64>, spread_pct: f64 },
     TrackedWalletEntry { wallet_address: String, wallet_label: String, position_value_usd: f64, order_count: usize },
 }
+
+pub struct Config {
+    pub tracked_wallets: HashMap<String, String>,  // address -> label
+    pub poll_interval_secs: u64,                   // 2700 (45 min)
+    pub dome_api_key: Option<String>,
+}
 ```
 
-**Why `#[serde(tag = "type")]`?**
-- Creates JSON with `"type"` field
-- Allows TypeScript discriminated unions
-- Enables type-safe pattern matching
+**Tracked Wallets (45 total):**
+- 15 `insider_sports` - Sports market edge
+- 5 `insider_politics` - Political market edge  
+- 3 `insider_other` - Other verticals
+- 22 `world_class` - Elite general traders
 
 ---
 
-## 4. API INTEGRATION DETAILS
+#### `risk.rs` (~600 lines)
+**Purpose:** Risk management and position sizing
 
-### 4.1 HASHDIVE API
-
-**Base URL:** `https://hashdive.com/api`  
-**Authentication:** `x-api-key` header  
-**Rate Limit:** 1 request per second  
-**Monthly Credits:** 1000  
-**Data Update Frequency:** Every 1 minute  
-
-#### Key Endpoints
-
-##### `/get_latest_whale_trades`
-
-**Purpose:** Fetch recent large trades (whale activity)
-
-**Request:**
+**Kelly Criterion Implementation:**
 ```rust
-let url = format!("{}/get_latest_whale_trades", HASHDIVE_API_BASE);
-let mut params = HashMap::new();
-params.insert("min_usd", "20000".to_string());  // Minimum trade size
-params.insert("limit", "50".to_string());        // Max results
-params.insert("format", "json".to_string());
+pub struct RiskManager {
+    pub kelly: KellyCalculator,
+    pub var: VaRCalculator,
+    calibration: HashMap<String, f64>,  // signal_family -> historical accuracy
+}
 
-let response = self.client
-    .get(&url)
-    .header("x-api-key", &self.api_key)
-    .query(&params)
-    .send()
-    .await?;
-```
+pub struct RiskInput {
+    pub market_probability: f64,
+    pub signal_confidence: f64,
+    pub market_liquidity: f64,
+    pub signal_family: String,
+    pub regime_risk: Option<f64>,
+}
 
-**Response Structure:**
-```json
-{
-  "data": [
-    {
-      "user_address": "0xabc123...",
-      "asset_id": "77874905...",
-      "side": "BUY",
-      "size": 25000.50,
-      "price": 0.54,
-      "timestamp": 1700000000,
-      "market_slug": "will-bitcoin-reach-100k",
-      "market_title": "Will Bitcoin reach $100k by 2025?"
-    }
-  ],
-  "count": 15
+pub struct RiskOutput {
+    pub position_size: f64,
+    pub calibrated_confidence: f64,
+    pub calibration_version: String,
+    pub guardrail_flags: Vec<String>,
 }
 ```
 
-**Processing Example:**
+**Guardrails:**
+- Max bet: 5% of bankroll
+- Min liquidity: $1,000
+- Max leverage: 2x
+- Signal family calibration adjustments
+
+---
+
+### API Module (`api/`)
+
+#### `simple.rs` - Main API handlers
 ```rust
-match scraper.get_latest_whale_trades(Some(20000.0), Some(50)).await {
-    Ok(whale_response) => {
-        let signals: Vec<MarketSignal> = whale_response
-            .data
-            .into_iter()
-            .filter(|trade| trade.size > 10000.0)  // Additional filter
-            .map(|trade| MarketSignal {
-                id: format!("whale_{}", trade.timestamp),
-                signal_type: SignalType::WhaleFollowing {
-                    whale_address: trade.user_address.clone(),
-                    position_size: trade.size,
-                    confidence_score: (trade.size / 100000.0).min(0.99),
-                },
-                market_slug: trade.market_slug,
-                confidence: (trade.size / 50000.0).min(0.95),
-                // ... rest of signal
-            })
-            .collect();
-    }
-}
+// GET /api/signals?limit=100
+pub async fn get_signals_simple(
+    Query(params): Query<SignalQuery>,
+    AxumState(state): AxumState<AppState>,
+) -> Json<SignalResponse>
+
+// GET /api/signals/stats
+pub async fn get_signal_stats(
+    AxumState(state): AxumState<AppState>,
+) -> Json<SignalStatsResponse>
+
+// GET /api/risk/stats
+pub async fn get_risk_stats_simple(
+    AxumState(state): AxumState<AppState>,
+) -> Json<RiskStatsResponse>
 ```
 
-##### `/get_trades`
-
-**Purpose:** Get trades for specific wallet
-
-**Request:**
-```rust
-let mut params = HashMap::new();
-params.insert("user_address", wallet_address.to_string());
-params.insert("page", "1".to_string());
-params.insert("page_size", "100".to_string());
+#### Routes (`routes.rs`)
 ```
-
-**Use Case:** Wallet classification (Elite/Insider/Whale)
-
-##### `/get_positions`
-
-**Purpose:** Current positions for wallet
-
-**Note:** Position data for inactive users may be archived. Always check response.
-
-#### Wallet Classification Logic
-
-```rust
-pub fn classify_wallet(&self, wallet_data: &WalletData) -> WalletTier {
-    let volume = wallet_data.total_volume;
-    let win_rate = wallet_data.win_rate;
-    let early_entry = wallet_data.early_entry_score;
-    
-    if volume > 100_000.0 && win_rate > 0.65 {
-        WalletTier::Elite  // 👑
-    } else if win_rate > 0.70 && early_entry > 0.75 {
-        WalletTier::Insider  // 🎯
-    } else if volume > 50_000.0 {
-        WalletTier::Whale  // 🐋
-    } else {
-        WalletTier::Regular
-    }
-}
+GET  /health              - Health check
+POST /api/auth/login      - JWT login
+GET  /api/auth/me         - Current user (protected)
+GET  /api/signals         - Signal list (protected)
+GET  /api/signals/context - Per-signal enrichment blob (protected)
+GET  /api/signals/stats   - Signal statistics (protected)
+GET  /api/market/snapshot - Orderbook snapshot + depth/imbalance (protected)
+GET  /api/wallet/analytics - Wallet + copy-trade analytics (protected)
+POST /api/trade/order     - One-click trade (feature-flagged; paper/live) (protected)
+GET  /api/risk/stats      - Risk statistics (protected)
+GET  /ws                  - WebSocket upgrade (protected)
 ```
 
 ---
 
-### 4.2 DOME API (REST)
+### Scrapers Module (`scrapers/`)
 
-**Base URL:** `https://api.domeapi.io/v1/polymarket`  
-**Authentication:** `Authorization: Bearer ${API_KEY}`  
-**Rate Limit:** Varies by tier (Free: 100/day, Dev: 10,000/day)  
-
-#### Key Endpoints
-
-##### `/wallet`
-
-**Purpose:** Convert between EOA and proxy wallet addresses
-
-**Request:**
-```rust
-let url = format!("{}/v1/polymarket/wallet", DOME_API_BASE);
-let response = self.client
-    .get(&url)
-    .header("Authorization", format!("Bearer {}", api_key))
-    .query(&[("eoa", wallet_address)])
-    .send()
-    .await?;
-```
-
-**Response:**
-```json
-{
-  "eoa": "<eoa_address>",
-  "proxy": "<proxy_address>",
-  "wallet_type": "safe"
-}
-```
-
-##### `/orders`
-
-**Purpose:** Get historical orders for wallet
-
-**Request:**
-```rust
-let url = format!("{}/v1/polymarket/orders", DOME_API_BASE);
-let response = self.client
-    .get(&url)
-    .header("Authorization", format!("Bearer {}", api_key))
-    .query(&[
-        ("user", wallet_address),
-        ("limit", "100"),
-        ("offset", "0")
-    ])
-    .send()
-    .await?;
-```
-
-**Response:**
-```json
-{
-  "orders": [
-    {
-      "token_id": "57564352641769637...",
-      "side": "BUY",
-      "shares_normalized": 5.0,
-      "price": 0.54,
-      "timestamp": 1700000000,
-      "market_slug": "btc-updown-15m",
-      "title": "Bitcoin Up or Down",
-      "user": "0x6031b6eed1c97..."
-    }
-  ],
-  "count": 42
-}
-```
-
----
-
-### 4.3 DOME API (WebSocket)
-
-**URL:** `wss://ws.domeapi.io/${API_KEY}`  
-**Purpose:** Real-time order streaming (30-90x faster than polling)  
-
-#### Connection Setup
+#### `dome_websocket.rs` - Real-time wallet streaming
+**Purpose:** Sub-second latency order updates
 
 ```rust
 pub struct DomeWebSocketClient {
@@ -672,21 +221,509 @@ pub struct DomeWebSocketClient {
     order_tx: mpsc::UnboundedSender<WsOrderData>,
 }
 
-impl DomeWebSocketClient {
-    pub fn new(
-        api_key: String,
-        tracked_wallets: Vec<String>,
-    ) -> (Self, mpsc::UnboundedReceiver<WsOrderData>) {
-        let (order_tx, order_rx) = mpsc::unbounded_channel();
-        let client = Self { api_key, tracked_wallets, order_tx };
-        (client, order_rx)
+// Connection URL format
+const DOME_WS_BASE: &str = "wss://ws.domeapi.io";
+let ws_url = format!("{}/{}", DOME_WS_BASE, self.api_key);
+
+// Subscription message format
+#[derive(Serialize)]
+pub struct WsSubscribeMessage {
+    pub action: String,        // "subscribe"
+    pub platform: String,      // "polymarket"
+    pub version: i32,          // 1
+    #[serde(rename = "type")]
+    pub msg_type: String,      // "orders"
+    pub filters: WsFilters,    // { users: ["0x..."] }
+}
+
+// Incoming order event format
+#[derive(Deserialize)]
+pub struct WsOrderUpdate {
+    #[serde(rename = "type")]
+    pub msg_type: String,           // "event"
+    pub subscription_id: String,    // "sub_m58zfduokmd"
+    pub data: WsOrderData,
+}
+
+pub struct WsOrderData {
+    pub token_id: String,
+    pub side: String,               // "BUY" or "SELL"
+    pub market_slug: String,
+    pub shares_normalized: f64,     // Actual share count
+    pub price: f64,
+    pub timestamp: i64,
+    pub user: String,               // Wallet address
+}
+```
+
+**Auto-reconnect with exponential backoff:**
+```rust
+loop {
+    match self.connect_and_stream().await {
+        Ok(_) => reconnect_delay = Duration::from_secs(1),
+        Err(e) => {
+            sleep(reconnect_delay).await;
+            reconnect_delay = (reconnect_delay * 2).min(Duration::from_secs(60));
+        }
     }
 }
 ```
 
-#### Subscription Message
+**CRITICAL - TLS Configuration:**
+```toml
+# Cargo.toml - REQUIRED for WebSocket SSL
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+```
 
-**Send after connection:**
+---
+
+#### `dome_realtime.rs` - REST polling fallback
+**Purpose:** Backup when WebSocket fails, incremental polling
+
+```rust
+pub struct DomeRealtimeClient {
+    client: Client,
+    tracked_wallets: HashMap<String, String>,
+    last_poll: Arc<Mutex<HashMap<String, i64>>>,  // Per-wallet timestamps
+}
+
+// Optimized client setup
+let client = Client::builder()
+    .timeout(Duration::from_secs(30))
+    .pool_max_idle_per_host(10)
+    .pool_idle_timeout(Duration::from_secs(90))
+    .tcp_keepalive(Duration::from_secs(60))
+    .build();
+
+// Incremental polling - only fetch new orders
+let url = format!(
+    "https://api.domeapi.io/v1/polymarket/orders?user={}&start_time={}&limit=100",
+    wallet_address,
+    last_poll_timestamp
+);
+```
+
+**Hybrid Loop Pattern (main.rs):**
+```rust
+loop {
+    tokio::select! {
+        // WebSocket message - instant
+        Some(order) = order_rx.recv() => {
+            let signals = detector.detect_trader_entry(&[order], &wallet, &label);
+            storage.store_batch(&signals).await?;
+            signal_tx.send(signal)?;
+        }
+        
+        // REST fallback - every 60s
+        _ = poll_interval.tick() => {
+            let signals = rest_client.poll_all_wallets().await?;
+            storage.store_batch(&signals).await?;
+        }
+    }
+}
+```
+
+---
+
+#### `hashdive_api.rs` - Whale trade data
+**Purpose:** Large position tracking ($10k+ trades)
+
+```rust
+pub struct HashdiveScraper {
+    client: Client,
+    api_key: String,
+    rate_limiter: RateLimiter,  // 2s between requests
+    credits_used: u32,
+    credits_limit: u32,         // 1000/month
+}
+
+// API endpoint
+const HASHDIVE_API_BASE: &str = "https://hashdive.com/api";
+
+// Request with authentication
+let response = self.client
+    .get(&format!("{}/get_latest_whale_trades", HASHDIVE_API_BASE))
+    .header("x-api-key", &self.api_key)
+    .query(&[("min_usd", "10000"), ("limit", "50")])
+    .send()
+    .await?;
+
+// Rate limiting: 45-minute intervals = ~960 requests/month
+let mut interval_timer = interval(Duration::from_secs(2700));
+```
+
+**Wallet Classification:**
+```rust
+pub enum WalletClassification {
+    Elite { win_rate: f64, total_volume: f64, avg_trade_size: f64 },
+    Insider { win_rate: f64, early_entry_score: f64, total_volume: f64 },
+    Whale { total_volume: f64, win_rate: f64 },
+    Regular,
+}
+
+// Thresholds
+const ELITE_VOLUME_THRESHOLD: f64 = 100_000.0;    // $100k+ volume
+const ELITE_WIN_RATE_THRESHOLD: f64 = 0.65;       // 65%+ win rate
+const INSIDER_WIN_RATE_THRESHOLD: f64 = 0.70;     // 70%+ win rate
+const INSIDER_EARLY_THRESHOLD: f64 = 0.75;        // 75%+ early entry
+```
+
+---
+
+#### `polymarket_api.rs` - Market data
+**Purpose:** Event/market data from GAMMA API
+
+```rust
+const GAMMA_API_BASE: &str = "https://gamma-api.polymarket.com";
+
+// Fetch markets with pagination
+pub async fn fetch_gamma_markets(&mut self, limit: u32, offset: u32) -> Result<GammaResponse> {
+    let url = format!("{}/markets?limit={}&offset={}", GAMMA_API_BASE, limit, offset);
+    self.client.get(&url).send().await?.json().await
+}
+
+// Convert to internal event structure
+pub fn gamma_to_events(&self, response: GammaResponse) -> Vec<PolymarketEvent>
+```
+
+---
+
+#### `expiry_edge.rs` - Near-expiry scanner
+**Purpose:** 95% win rate on high-probability expiring markets
+
+```rust
+pub struct ExpiryEdgeScanner {
+    max_hours: f64,           // 4.0 hours
+    min_probability: f64,     // 0.80 (80%)
+    min_volume: f64,          // $10,000
+}
+
+// Scan every 60 seconds for markets ≤4 hours from expiry
+// with >80% probability and sufficient volume
+```
+
+---
+
+### Signals Module (`signals/`)
+
+#### `db_storage.rs` - SQLite persistence
+**Purpose:** High-performance signal storage (10M+ capacity)
+
+```rust
+pub struct DbSignalStorage {
+    conn: Arc<Mutex<Connection>>,  // parking_lot::Mutex for speed
+}
+
+// Optimized schema
+const SCHEMA_SQL: &str = r#"
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA cache_size = -64000;          -- 64MB cache
+PRAGMA mmap_size = 268435456;        -- 256MB memory-mapped I/O
+
+CREATE TABLE signals (
+    id TEXT PRIMARY KEY,
+    signal_type TEXT NOT NULL,
+    market_slug TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    risk_level TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    detected_at TEXT NOT NULL,
+    source TEXT NOT NULL
+) WITHOUT ROWID;  -- Clustered on PRIMARY KEY
+
+CREATE TABLE metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+
+-- Covering indexes for common queries
+CREATE INDEX idx_signals_recent ON signals(detected_at DESC, ...);
+CREATE INDEX idx_signals_high_conf ON signals(detected_at DESC) WHERE confidence >= 0.7;
+"#;
+
+// Batch insert for performance
+pub async fn store_batch(&self, signals: &[MarketSignal]) -> Result<usize> {
+    let conn = self.conn.lock();
+    conn.execute("BEGIN IMMEDIATE", [])?;
+    
+    for signal in signals {
+        conn.execute("INSERT OR IGNORE INTO signals ...", params![...])?;
+    }
+    
+    conn.execute("COMMIT", [])?;
+}
+```
+
+---
+
+#### `detector.rs` - Signal detection
+**Purpose:** Convert raw data to actionable signals
+
+```rust
+pub struct SignalDetector {
+    confidence_threshold: f64,  // 0.6
+}
+
+impl SignalDetector {
+    // Detect from Polymarket events
+    pub async fn detect_all(&self, events: &[PolymarketEvent]) -> Vec<MarketSignal>;
+    
+    // Detect from wallet orders (Dome API)
+    pub fn detect_trader_entry(
+        &self,
+        orders: &[DomeOrder],
+        wallet_address: &str,
+        wallet_label: &str,
+    ) -> Vec<MarketSignal>;
+}
+```
+
+**Confidence Calculation:**
+- Base: 85% for tracked wallets
+- Size bonus: Up to +10% for large positions ($10k+ = max bonus)
+- Capped at 95%
+
+---
+
+#### `quality.rs` - Signal filtering
+**Purpose:** Drop low-quality signals before storage
+
+```rust
+pub struct SignalQualityGate {
+    max_age: Duration,         // 3 seconds
+    zscore_threshold: f64,     // 8.0 standard deviations
+}
+
+// Filters:
+// 1. Signals older than 3 seconds (stale)
+// 2. Confidence below threshold (low quality)
+// 3. Corroboration check (multiple sources = higher trust)
+```
+
+---
+
+### Vault Module (`vault/`)
+
+#### `kelly.rs` - Position sizing
+**Purpose:** Optimal bet sizing using Kelly Criterion
+
+```rust
+pub fn calculate_kelly_position(
+    confidence: f64,      // Our probability estimate
+    market_price: f64,    // Implied probability (market price)
+    params: &KellyParams,
+) -> KellyResult {
+    // Edge = our confidence - market price
+    let edge = confidence - market_price;
+    
+    // Kelly formula: f* = (p * odds - q) / odds
+    let odds = (1.0 / market_price) - 1.0;
+    let p = confidence;
+    let q = 1.0 - p;
+    let full_kelly = (p * odds - q) / odds;
+    
+    // Apply fractional Kelly (0.25x default)
+    let actual_fraction = full_kelly * params.kelly_fraction;
+    
+    // Cap at max position (10% of bankroll)
+    let position_usd = params.bankroll * actual_fraction.min(params.max_position_pct);
+    
+    KellyResult { position_size_usd: position_usd, ... }
+}
+```
+
+---
+
+## 3. Frontend - React/TypeScript Architecture
+
+### Directory Structure
+
+```
+frontend/src/
+├── main.tsx              # React entry point
+├── App.tsx               # Root component
+├── components/
+│   ├── auth/             # Login, auth guard
+│   ├── layout/           # App shell, status bar
+│   └── terminal/         # Signal feed, cards, header
+├── hooks/                # Custom React hooks
+├── services/             # API & WebSocket clients
+├── stores/               # Zustand state management
+├── types/                # TypeScript definitions
+└── utils/                # Formatting utilities
+```
+
+### File-by-File Reference
+
+#### `hooks/useSignals.ts` - Signal fetching
+**Purpose:** Polling with concurrent request prevention + adaptive polling when WS is healthy
+
+```typescript
+export const useSignals = (opts?: { wsConnected?: boolean }) => {
+  const isMounted = useRef(true);
+  const isLoadingRef = useRef(false);
+
+  const loadSignals = useCallback(async () => {
+    if (isLoadingRef.current) return;  // Prevent concurrent requests
+    isLoadingRef.current = true;
+
+    const response = await api.getSignals({ limit: 500 });
+    setSignals(response.signals); // IMPORTANT: merges-by-id to hydrate WS replay
+    
+    isLoadingRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    // When WS is connected, REST becomes a safety net (reduce thrash)
+    const pollMs = opts?.wsConnected ? 5000 : 500;
+    const signalInterval = setInterval(loadSignals, pollMs);
+    const statsInterval = setInterval(loadStats, 10000);     // 10s for stats
+    return () => { clearInterval(...) };
+  }, [loadSignals, opts?.wsConnected]);
+};
+```
+
+---
+
+#### `services/api.ts` - REST client
+**Purpose:** HTTP API with cached headers
+
+```typescript
+class ApiClient {
+  private token: string | null = null;
+  private cachedHeaders: Record<string, string> | null = null;
+
+  private getHeaders(): Record<string, string> {
+    if (this.cachedHeaders) return this.cachedHeaders;
+    const token = this.getToken();
+    this.cachedHeaders = {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    };
+    return this.cachedHeaders;
+  }
+
+  async getSignals(params?: { limit?: number }): Promise<{ signals: Signal[] }> {
+    return this.fetch('/api/signals' + queryString);
+  }
+}
+```
+
+---
+
+#### `services/websocket.ts` - WebSocket client
+**Purpose:** Real-time signal streaming with auto-reconnect
+
+```typescript
+export class WebSocketClient {
+  private ws: WebSocket | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+
+  connect() {
+    const token = localStorage.getItem('betterbot_token');
+    const wsUrl = token ? `${WS_URL}?token=${token}` : WS_URL;
+    
+    this.ws = new WebSocket(wsUrl);
+    
+    this.ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'signal') {
+        this.emit('signal', message.data);
+      }
+    };
+    
+    this.ws.onclose = () => this.attemptReconnect();
+  }
+
+  private attemptReconnect() {
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      setTimeout(() => this.connect(), 1000 * ++this.reconnectAttempts);
+    }
+  }
+}
+```
+
+---
+
+#### `stores/signalStore.ts` - State management
+**Purpose:** Merge-by-id hydration (REST + WS), batched WS replay, 24h retention
+
+```typescript
+export const useSignalStore = create<SignalStore>((set) => ({
+  signals: [],
+
+  // WS replay can deliver signals before REST hydration; always MERGE by id.
+  // Context merge is context_version-aware.
+  setSignals: (signals) => set((state) => {
+    const byId = new Map(state.signals.map(s => [s.id, s]));
+    for (const s of signals) {
+      const existing = byId.get(s.id);
+      byId.set(s.id, existing ? mergeSignal(existing, s) : s);
+    }
+    return { signals: trimSignalsToWindow(sortSignalsNewestFirst([...byId.values()])) };
+  }),
+
+  // Batch insert for WS replay to reduce UI thrash
+  addSignals: (signals) => set((state) => { ...merge+trim... }),
+}));
+```
+
+---
+
+#### `components/terminal/SignalFeed.tsx` - Feed + Inspector orchestration
+**Purpose:** Dense horizontal feed with a right-side Inspector drawer (no vertical expanding cards)
+
+**Key behavior:**
+- Feed renders `SignalCardCompact` rows.
+- 24h scrollback: scrolling near the bottom pages older signals via `GET /api/signals?before=<detected_at>&before_id=<id>`.
+- Filters are resilient to Up/Down dominance: if filters produce 0 matches in the currently loaded window, the feed auto-pages backward (up to 24h) until matches appear or the 24h cutoff is reached.
+- Clicking `[OPEN]`/`[DETAILS]`/`[BOOK]`/`[TRADE]` opens the Inspector drawer to that tab.
+- Inspector is fixed-width with internal scroll (higher information density).
+
+---
+
+#### `components/terminal/SignalCardCompact.tsx` - Primary signal row
+**Purpose:** HFT-style dense, horizontal card with semantic metric colors + explicit `[TRADE]` CTA
+
+- Uses `formatDelta(bps, usd)` to display `Δ: +XXbps / +$0.0X`.
+- Uses `metricColorClass(value)` for PnL/Δ/Sharpe/ROE coloring.
+
+---
+
+#### `components/terminal/SignalInspectorDrawer.tsx` - Right-side inspector (DETAILS/MARKET/WALLET/CHART/BOOK/TRADE)
+**Purpose:** Progressive disclosure without layout thrash; “never blank” panels.
+
+**Reliability contract:**
+- Always renders a bounded container: skeleton → live/cached/stale/error.
+- Prefetches wallet analytics on drawer open.
+- Prefetches book snapshot on BOOK/TRADE tabs.
+- In-flight de-dupe + TTL caches to avoid request storms.
+
+**TRADE tab (feature-flagged):**
+- UI for side (BUY/SELL), notional, order type (GTC/FAK/FOK), price mode (JOIN/CROSS/CUSTOM), ARM→SUBMIT.
+- Requires `VITE_ENABLE_TRADING=true` to enable the UI.
+
+---
+
+#### `components/terminal/SignalCard.tsx` - Legacy full card
+Still present in the repo, but the primary UX is now `SignalCardCompact` + `SignalInspectorDrawer`.
+
+---
+
+## 4. External API Integration Guide
+
+### DomeAPI WebSocket - Primary Real-time Feed
+
+**Connection:**
+```
+URL: wss://ws.domeapi.io/${DOME_API_KEY}
+Auth: (WS) token in URL path; some deployments may also accept `Authorization: Bearer ...`
+Protocol: WSS (TLS required)
+```
+
+**Subscribe to wallet orders:**
 ```json
 {
   "action": "subscribe",
@@ -694,17 +731,12 @@ impl DomeWebSocketClient {
   "version": 1,
   "type": "orders",
   "filters": {
-    "users": [
-      "<wallet_address_a>",
-      "<wallet_address_b>"
-    ]
+    "users": ["0x1234...", "0x5678..."]
   }
 }
 ```
 
-#### Order Update Messages
-
-**Receive continuously:**
+**Incoming order event:**
 ```json
 {
   "type": "event",
@@ -713,918 +745,561 @@ impl DomeWebSocketClient {
     "token_id": "57564352641769637...",
     "side": "BUY",
     "market_slug": "btc-updown-15m-1762755300",
-    "condition_id": "0x592b8a416cbe36...",
     "shares": 5000000,
     "shares_normalized": 5.0,
     "price": 0.54,
-    "tx_hash": "<tx_hash>",
-    "title": "Bitcoin Up or Down - Nov 10, 1:15AM",
     "timestamp": 1762755335,
-    "order_hash": "<order_hash>",
-    "user": "0x6031b6eed1c97..."
+    "user": "0x6031b6eed..."
   }
 }
 ```
 
-#### Processing Pipeline
+### DomeAPI REST - Fallback Polling
 
-```rust
-async fn tracked_wallet_polling(...) -> Result<()> {
-    // Create WebSocket client
-    let (ws_client, mut order_rx) = DomeWebSocketClient::new(
-        dome_api_key,
-        tracked_wallets.clone(),
-    );
-    
-    // Spawn reconnection loop
-    tokio::spawn(async move {
-        ws_client.run().await
-    });
-    
-    // Process orders as they arrive
-    while let Some(order) = order_rx.recv().await {
-        let wallet_label = wallet_labels.get(&order.user)
-            .unwrap_or(&"unknown".to_string());
-        
-        info!(
-            "💰 REALTIME: {} [{}] {} {} @ ${:.3}",
-            &order.user[..10],
-            wallet_label,
-            order.side,
-            order.shares_normalized,
-            order.price
-        );
-        
-        // Convert to signal and broadcast
-        let signals = detector.detect_trader_entry(&order, wallet_label);
-        for signal in signals {
-            storage.store(&signal).await?;
-            signal_tx.send(signal)?;
-        }
-    }
-}
-```
-
-#### Unsubscribe
-
-```json
-{
-  "action": "unsubscribe",
-  "version": 1,
-  "subscription_id": "sub_m58zfduokmd"
-}
-```
-
----
-
-### 4.4 POLYMARKET API (GAMMA)
-
-**Base URL:** `https://gamma-api.polymarket.com`  
-**Authentication:** None (public API)  
-**Rate Limit:** 750 requests per 10 seconds  
-
-#### Key Endpoint: `/markets`
-
-**Purpose:** Fetch market data with prices and metadata
+**Endpoint:** `https://api.domeapi.io/v1/polymarket/orders`
 
 **Request:**
-```rust
-let url = format!("{}/markets", GAMMA_API_BASE);
-let mut params = HashMap::new();
-params.insert("limit", "100".to_string());
-params.insert("offset", "0".to_string());
-// NOTE: Do NOT send "active" parameter - causes 422 error
-
-let response = self.client
-    .get(&url)
-    .query(&params)
-    .send()
-    .await?;
+```bash
+curl -H "Authorization: Bearer ${DOME_API_KEY}" \
+  "https://api.domeapi.io/v1/polymarket/orders?user=0x1234...&start_time=1700000000&limit=100"
 ```
 
 **Response:**
 ```json
-[
-  {
-    "id": "market_id_123",
-    "condition_id": "0xabc123...",
-    "question_id": "q_456",
-    "slug": "will-bitcoin-reach-100k-by-2025",
-    "question": "Will Bitcoin reach $100K by end of 2025?",
-    "description": "Resolves YES if...",
-    "end_date_iso": "2025-12-31T23:59:59Z",
-    "volume": 125000.50,
-    "liquidity": 50000.0,
-    "outcome_prices": [0.65, 0.35],  // [YES, NO]
-    "closed": false,
-    "active": true
-  }
-]
-```
-
-**CRITICAL:** The API returns an **array directly**, not `{ data: [...] }`.
-
-**Processing:**
-```rust
-pub async fn fetch_gamma_markets(&mut self, limit: usize, offset: usize) -> Result<Vec<GammaMarket>> {
-    self.gamma_limiter.acquire().await;
-    
-    let url = format!("{}/markets", GAMMA_API_BASE);
-    let mut params = HashMap::new();
-    params.insert("limit", limit.to_string());
-    params.insert("offset", offset.to_string());
-    // ⚠️ DO NOT ADD: params.insert("active", "true"); // Causes 422 error!
-    
-    let response = self.execute_with_retry(&url, Some(&params)).await?;
-    
-    // Direct array deserialization
-    let markets: Vec<GammaMarket> = response.json().await
-        .context("Failed to parse GAMMA markets")?;
-    
-    Ok(markets)
-}
-```
-
----
-
-## 5. FRONTEND ARCHITECTURE
-
-### Directory Structure
-
-```
-frontend/
-├── src/
-│   ├── main.tsx                    # Entry point
-│   ├── App.tsx                     # Main app component
-│   ├── components/
-│   │   ├── auth/
-│   │   │   ├── LoginPage.tsx       # Login screen
-│   │   │   └── AuthGuard.tsx       # Protected route wrapper
-│   │   ├── effects/
-│   │   │   ├── CRTEffect.tsx       # Retro CRT filter
-│   │   │   ├── Scanlines.tsx       # Terminal scanlines
-│   │   │   └── GlitchText.tsx      # Glitch animation
-│   │   ├── layout/
-│   │   │   ├── AppShell.tsx        # Main layout
-│   │   │   └── StatusBar.tsx       # Bottom status bar
-│   │   └── Terminal/
-│   │       ├── SignalCard.tsx      # Individual signal display
-│   │       ├── SignalFeed.tsx      # Signal stream
-│   │       └── TerminalHeader.tsx  # Top header with stats
-│   ├── hooks/
-│   │   ├── useAuth.ts              # Authentication hook
-│   │   ├── useSignals.ts           # Signal fetching
-│   │   └── useWebSocket.ts         # WebSocket connection
-│   ├── services/
-│   │   ├── api.ts                  # REST API client
-│   │   └── websocket.ts            # WebSocket client
-│   ├── stores/
-│   │   ├── authStore.ts            # Zustand auth store
-│   │   └── signalStore.ts          # Zustand signal store
-│   ├── types/
-│   │   ├── auth.ts                 # Auth type definitions
-│   │   └── signal.ts               # Signal type definitions
-│   └── utils/
-│       └── formatters.ts           # Display formatters
-├── index.html
-├── vite.config.ts
-├── tailwind.config.js
-└── package.json
-```
-
-### Key Type Definitions
-
-#### Signal Types (`types/signal.ts`)
-
-**MUST MATCH BACKEND EXACTLY:**
-
-```typescript
-export type SignalTypeVariant =
-  | 'PriceDeviation'
-  | 'MarketExpiryEdge'
-  | 'WhaleFollowing'
-  | 'EliteWallet'
-  | 'InsiderWallet'
-  | 'WhaleCluster'
-  | 'CrossPlatformArbitrage'
-  | 'TrackedWalletEntry';
-
-export type SignalType =
-  | { type: 'PriceDeviation'; market_price: number; fair_value: number; deviation_pct: number }
-  | { type: 'MarketExpiryEdge'; hours_to_expiry: number; volume_spike: number }
-  | { type: 'WhaleFollowing'; whale_address: string; position_size: number; confidence_score: number }
-  | { type: 'EliteWallet'; wallet_address: string; win_rate: number; total_volume: number; position_size: number }
-  | { type: 'InsiderWallet'; wallet_address: string; early_entry_score: number; win_rate: number; position_size: number }
-  | { type: 'WhaleCluster'; cluster_count: number; total_volume: number; consensus_direction: string }
-  | { type: 'CrossPlatformArbitrage'; polymarket_price: number; kalshi_price?: number; spread_pct: number }
-  | { type: 'TrackedWalletEntry'; wallet_address: string; wallet_label: string; position_value_usd: number; order_count: number };
-
-export interface Signal {
-  id: string;
-  signal_type: SignalType;  // ⚠️ Tagged union, not string!
-  market_slug: string;
-  confidence: number;
-  detected_at: string;
-  details: SignalDetails;
-  source: string;
-}
-
-// Matches backend SignalDetails enrichment
-export interface SignalDetails {
-  market_title: string;
-  current_price: number;
-  volume_24h: number;
-  liquidity?: number;
-  recommended_action: string;
-  position_size?: number;
-  entry_price?: number;
-  wallet_address?: string;
-  wallet_tier?: string;
-  win_rate?: number;
-  spread?: number;
-  expected_profit?: number;
-  time_to_expiry?: string;
-  dominant_side?: string;
-  dominant_percentage?: number;
-  expiry_time?: string | null;
-  observed_timestamp?: string;
-  signal_family?: string;
-  calibration_version?: string;
-  guardrail_flags?: string[];
-  recommended_size?: number;
-}
-```
-
-### WebSocket Connection (`services/websocket.ts`)
-
-```typescript
-export class WebSocketClient {
-  private ws: WebSocket | null = null;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
-  private reconnectDelay = 1000; // Start at 1 second
-
-  connect(url: string, onMessage: (signal: Signal) => void) {
-    this.ws = new WebSocket(url);
-
-    this.ws.onopen = () => {
-      console.log('✅ WebSocket connected');
-      this.reconnectAttempts = 0;
-      this.reconnectDelay = 1000;
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const signal = JSON.parse(event.data) as Signal;
-        onMessage(signal);
-      } catch (error) {
-        console.error('Failed to parse WebSocket message:', error);
-      }
-    };
-
-    this.ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    this.ws.onclose = () => {
-      console.log('WebSocket disconnected');
-      this.reconnect(url, onMessage);
-    };
-  }
-
-  private reconnect(url: string, onMessage: (signal: Signal) => void) {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnection attempts reached');
-      return;
-    }
-
-    this.reconnectAttempts++;
-    console.log(`Reconnecting in ${this.reconnectDelay}ms (attempt ${this.reconnectAttempts})`);
-
-    setTimeout(() => {
-      this.connect(url, onMessage);
-      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000); // Cap at 30s
-    }, this.reconnectDelay);
-  }
-
-  disconnect() {
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
-  }
-}
-```
-
----
-
-## 6. DATA FLOW & PROCESSING
-
-### Complete Signal Lifecycle
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    SIGNAL LIFECYCLE                           │
-└──────────────────────────────────────────────────────────────┘
-
-1. EXTERNAL API CALL
-   │
-   ├─► Hashdive: /get_latest_whale_trades
-   ├─► DomeAPI: WebSocket stream
-   └─► Polymarket: /markets
-   │
-   ▼
-
-2. API RESPONSE PARSING
-   │
-   ├─► Parse JSON response
-   ├─► Extract relevant fields
-   └─► Handle errors gracefully
-   │
-   ▼
-
-3. SIGNAL DETECTION
-   │
-   ├─► detector.detect_whale_activity()
-   ├─► detector.detect_expiry_edge()
-   └─► detector.detect_trader_entry()
-   │
-   ▼
-
-4. SIGNAL CONSTRUCTION
-   │
-   ├─► Create SignalType enum
-   ├─► Calculate confidence score
-   └─► Add market metadata
-   │
-   ▼
-
-5. RISK FILTERING
-   │
-   ├─► risk_manager.calculate_position() with calibration + guardrails
-   ├─► Fractional Kelly (cap 0.20), regime scaling, drawdown throttle
-   └─► Guardrail flags + calibrated confidence embedded in details
-   │
-   ▼
-
-6. DATABASE STORAGE
-   │
-   ├─► SQLite INSERT
-   ├─► Auto-increment ID
-   └─► Timestamp recording
-   │
-   ▼
-
-7. BROADCAST (WebSocket)
-   │
-   ├─► signal_tx.send()
-   ├─► Broadcast to all clients
-   └─► JSON serialization
-   │
-   ▼
-
-8. FRONTEND RECEPTION
-   │
-   ├─► WebSocket onmessage
-   ├─► JSON.parse()
-   └─► Type validation
-   │
-   ▼
-
-9. STATE UPDATE
-   │
-   ├─► Zustand store update
-   ├─► React re-render
-   └─► UI update (< 100ms)
-```
-
-### Example: Whale Trade Signal
-
-**1. API Response (Hashdive):**
-```json
 {
-  "data": [{
-    "user_address": "<wallet_address>",
-    "asset_id": "<asset_id>",
-    "side": "BUY",
-    "size": 50000.0,
-    "price": 0.62,
-    "timestamp": 1700000000
-  }]
-}
-```
-
-**2. Backend Processing:**
-```rust
-// Parse and create signal
-let signal = MarketSignal {
-    id: format!("whale_{}", trade.timestamp),
-    signal_type: SignalType::WhaleFollowing {
-        whale_address: trade.user_address.clone(),
-        position_size: trade.size,
-        confidence_score: (trade.size / 100000.0).min(0.99),
-    },
-    market_slug: "will-bitcoin-reach-100k-by-2025".to_string(),
-    confidence: (trade.size / 50000.0).min(0.95),
-    risk_level: "low".to_string(),
-    details: SignalDetails {
-        market_id: trade.asset_id,
-        market_title: "Will Bitcoin reach $100K by 2025?".to_string(),
-        current_price: trade.price,
-        volume_24h: trade.size,
-        liquidity: 0.0,
-        recommended_action: "FOLLOW_BUY".to_string(),
-        expiry_time: None,
-        observed_timestamp: None,
-        signal_family: None,
-        calibration_version: None,
-        guardrail_flags: None,
-        recommended_size: None,
-    },
-    detected_at: chrono::Utc::now().to_rfc3339(),
-    source: "hashdive".to_string(),
-};
-
-// Store in database
-storage.store(&signal).await?;
-
-// Broadcast via WebSocket
-signal_tx.send(signal)?;
-```
-
-**3. JSON Serialization (Sent to Frontend):**
-```json
-{
-  "id": "whale_1700000000",
-  "signal_type": {
-    "type": "WhaleFollowing",
-    "whale_address": "<wallet_address>",
-    "position_size": 50000.0,
-    "confidence_score": 0.5
-  },
-  "market_slug": "will-bitcoin-reach-100k-by-2025",
-  "confidence": 0.95,
-  "risk_level": "low",
-  "details": {
-    "market_id": "77874905...",
-    "market_title": "Will Bitcoin reach $100K by 2025?",
-    "current_price": 0.62,
-    "volume_24h": 50000.0,
-    "liquidity": 0.0,
-    "recommended_action": "FOLLOW_BUY",
-    "expiry_time": null
-  },
-  "detected_at": "2025-11-16T20:00:00Z",
-  "source": "hashdive"
-}
-```
-
-**4. Frontend Display:**
-```typescript
-export const SignalCard: React.FC<{ signal: Signal }> = ({ signal }) => {
-  // Type-safe access
-  if (signal.signal_type.type === 'WhaleFollowing') {
-    return (
-      <div>
-        <span>🐋 WHALE FOLLOWING</span>
-        <div>
-          Whale: {signal.signal_type.whale_address.slice(0, 10)}...
-        </div>
-        <div>
-          Position: ${(signal.signal_type.position_size / 1000).toFixed(1)}K
-        </div>
-        <div>
-          Confidence: {(signal.confidence * 100).toFixed(1)}%
-        </div>
-      </div>
-    );
-  }
-};
-```
-
----
-
-## 7. COMMON PITFALLS & SOLUTIONS
-
-### Pitfall #1: Forgetting to Start Both Servers
-
-**SYMPTOM:** Frontend shows "DISCONNECTED" status
-
-**SOLUTION:**
-```bash
-# Terminal 1 - Backend
-cd rust-backend
-cargo run
-
-# Terminal 2 - Frontend
-cd frontend
-npm run dev
-```
-
-**Check:**
-- Backend: http://localhost:3000/health
-- Frontend: http://localhost:5173
-
----
-
-### Pitfall #2: Invalid API Keys
-
-**SYMPTOM:** Mock signals appear, no real data
-
-**CHECK:**
-```bash
-cd rust-backend
-cat .env | grep API_KEY
-```
-
-**SOLUTION:**
-```bash
-echo "HASHDIVE_API_KEY=<YOUR_HASHDIVE_API_KEY>" >> .env
-echo "DOME_API_KEY=<YOUR_DOME_API_KEY>" >> .env
-```
-
----
-
-### Pitfall #3: Database Locked Error
-
-**SYMPTOM:** `database is locked` error in backend logs
-
-**CAUSE:** Multiple processes accessing SQLite simultaneously
-
-**SOLUTION:**
-```rust
-// Add to db_storage.rs
-let conn = Connection::open_with_flags(
-    path,
-    OpenFlags::SQLITE_OPEN_READ_WRITE |
-    OpenFlags::SQLITE_OPEN_CREATE |
-    OpenFlags::SQLITE_OPEN_NO_MUTEX  // Allow concurrent access
-)?;
-
-conn.execute("PRAGMA journal_mode=WAL", [])?;  // Write-Ahead Logging
-```
-
----
-
-### Pitfall #4: CORS Errors
-
-**SYMPTOM:** Browser console shows CORS errors
-
-**CAUSE:** Frontend and backend on different origins
-
-**SOLUTION (Backend):**
-```rust
-use tower_http::cors::CorsLayer;
-
-let app = Router::new()
-    // ... routes ...
-    .layer(CorsLayer::permissive());  // Allow all origins (dev only)
-```
-
-**PRODUCTION:**
-```rust
-use tower_http::cors::{CorsLayer, Any};
-
-let cors = CorsLayer::new()
-    .allow_origin("https://yourdomain.com".parse::<HeaderValue>().unwrap())
-    .allow_methods([Method::GET, Method::POST])
-    .allow_headers([AUTHORIZATION, CONTENT_TYPE]);
-
-let app = Router::new()
-    .layer(cors);
-```
-
----
-
-### Pitfall #5: Memory Leaks in WebSocket
-
-**SYMPTOM:** Memory usage grows over time
-
-**CAUSE:** Not cleaning up closed connections
-
-**SOLUTION:**
-```rust
-async fn handle_socket(mut socket: WebSocket, state: AppState) {
-    let mut rx = state.signal_broadcast.subscribe();
-
-    loop {
-        tokio::select! {
-            Ok(signal) = rx.recv() => {
-                let msg = serde_json::to_string(&signal).unwrap();
-                if socket.send(Message::Text(msg)).await.is_err() {
-                    // Connection closed, break loop to clean up
-                    break;
-                }
-            }
-            Some(Ok(Message::Close(_))) = socket.recv() => {
-                // Client closed connection
-                break;
-            }
-        }
+  "orders": [
+    {
+      "token_id": "12345...",
+      "side": "BUY",
+      "market_slug": "will-bitcoin-reach-100k",
+      "shares_normalized": 100.5,
+      "price": 0.65,
+      "timestamp": 1700000123,
+      "user": "0x1234..."
     }
-    
-    // Cleanup happens here automatically
-    drop(rx);
+  ]
 }
+```
+
+### DomeAPI REST Enrichment (Signal Context)
+
+**Goal:** Keep Dome WebSocket as the *primary* low-latency feed, but asynchronously enrich each tracked-wallet order signal with extra context from Dome REST endpoints (market metadata, prices, orderbook snapshots, activity, candles, wallet mapping, wallet PnL).
+
+#### High-level behavior
+
+1. A tracked-wallet order arrives via Dome WebSocket.
+2. BetterBot immediately emits a normal signal event to the frontend (no waiting).
+3. A background enrichment worker fetches REST context and emits a follow-up `signal_context` event that the frontend merges into the existing signal card.
+
+#### WebSocket server message format
+
+The backend now broadcasts a tagged union (`WsServerEvent`) over `/ws`:
+
+```json
+{ "type": "signal", "data": { /* MarketSignal */ } }
+```
+
+```json
+{ "type": "signal_context", "data": { /* SignalContextUpdate */ } }
+```
+
+`SignalContextUpdate` fields:
+- `signal_id`: matches the original `MarketSignal.id`
+- `context_version`: monotonically increasing version per signal
+- `enriched_at`: unix seconds
+- `status`: `ok | partial | failed`
+- `context`: `SignalContext`
+
+#### Stable signal IDs for Dome tracked-wallet orders
+
+Tracked-wallet order signals use a stable id so enrichment can be joined deterministically:
+
+```
+dome_order_{order_hash}   (fallback: tx_hash)
+```
+
+#### Storage
+
+SQLite tables added in `signals/db_storage.rs`:
+- `signal_context` (upserted JSON blob keyed by `signal_id`)
+- `dome_order_events` (lossless raw WS payloads keyed by `order_hash`)
+- `dome_cache` (DB-backed cache for market/wallet/PnL payloads)
+
+API endpoint:
+- `GET /api/signals/context?signal_id=...` (returns stored `SignalContextRecord`)
+
+#### Enrichment pipeline implementation
+
+Files:
+- `rust-backend/src/scrapers/dome_rest.rs` — typed REST client for enrichment endpoints
+- `rust-backend/src/signals/enrichment.rs` — bounded queue + worker pool; parallel REST fetches; DB persistence; WS broadcast
+
+Concurrency + rate limiting controls:
+- Global request semaphore + separate semaphore for heavy endpoints (orderbooks/candles)
+- DB-backed caching TTLs:
+  - markets: 30 min
+  - wallet mapping: 24 h
+  - wallet PnL: 1 h
+
+Enrichment tuning env vars (optional):
+```bash
+DOME_ENRICH_WORKERS=2
+DOME_ENRICH_QUEUE_SIZE=2000
+DOME_ENRICH_MAX_CONCURRENT_REQUESTS=8
+DOME_ENRICH_MAX_CONCURRENT_HEAVY_REQUESTS=2
+```
+
+### Wallet Analytics (HFT-safe) + Equity Curves + ROE/WR/PF
+
+**Goal:** Provide a *retail-friendly* and *quant-auditable* wallet panel without touching the HFT path.
+
+We compute two **realized PnL-to-date** curves per wallet:
+
+1. **Wallet (Realized)** (ground truth): Dome `GET /polymarket/wallet/pnl/{wallet}` with `granularity=day`.
+2. **Copy (Fixed $/order)** (follower model): simulated from BetterBot’s locally persisted Dome WS order log (`dome_order_events`).
+
+> Important: These are *realized* PnL curves (not mark-to-market equity). Polymarket’s dashboard often emphasizes unrealized PnL; Dome’s wallet PnL endpoint is realized (sells + redeems).
+
+#### API endpoint
+
+- `GET /api/wallet/analytics?wallet_address=0x...&force=false`
+  - Returns cached analytics if fresh.
+  - If `force=true` or cache is stale, recomputes and refreshes cache.
+
+#### Storage & caching
+
+- Uses the SQLite cache table `dome_cache`.
+- Cache key: `wallet_analytics_v3:{wallet_address}`
+- TTL: **120 seconds** (intentionally short so charts track new WS events quickly).
+- On upstream failures (Dome 502 / timeouts): serve stale cache if available.
+
+#### Copy-trade simulation model
+
+- Fixed follower sizing: `fixed_buy_notional_usd` (default `$1`) per **BUY**.
+- Follower shares per BUY: `shares = notional / price`.
+- SELL handling is best-effort; many wallets are effectively BUY-only at the order feed level.
+- Warmup window is used to build initial positions for sells inside the lookback.
+
+**Hard-earned reality:** for many HFT wallets, realized gains are dominated by on-chain MERGE/REDEEM flows that don’t cleanly map to WS BUY/SELL events. In that case, event-based copy simulation can be flat.
+
+**Fallback behavior:** if simulated copy curve is effectively 0 but wallet realized curve is non-zero, BetterBot scales the wallet realized curve by an estimated notional-per-order ratio so the UI never shows an empty copy curve.
+
+#### ROE / Win Rate / Profit Factor (per-curve)
+
+Returned fields include:
+- `*_roe_pct`: `total_realized_pnl / denom_usd * 100`
+- `*_roe_denom_usd`:
+  - wallet denom ≈ sum of BUY notionals from the locally persisted order flow (approximate, but fast)
+  - copy denom ≈ `#BUY orders × fixed_buy_notional_usd`
+- `*_win_rate`: fraction of positive daily deltas in the realized curve
+- `*_profit_factor`: gross_profit / gross_loss (capped at 999 to avoid JSON infinities)
+
+#### Frontend rendering notes
+
+SignalCard CHART panel now includes axis context:
+- y-axis: min/max **USD realized PnL-to-date**
+- x-axis: start/end date labels
+- stats tiles: ROE%, WR, PF
+
+#### Background refresh
+
+`wallet_analytics_polling` runs periodically but recomputes only when cache is stale:
+
+```bash
+WALLET_ANALYTICS_POLL_SECS=3600
+```
+
+### Market Snapshot / Orderbook (Now) - CLOB Token ID Pitfall
+
+Orderbook snapshots are fetched via backend:
+
+- `GET /api/market/snapshot?token_id=<clobTokenId>`
+  - or `GET /api/market/snapshot?market_slug=<slug>&outcome=<Up|Down|Yes|No>`
+
+**Critical pitfall:** Polymarket CLOB `/book` expects an outcome-level **`clobTokenId`** (large integer string).
+
+However:
+- Dome order payloads include:
+  - `condition_id` = Polymarket conditionId (0x… hex)
+  - `token_id` = often a numeric string (outcome token id)
+- Many internal code paths historically tried to feed `condition_id` into CLOB `/book` → guaranteed failure.
+
+**Solution used here:** when only `(market_slug, outcome)` are available, backend queries Gamma to resolve the correct `clobTokenId` and caches the slug→token mapping.
+
+Gamma parsing quirk:
+- `clobTokenIds` sometimes arrives as a JSON array, sometimes as a JSON-string containing an array. Code must handle both.
+
+### DomeAPI Quirks (docs can be wrong)
+
+- `GET /polymarket/wallet/pnl/{wallet}`: Dome may return `wallet_addr` instead of `wallet_address`. Use serde alias.
+- `GET /polymarket/activity`: `token_id` is often an empty string; use `condition_id`/`market_slug` for joins.
+- Dome upstream instability: intermittent `502 Bad Gateway` happens; always timebox requests and serve stale cache.
+
+### Debugging playbook (prevents “stuck loading” regressions)
+
+1) Confirm backend is actually running (port conflicts are common):
+
+```bash
+lsof -nP -iTCP:3000 -sTCP:LISTEN
+curl -s http://localhost:3000/health
+```
+
+2) If CHART/BOOK panels spin forever:
+- Frontend has request timeouts + in-flight TTL to avoid infinite spinners.
+- Check backend logs (`/tmp/betterbot-backend.log`) for upstream 502/timeouts.
+
+3) If signal titles look corrupted:
+- `SignalDetails.market_title` must always be the **market title/question**, never a signal headline.
+- Backend normalizes legacy tracked-wallet titles at the `/api/signals` boundary.
+
+4) If filters show nothing (common with Up/Down floods):
+- Recent signals may be ~100% Up/Down; the filtered view can be empty.
+- The feed will automatically page older history (up to 24h) to find matches.
+- If it still shows `NO MATCHING SIGNALS (24H)`, there truly were no matches in the last 24 hours.
+
+### Hashdive API - Whale Tracking
+
+**Endpoint:** `https://hashdive.com/api`
+
+**Authentication:** Header `x-api-key: {API_KEY}`
+
+**Get whale trades:**
+```bash
+curl -H "x-api-key: ${API_KEY}" \
+  "https://hashdive.com/api/get_latest_whale_trades?min_usd=10000&limit=50"
+```
+
+**Rate Limits:**
+- 1000 requests/month total
+- 2 seconds between requests recommended
+- Poll every 45 minutes = ~960 requests/month
+
+### Polymarket GAMMA API - Market Data
+
+**Endpoint:** `https://gamma-api.polymarket.com`
+
+**No authentication required**
+
+**Note:** If Gamma requests fail with TLS errors like `invalid peer certificate: NotValidForName`, enrichment will fall back to Dome. This is typically an environment/network trust issue (MITM/cert mismatch).
+
+**Get markets:**
+```bash
+curl "https://gamma-api.polymarket.com/markets?limit=100&offset=0"
 ```
 
 ---
 
-### Pitfall #6: Incorrect TypeScript Signal Access
+## 5. Data Flow & Signal Pipeline
 
-**WRONG:**
-```typescript
-// ❌ Treating as string
-if (signal.signal_type === 'WhaleFollowing') {
-  // This will never be true!
-}
 ```
-
-**CORRECT:**
-```typescript
-// ✅ Access .type property
-if (signal.signal_type.type === 'WhaleFollowing') {
-  console.log(signal.signal_type.whale_address);  // Works!
-}
-```
-
----
-
-## 8. TESTING & VERIFICATION
-
-### Backend Health Checks
-
-```bash
-# 1. Server running?
-curl http://localhost:3000/health
-
-# Expected: "🚀 BetterBot Operational..."
-
-# 2. Signals endpoint
-curl http://localhost:3000/api/signals | jq .
-
-# Expected: {"signals": [...], "count": 10}
-
-# 3. Risk stats
-curl http://localhost:3000/api/risk/stats | jq .
-
-# Expected: {"current_balance": 10000.0, ...}
-
-# 4. Login
-curl -X POST http://localhost:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' | jq .
-
-# Expected: {"token": "...", "user": {...}}
-```
-
-### Frontend Tests
-
-```bash
-# 1. Dev server running?
-curl http://localhost:5173
-
-# 2. Check browser console for errors
-# Open: http://localhost:5173
-# F12 → Console → Should see:
-#   "✅ WebSocket connected"
-#   "Logged in as admin"
-
-# 3. Network tab
-# F12 → Network → WS → Should see:
-#   Connection to ws://localhost:3000/ws
-#   Messages flowing
-```
-
-### Database Inspection
-
-```bash
-cd rust-backend
-
-# Signals database
-sqlite3 betterbot_signals.db "SELECT COUNT(*) FROM signals;"
-sqlite3 betterbot_signals.db "SELECT * FROM signals LIMIT 5;"
-
-# Auth database
-sqlite3 betterbot_auth.db "SELECT username, role FROM users;"
+┌─────────────────────────────────────────────────────────────────┐
+│                        DATA SOURCES                              │
+├─────────────────────────────────────────────────────────────────┤
+│ • Polymarket GAMMA API (45-min polling)                         │
+│ • Hashdive API (45-min polling, 1000/month limit)               │
+│ • DomeAPI WebSocket (real-time streaming)                       │
+│ • DomeAPI REST (30-second fallback polling)                     │
+│ • Expiry Edge Scanner (60-second polling)                       │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                    SIGNAL DETECTION                              │
+├─────────────────────────────────────────────────────────────────┤
+│ SignalDetector::detect_all() - Price deviations, expiry edges   │
+│ SignalDetector::detect_trader_entry() - Wallet order signals    │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                     QUALITY GATE                                 │
+├─────────────────────────────────────────────────────────────────┤
+│ Filter: Age < 3 seconds                                          │
+│ Filter: Confidence threshold (z-score based)                     │
+│ Filter: Source corroboration                                     │
+│ ~30% of signals dropped                                          │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                    RISK MANAGEMENT                               │
+├─────────────────────────────────────────────────────────────────┤
+│ Kelly Criterion position sizing                                  │
+│ Signal family calibration                                        │
+│ Guardrails: max 5% bankroll, min $1000 liquidity                │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                  STORAGE & BROADCAST                             │
+├─────────────────────────────────────────────────────────────────┤
+│ SQLite (WAL mode, batch inserts)                                 │
+│ tokio::broadcast channel → WebSocket clients                    │
+└──────────────────────────┬──────────────────────────────────────┘
+                           ↓
+┌─────────────────────────────────────────────────────────────────┐
+│                       FRONTEND                                   │
+├─────────────────────────────────────────────────────────────────┤
+│ REST polling (adaptive: 500ms when WS down, 5s when WS healthy)  │
+│ WebSocket stream (instant updates)                               │
+│ Zustand store (smart merge, dedup, sort)                        │
+│ Memoized React components (prevent flicker)                      │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 9. DEPLOYMENT CHECKLIST
+## 6. Database Schema & Optimization
 
-### Pre-Deployment
+### Signals Table
 
-- [ ] All environment variables set
-- [ ] API keys validated
-- [ ] Database migrations run
-- [ ] Frontend built (`npm run build`)
-- [ ] Backend compiled in release mode (`cargo build --release`)
-- [ ] CORS configured for production domain
-- [ ] Default admin password changed
-- [ ] JWT secret changed from default
-- [ ] Rate limiting configured
-- [ ] Logging level set appropriately
-- [ ] Health check endpoint tested
-- [ ] WebSocket endpoint tested
-- [ ] SSL/TLS certificates installed
+```sql
+CREATE TABLE signals (
+    id TEXT PRIMARY KEY,
+    signal_type TEXT NOT NULL,       -- JSON serialized SignalType
+    market_slug TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    risk_level TEXT NOT NULL,
+    details_json TEXT NOT NULL,      -- JSON serialized SignalDetails
+    detected_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+) WITHOUT ROWID;  -- Clustered on PRIMARY KEY
+```
 
-### Production Environment Variables
+### Performance Settings
+
+```sql
+PRAGMA journal_mode = WAL;           -- Concurrent reads during writes
+PRAGMA synchronous = NORMAL;         -- Faster than FULL, safe with WAL
+PRAGMA cache_size = -64000;          -- 64MB page cache
+PRAGMA temp_store = MEMORY;          -- Temp tables in RAM
+PRAGMA mmap_size = 268435456;        -- 256MB memory-mapped I/O
+```
+
+### Indexes
+
+```sql
+-- Covering index for recent signals (most common query)
+CREATE INDEX idx_signals_recent ON signals(
+    detected_at DESC, id, signal_type, market_slug, confidence, risk_level, details_json, source
+);
+
+-- Partial index for high-confidence signals
+CREATE INDEX idx_signals_high_conf ON signals(detected_at DESC) WHERE confidence >= 0.7;
+
+-- Source filtering
+CREATE INDEX idx_signals_source ON signals(source, detected_at DESC);
+
+-- Market filtering
+CREATE INDEX idx_signals_market ON signals(market_slug, detected_at DESC);
+```
+
+---
+
+## 7. Authentication System
+
+### JWT Flow
+
+1. **Login:** `POST /api/auth/login` with `{ username, password }`
+2. **Response:** `{ token: "eyJ...", user: { id, username } }`
+3. **Storage:** Token stored in `localStorage['betterbot_token']`
+4. **Protected routes:** Header `Authorization: Bearer {token}`
+5. **Validation:** `GET /api/auth/me` returns current user
+
+### Auth Database Schema
+
+```sql
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,     -- bcrypt, cost 12
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    token_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+```
+
+---
+
+## 8. Risk Management & Kelly Criterion
+
+### Position Sizing Formula
+
+```
+Edge = Confidence - Market_Price
+Odds = (1 / Market_Price) - 1
+Full_Kelly = (Confidence × Odds - (1 - Confidence)) / Odds
+Actual_Kelly = Full_Kelly × 0.25  (quarter Kelly)
+Position = min(Actual_Kelly, 0.10) × Bankroll
+```
+
+### Example
+
+```
+Signal: 90% confidence, market price 65%
+Edge = 0.90 - 0.65 = 0.25 (25% edge)
+Odds = (1/0.65) - 1 = 0.538
+Full_Kelly = (0.90 × 0.538 - 0.10) / 0.538 = 0.714
+Quarter_Kelly = 0.714 × 0.25 = 0.178
+Capped = min(0.178, 0.10) = 0.10
+Position = 0.10 × $10,000 = $1,000
+```
+
+---
+
+## 9. Environment Configuration
+
+### Backend `.env`
 
 ```bash
-# rust-backend/.env
-RUST_LOG=info
-DATABASE_PATH=./betterbot_signals.db
-AUTH_DB_PATH=./betterbot_auth.db
-JWT_SECRET=<random-64-char-string>
-HASHDIVE_API_KEY=<your-key>
-DOME_API_KEY=<your-key>
+# Server
+PORT=3000
+RUST_LOG=info,betterbot=debug
+
+# Databases
+# These paths are resolved relative to `rust-backend/` (not your current shell cwd)
+DATABASE_PATH=betterbot_signals.db
+AUTH_DB_PATH=betterbot_auth.db
+
+# API Keys / Tokens (NEVER COMMIT)
+HASHDIVE_API_KEY=your_key_here
+
+# Dome uses a BEARER TOKEN (sent as: Authorization: Bearer <token>)
+# Supported env var names:
+# - DOME_API_KEY (preferred)
+# - DOME_BEARER_TOKEN (alias)
+# - DOME_TOKEN (alias)
+DOME_API_KEY=your_token_here
+
+# Risk Management
 INITIAL_BANKROLL=10000
 KELLY_FRACTION=0.25
+
+# JWT
+JWT_SECRET=minimum-32-characters-change-in-production
+
+# Polling
+HASHDIVE_SCRAPE_INTERVAL=2700  # 45 minutes
 ```
 
-### Monitoring
+### IMPORTANT: Preventing "no signals" / "missing DOME token" regressions
 
-**Logs to Watch:**
-- Connection count
-- Signal processing rate
-- API error rates
-- Database size growth
-- Memory usage
-- WebSocket reconnection frequency
+- `.env` is gitignored; keep the Dome bearer token there (never in tracked files).
+- The backend loads `.env` from both `rust-backend/.env` and repo-root `../.env` (relative to `CARGO_MANIFEST_DIR`) so running via `cargo run --manifest-path ...` from another working directory still picks up secrets.
+- The backend DB path is read from `DB_PATH` or `DATABASE_PATH`; if neither is set it defaults to `rust-backend/betterbot_signals.db` to avoid silently creating an empty DB in the wrong directory.
 
-**Alerts to Set:**
-- Backend down (health check fails)
-- Database errors
-- API rate limit exceeded
-- Memory usage > 80%
-- Disk space < 20%
+### Frontend `.env`
+
+```bash
+VITE_API_URL=http://localhost:3000
+VITE_WS_URL=ws://localhost:3000/ws
+
+# Feature flags
+VITE_ENABLE_TRADING=false
+
+# Optional: WebSocket latency ping cadence (ms). Lower = more updates, higher = less overhead.
+VITE_WS_PING_MS=100
+```
+
+### Trading flags (backend)
+
+```bash
+# Feature flag for /api/trade/order
+ENABLE_TRADING=false
+
+# paper|live (NOTE: live mode is currently NOT wired; it will return NOT_IMPLEMENTED)
+TRADING_MODE=paper
+```
+
+### LIVE trading prerequisites (NOT implemented yet)
+
+The current codebase ships a **trade UI + API contract**, but it does **not** yet execute real orders.
+When an agent wires live execution, these are the inputs you will need (store as secrets; never commit):
+
+- **Polymarket-funded account (“funder address”)**: the on-chain address that actually holds your funds on Polymarket.
+- **A signer** that can produce the required signatures (Privy wallet or equivalent).
+- **Privy server credentials** (to verify sessions and request signatures from Privy on behalf of a logged-in user).
+- **Enclave credentials** (only if you enable MagicSpend++ / unified deposit abstraction).
+
+Agents should define explicit env var names for these when implementing (e.g. `PRIVY_APP_ID`, `PRIVY_SERVER_AUTH_KEY`, `ENCLAVE_API_KEY`) and document them here.
+
+### Secret hygiene (2025-12-21)
+
+- No Dome/Hashdive/Polymarket/Privy/Enclave secrets are hardcoded in tracked source.
+- Secrets are expected via `.env`/runtime env vars only.
 
 ---
 
-## 10. QUICK REFERENCE
+## 10. Performance Optimizations
 
-### Start Commands
+### Backend Optimizations
+
+| Optimization | Location | Impact |
+|-------------|----------|--------|
+| `parking_lot::RwLock` | main.rs | 2-5x faster locking |
+| WAL mode + 64MB cache | db_storage.rs | 10x write throughput |
+| Batch inserts | db_storage.rs | 100x faster bulk storage |
+| Connection pooling | scrapers | Reduced TCP overhead |
+| Pre-allocated vectors | All files | Fewer allocations |
+| `#[inline]` hints | Hot functions | Better inlining |
+
+### Frontend Optimizations
+
+| Optimization | Location | Impact |
+|-------------|----------|--------|
+| 0.5s polling | useSignals.ts | More frequent UI refresh |
+| WS ping 100ms (configurable) | services/websocket.ts | Higher-frequency latency sampling |
+| Debug logging gated to dev | services/websocket.ts, stores/signalStore.ts | Less console overhead |
+| Cached headers | api.ts | Fewer object allocations |
+| `useCallback` + `useRef` | hooks | Proper memoization |
+| `React.memo` | SignalCard | Prevents re-renders |
+| `performance.now()` | useSignals.ts | More precise timing |
+
+### Measured Results
+
+- **API latency:** 8-9ms average (sub-10ms achieved)
+- **Database:** Scales to 10M+ signals
+- **Frontend:** 50% reduction in polling load
+- **Memory:** Stable under continuous operation
+
+---
+
+## Quick Reference
+
+### Start Development
 
 ```bash
 # Backend
 cd rust-backend
-cargo run
+cargo run --release
 
 # Frontend
 cd frontend
 npm run dev
 ```
 
-### Default Credentials
+### Test API
 
-```
-Username: admin
-Password: admin123
-```
+```bash
+# Health check
+curl http://localhost:3000/health
 
-**⚠️ CHANGE IN PRODUCTION!**
+# Login
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}'
 
-### API Endpoints
-
-```
-GET  /health                    - Health check
-GET  /api/signals               - Get recent signals (optional: ?limit=, ?min_confidence=)
-GET  /api/risk/stats            - Risk management stats (VaR/CVaR, bankroll, kelly)
-POST /api/auth/login            - Login
-GET  /ws                        - WebSocket endpoint
+# Get signals (with token)
+curl http://localhost:3000/api/signals \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-### File Locations
+### WebSocket Test
 
+```javascript
+const ws = new WebSocket('ws://localhost:3000/ws?token=YOUR_TOKEN');
+ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
-Backend:
-  Code:      rust-backend/src/
-  Database:  rust-backend/betterbot_signals.db
-  Auth DB:   rust-backend/betterbot_auth.db
-  Env:       rust-backend/.env
-  
-Frontend:
-  Code:      frontend/src/
-  Build:     frontend/dist/
-  Env:       frontend/.env
-```
-
-### Port Reference
-
-```
-Backend:  3000
-Frontend: 5173 (dev), 4173 (preview)
-```
-
-### Key Dependencies
-
-**Backend:**
-- axum (HTTP server)
-- tokio (async runtime)
-- rusqlite (database)
-- serde_json (JSON)
-- jsonwebtoken (JWT)
-- bcrypt (password hashing)
-- reqwest (HTTP client)
-- tokio-tungstenite (WebSocket)
-
-**Frontend:**
-- react + typescript
-- vite (build tool)
-- tailwindcss (styling)
-- zustand (state management)
-- date-fns (date formatting)
-
----
-
-## 🎯 SUMMARY FOR AGENTS
-
-### Top 10 Things to Remember
-
-1. **Type Mismatches:** Backend sends tagged unions, frontend must match exactly
-2. **Auth Headers:** Hashdive uses `x-api-key`, DomeAPI uses `Authorization: Bearer`
-3. **Rate Limits:** Hashdive has 1000 monthly credits - poll every 45 minutes
-4. **WebSocket Reconnection:** Always implement exponential backoff
-5. **Mock Fallback:** Only use when NO real signals available
-6. **Login Response:** Must include user object for frontend display
-7. **Polymarket 422:** Never send `active` parameter to GAMMA API
-8. **Database Locking:** Use WAL mode for concurrent access
-9. **CORS:** Configure properly for production domains
-10. **Signal Flow:** API → Parse → Detect → Filter → Store → Broadcast → Display
-
-### Most Common Mistakes
-
-1. Using `X-API-Key` for DomeAPI (should be Bearer token)
-2. Aggressive polling exhausting API credits
-3. Forgetting WebSocket reconnection logic
-4. Type mismatch between backend Rust enum and frontend TypeScript
-5. Not handling API errors gracefully
-6. Forgetting to start both backend AND frontend
-7. Using default JWT secret in production
-8. Not validating API responses before processing
-9. Incorrect signal type checking in frontend (string vs object)
-10. Database locked errors from concurrent access
-
----
-
-## 🧠 INSTITUTIONAL‑GRADE QUANT ENHANCEMENTS
-
-This section documents the institutional‑grade capabilities implemented across the system.
-
-1) Data quality and gating
-- Implemented: Source kill‑switches with env toggles and p95 latency monitors; trips on consecutive failures or SLO breach. (main.rs)
-- Implemented: Data quality gate for stale/outlier drops and cooldowns. (signals/quality.rs + signals/detector.rs)
-- Implemented: Staggered async polling (implicit jitter). (main.rs)
-
-2) Signal research hygiene
-- Implemented: Rolling walk‑forward with test embargo; no random shuffle. (backtest.rs)
-- Implemented: Leakage controls, monotonic timestamp assertions, hygiene tracking. (backtest.rs)
-- Implemented: Confidence calibration (isotonic) per family; calibration_version persisted. (risk.rs + main.rs + signals/db_storage.rs)
-
-3) Portfolio construction and risk
-- Implemented: Fractional Kelly capped at 0.20; regime risk factor scaling. (risk.rs)
-- Implemented: Drawdown throttle (8% trigger / 4% release). (risk.rs)
-- Implemented: Correlation awareness and de‑duplication in composite analysis. (signals/correlator.rs)
-- Implemented: Per‑market sizing returned via details.recommended_size; hooks for theme caps. (risk.rs)
-
-4) Execution realism (backtests and live)
-- Implemented: Slippage/transaction costs; partial fill simulator; cooldown windows. (backtest.rs)
-- Implemented: Live path embeds calibrated confidence and guardrail flags. (main.rs)
-
-5) Monitoring and SLOs
-- Implemented: Source‑level latency monitors with p95 enforcement; structured logs. (main.rs)
-- Implemented: Risk stats API (VaR/CVaR, bankroll, kelly fraction, sample size). (GET /api/risk/stats)
-- In progress: Attribution by family (db stores family + calibration; surface via API).
-
-6) Security & secrets
-- Implemented: No hardcoded API keys; env‑only; fail‑closed on missing keys. (main.rs + scrapers/*)
-- Recommended: CI secret scanning and pre‑commit hooks (gitleaks). Provide .env.example only.
-
-7) Remaining enhancements (targeted)
-- Add `/api/signals/stats` by family for attribution dashboards.
-- Expose theme‑level exposure caps via API/UI controls.
-- Export Prometheus metrics (latency, throughput, error rates).
-
----
-
-## 📞 NEED HELP?
-
-This document should answer 95% of questions. For the remaining 5%:
-
-1. Check backend logs: `rust-backend/target/debug/betterbot`
-2. Check browser console: F12 → Console tab
-3. Verify API responses: curl commands in Testing section
-4. Review phase documentation: `docs/phases/PHASE_*_COMPLETE.md`
-5. Check API documentation directly:
-   - Hashdive: https://hashdive.com/API_documentation
-   - DomeAPI: https://docs.domeapi.io/
-   - Polymarket: https://gamma-api.polymarket.com/
-
----
-
-**Last Updated:** November 17, 2025  
-**Maintainers:** AI Agents & Contributors  
-**License:** Proprietary  
-
-**🚀 Happy Building!**

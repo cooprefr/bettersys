@@ -1,0 +1,116 @@
+/* IBM Plex Mono - BETTER Terminal Font */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #000000;
+  --color-surface: #0A0A0A;
+  --color-better-blue: #0026FF;
+  --color-grey: #4C526F;
+  --color-white: #FFFFFF;
+  --color-success: #00FF00;
+  --color-danger: #FF0000;
+  --color-warning: #FFAA00;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-white);
+  font-family: 'IBM Plex Mono', monospace;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-grey);
+  opacity: 0.3;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-better-blue);
+}
+
+/* Selection styling */
+::selection {
+  background-color: var(--color-better-blue);
+  color: white;
+}
+
+/* Smooth scroll */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Link styles */
+a {
+  color: var(--color-better-blue);
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+
+a:hover {
+  color: var(--color-white);
+}
+
+/* Card base style */
+.card {
+  background: var(--color-surface);
+  border: 1px solid rgba(223, 223, 223, 0.1);
+  transition: border-color 150ms ease;
+}
+
+.card:hover {
+  border-color: var(--color-better-blue);
+}
+
+/* Status indicators */
+.status-connected {
+  @apply w-2 h-2 rounded-full bg-success;
+}
+
+.status-disconnected {
+  @apply w-2 h-2 rounded-full bg-gray-600;
+}
+
+.status-error {
+  @apply w-2 h-2 rounded-full bg-danger;
+}
+
+/* Simple fade animation */
+.fade-in {
+  animation: fadeIn 150ms ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Disable text selection on UI elements */
+button, .no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
