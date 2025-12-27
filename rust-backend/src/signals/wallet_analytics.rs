@@ -289,7 +289,7 @@ pub async fn compute_wallet_analytics(
             // Convert existing curve to a mutable map
             let mut daily_pnl: BTreeMap<i64, f64> = BTreeMap::new();
             let mut running_equity = 0.0;
-            
+
             // First, convert curve back to daily deltas
             let mut prev_value = 0.0;
             for point in &copy_result.curve {
@@ -297,12 +297,12 @@ pub async fn compute_wallet_analytics(
                 *daily_pnl.entry(point.timestamp).or_insert(0.0) += delta;
                 prev_value = point.value;
             }
-            
+
             // Add settlement deltas
             for (day, delta) in daily_settlements {
                 *daily_pnl.entry(day).or_insert(0.0) += delta;
             }
-            
+
             // Rebuild curve from merged deltas
             copy_result.curve.clear();
             for (day, delta) in daily_pnl {
@@ -312,7 +312,7 @@ pub async fn compute_wallet_analytics(
                     value: running_equity,
                 });
             }
-            
+
             // Update friction total with exit friction from settlements
             copy_result.total_friction_usd += settlement_pnl.abs() * (friction_pct / 2.0);
         }
@@ -747,7 +747,7 @@ async fn settle_open_positions(
         // Check cache first
         let cache_key = format!("market_resolution_v1:{}", condition_id);
         let cached = storage.get_cache(&cache_key).ok().flatten();
-        
+
         let market = if let Some((json, fetched_at)) = cached {
             // Use cache if less than 1 hour old
             if now - fetched_at < 3600 {
@@ -818,11 +818,11 @@ async fn settle_open_positions(
         // Settlement price: $1.00 if won, $0.00 if lost
         let settlement_price = if position_won { 1.0 } else { 0.0 };
         let proceeds = position.shares * settlement_price;
-        
+
         // Apply exit friction (slippage on redemption is minimal, but include spread)
         let exit_friction = proceeds * (friction_pct / 2.0); // Half friction on exit
         let net_proceeds = proceeds - exit_friction;
-        
+
         let realized = net_proceeds - position.cost_usd;
         total_settlement_pnl += realized;
 

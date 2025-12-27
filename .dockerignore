@@ -1,0 +1,29 @@
+# Git
+.git
+
+# Node
+**/node_modules
+**/dist
+**/.vite
+
+# Rust
+**/target
+
+# Local databases / state
+**/*.db
+**/*.db-wal
+**/*.db-shm
+
+# Logs
+**/*.log
+
+# OS / editor
+**/.DS_Store
+
+# Env files (never bake into images)
+.env
+.env.*
+
+# Local docs dumps
+domeapidocs.json
+enclavedocs.json

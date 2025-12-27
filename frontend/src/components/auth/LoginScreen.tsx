@@ -1,19 +1,20 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useIdentityToken, usePrivy } from '@privy-io/react-auth';
 import { useAuth } from '../../hooks/useAuth';
-import { useWallet } from '../../hooks/useWallet';
 
 export const LoginScreen: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const { login, isLoading: authLoading, error: authError } = useAuth();
-  const { 
-    connect: connectWallet, 
-    isLoading: walletLoading, 
-    error: walletError,
-    isConnected: walletConnected,
-    address: walletAddress,
-    walletType,
-  } = useWallet();
+  const { login, loginWithPrivy, isLoading: authLoading, error: authError, isAuthenticated } = useAuth();
+  const { ready, authenticated: privyAuthenticated, user: privyUser, login: privyLogin, logout: privyLogout } = usePrivy();
+  const { identityToken } = useIdentityToken();
+  const [privyError, setPrivyError] = useState<string | null>(null);
+  const [exchangeAttempted, setExchangeAttempted] = useState(false);
+
+  const privyConfigured = useMemo(() => {
+    const appId = import.meta.env.VITE_PRIVY_APP_ID;
+    return typeof appId === 'string' && appId.trim().length > 0;
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,17 +25,31 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
-  const handleWalletConnect = async (type: 'metamask' | 'phantom') => {
-    await connectWallet(type);
+  const handlePrivy = async () => {
+    setPrivyError(null);
+    setExchangeAttempted(false);
+    if (!privyConfigured) {
+      setPrivyError('Privy not configured (missing VITE_PRIVY_APP_ID)');
+      return;
+    }
+    privyLogin();
   };
 
-  // Format wallet address for display
-  const formatAddress = (addr: string) => {
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-  };
+  useEffect(() => {
+    if (!ready) return;
+    if (isAuthenticated) return;
+    if (!privyAuthenticated) return;
+    if (!identityToken) return;
+    if (exchangeAttempted) return;
 
-  const error = authError || walletError;
-  const isLoading = authLoading || walletLoading;
+    setExchangeAttempted(true);
+    loginWithPrivy(identityToken).catch((err: any) => {
+      setPrivyError(err?.message || 'Privy login failed');
+    });
+  }, [ready, isAuthenticated, privyAuthenticated, identityToken, exchangeAttempted, loginWithPrivy]);
+
+  const error = authError || privyError;
+  const isLoading = authLoading;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-void">
@@ -49,52 +64,36 @@ export const LoginScreen: React.FC = () => {
 
         {/* Auth Container */}
         <div className="bg-surface border border-grey/10 p-8">
-          
-          {/* Wallet Connect Buttons */}
-          <div className="grid grid-cols-2 gap-4 mb-8">
-            <button 
-              onClick={() => handleWalletConnect('metamask')}
-              disabled={walletLoading}
-              className={`flex flex-col items-center justify-center gap-1 py-4 px-4 border transition-colors duration-150 ${
-                walletConnected && walletType === 'metamask' 
-                  ? 'border-success bg-success/10' 
-                  : 'border-grey/20 hover:border-better-blue hover:bg-better-blue/10'
-              }`}
-            >
-              <span className="text-xs font-mono text-white">METAMASK</span>
-              <span className="text-[9px] font-mono text-grey/80">BASE CHAIN</span>
-              {walletConnected && walletType === 'metamask' && (
-                <span className="text-[9px] font-mono text-success mt-1">
-                  {formatAddress(walletAddress!)}
-                </span>
-              )}
-            </button>
-            <button 
-              onClick={() => handleWalletConnect('phantom')}
-              disabled={walletLoading}
-              className={`flex flex-col items-center justify-center gap-1 py-4 px-4 border transition-colors duration-150 ${
-                walletConnected && walletType === 'phantom' 
-                  ? 'border-success bg-success/10' 
-                  : 'border-grey/20 hover:border-better-blue hover:bg-better-blue/10'
-              }`}
-            >
-              <span className="text-xs font-mono text-white">PHANTOM</span>
-              <span className="text-[9px] font-mono text-grey/80">SOLANA</span>
-              {walletConnected && walletType === 'phantom' && (
-                <span className="text-[9px] font-mono text-success mt-1">
-                  {formatAddress(walletAddress!)}
-                </span>
-              )}
-            </button>
-          </div>
 
-          {walletConnected && (
-            <div className="mb-6 p-3 border border-success/30 bg-success/5">
-              <div className="text-[10px] font-mono text-success text-center">
-                WALLET CONNECTED: {formatAddress(walletAddress!)}
-              </div>
+          {/* Privy */}
+          <div className="mb-8 space-y-3">
+            <button
+              type="button"
+              onClick={privyAuthenticated ? () => void privyLogout() : handlePrivy}
+              disabled={!ready || isLoading || !privyConfigured}
+              className={`w-full border py-3 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+                privyAuthenticated
+                  ? 'border-success bg-success/10 hover:bg-success/15'
+                  : 'border-grey/20 hover:border-better-blue hover:bg-better-blue/10'
+              }`}
+            >
+              <span className="font-mono text-xs tracking-widest text-white">
+                {privyAuthenticated ? 'PRIVY CONNECTED (CLICK TO LOG OUT)' : 'LOGIN WITH PRIVY'}
+              </span>
+            </button>
+
+            <div className="text-[10px] font-mono text-grey/70">
+              ACCESS: ≥100,000 $BETTER (BASE)
             </div>
-          )}
+
+            {privyAuthenticated && (
+              <div className="p-3 border border-success/30 bg-success/5">
+                <div className="text-[10px] font-mono text-success">
+                  PRIVY USER: {privyUser?.id || '---'}
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className="relative flex items-center gap-4 mb-8">
             <div className="h-px bg-grey/20 flex-1"></div>

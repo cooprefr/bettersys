@@ -14,10 +14,10 @@ import {
   MarketSnapshotResponse,
   WalletAnalyticsResponse,
 } from '../types/signal';
-import { LoginRequest, LoginResponse } from '../types/auth';
+import { LoginRequest, LoginResponse, PrivyLoginRequest } from '../types/auth';
 import { TradeOrderRequest, TradeOrderResponse } from '../types/trade';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 const TOKEN_KEY = 'betterbot_token';
 
 class ApiClient {
@@ -90,6 +90,15 @@ class ApiClient {
     const response = await this.fetch<LoginResponse>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify(credentials),
+    });
+    this.setToken(response.token);
+    return response;
+  }
+
+  async loginWithPrivy(request: PrivyLoginRequest): Promise<LoginResponse> {
+    const response = await this.fetch<LoginResponse>('/api/auth/privy', {
+      method: 'POST',
+      body: JSON.stringify(request),
     });
     this.setToken(response.token);
     return response;

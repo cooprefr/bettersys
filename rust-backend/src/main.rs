@@ -204,6 +204,11 @@ async fn main() -> Result<()> {
     info!("⚡ Phase 2: Database Persistence Layer ACTIVE");
     info!("🔐 Phase 7: Authentication & Security ACTIVE");
 
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("Failed to build HTTP client")?;
+
     // Phase 7: Initialize authentication system
     let auth_db_path = resolve_data_path(env::var("AUTH_DB_PATH").ok(), "betterbot_auth.db");
     let jwt_secret = env::var("JWT_SECRET")
@@ -211,7 +216,7 @@ async fn main() -> Result<()> {
 
     let user_store = Arc::new(UserStore::new(&auth_db_path)?);
     let jwt_handler = Arc::new(JwtHandler::new(jwt_secret));
-    let auth_state = AuthState::new(user_store.clone(), jwt_handler.clone());
+    let auth_state = AuthState::new(user_store.clone(), jwt_handler.clone(), http_client.clone());
 
     info!("🔐 Authentication initialized at: {}", auth_db_path);
 
@@ -247,11 +252,6 @@ async fn main() -> Result<()> {
 
     // Initialize broadcast channel (signals + enrichment updates)
     let (signal_tx, _signal_rx) = broadcast::channel::<WsServerEvent>(1000);
-
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .context("Failed to build HTTP client")?;
 
     let dome_api_key = env::var("DOME_API_KEY")
         .or_else(|_| env::var("DOME_BEARER_TOKEN"))
@@ -309,6 +309,7 @@ async fn main() -> Result<()> {
     // Build auth routes (separate router with auth state)
     let auth_router = Router::new()
         .route("/api/auth/login", post(auth_api::login))
+        .route("/api/auth/privy", post(auth_api::privy_login))
         .with_state(auth_state);
 
     // Protected API routes

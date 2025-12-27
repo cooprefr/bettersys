@@ -10,6 +10,7 @@ interface AuthStore {
   error: string | null;
 
   login: (username: string, password: string) => Promise<void>;
+  loginWithPrivy: (identityToken: string) => Promise<void>;
   logout: () => void;
   setUser: (user: User | null) => void;
   setError: (error: string | null) => void;
@@ -37,6 +38,27 @@ export const useAuthStore = create<AuthStore>((set, _get) => ({
     } catch (error: any) {
       set({
         error: error.message || 'Login failed',
+        isLoading: false,
+        isAuthenticated: false,
+      });
+      throw error;
+    }
+  },
+
+  loginWithPrivy: async (identityToken) => {
+    set({ isLoading: true, error: null });
+    try {
+      const response = await api.loginWithPrivy({ identity_token: identityToken });
+      set({
+        user: response.user,
+        token: response.token,
+        isAuthenticated: true,
+        isLoading: false,
+        error: null,
+      });
+    } catch (error: any) {
+      set({
+        error: error.message || 'Privy login failed',
         isLoading: false,
         isAuthenticated: false,
       });

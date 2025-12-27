@@ -54,7 +54,10 @@ anyhow = "1.0"
 # Authentication & Security (Phase 7)
 jsonwebtoken = "9.2"
 bcrypt = "0.15"
-uuid = { version = "1.6", features = ["v4", "serde"] }
+uuid = { version = "1.6", features = ["v4", "v5", "serde"] }
+
+# Big ints (ERC-20 balance checks)
+num-bigint = "0.4"
 
 # Performance monitoring
 metrics = "0.21"

@@ -1,4 +1,5 @@
 import React from 'react';
+import { usePrivy } from '@privy-io/react-auth';
 import { SignalStats } from '../../types/signal';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -18,6 +19,7 @@ export const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   onViewChange,
 }) => {
   const { user, logout } = useAuth();
+  const { logout: privyLogout } = usePrivy();
   
   // Only use WebSocket latency - REST latency is not relevant for real-time display
   const displayLatency = wsLatency;
@@ -112,7 +114,13 @@ export const TerminalHeader: React.FC<TerminalHeaderProps> = ({
           </div>
           
           <button
-            onClick={logout}
+            onClick={async () => {
+              try {
+                await privyLogout();
+              } finally {
+                logout();
+              }
+            }}
             className="border border-grey/30 px-3 py-1 text-[10px] font-mono text-grey/80 hover:text-danger hover:border-danger transition-colors duration-150"
           >
             EXIT

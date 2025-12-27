@@ -2,7 +2,12 @@
 
 import { Signal } from '../types/signal';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3000/ws';
+const DEFAULT_WS_URL =
+  typeof window !== 'undefined'
+    ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`
+    : 'ws://localhost:3000/ws';
+
+const WS_URL = import.meta.env.VITE_WS_URL || DEFAULT_WS_URL;
 const DEBUG = import.meta.env.DEV;
 const PING_INTERVAL_MS = Number(import.meta.env.VITE_WS_PING_MS) || 100;
 
@@ -18,7 +23,7 @@ export class WebSocketClient {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
-  private pingInterval: number | null = null;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
   private listeners: Map<string, Set<(data: any) => void>> = new Map();
   private lastPingTimestamp = 0;
 

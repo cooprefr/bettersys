@@ -14,8 +14,13 @@ export interface LoginRequest {
 
 export interface LoginResponse {
   token: string;
-  expires_at: string;
+  expires_in: number;
+  role: UserRole;
   user: User;
+}
+
+export interface PrivyLoginRequest {
+  identity_token: string;
 }
 
 export interface AuthState {

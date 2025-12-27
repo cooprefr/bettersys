@@ -10,6 +10,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@privy-io/react-auth": "^1.32.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "zustand": "^4.4.6",
