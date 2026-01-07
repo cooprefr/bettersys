@@ -512,6 +512,16 @@ impl DbSignalStorage {
         Ok(())
     }
 
+    /// Prune raw Dome order events older than `cutoff_ts` (unix seconds).
+    pub fn prune_dome_order_events_before(&self, cutoff_ts: i64) -> Result<usize> {
+        let conn = self.conn.lock();
+        let deleted = conn.execute(
+            "DELETE FROM dome_order_events WHERE timestamp < ?1",
+            params![cutoff_ts],
+        )?;
+        Ok(deleted)
+    }
+
     /// Clear all signals (use only for testing)
     pub async fn clear(&self) -> Result<()> {
         let conn = self.conn.lock();

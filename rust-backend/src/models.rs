@@ -162,6 +162,28 @@ pub struct SignalContext {
     pub errors: Vec<String>,
 }
 
+impl SignalContext {
+    /// Return a lightweight context suitable for list views.
+    ///
+    /// Keeps only `order`, `derived`, and `errors` to avoid sending large blobs
+    /// (orderbook samples, candlesticks, market payloads, etc.) on hot endpoints.
+    pub fn lite(&self) -> Self {
+        Self {
+            order: self.order.clone(),
+            market: None,
+            price: None,
+            trade_history: None,
+            orderbook: None,
+            activity: None,
+            candlesticks: None,
+            wallet: None,
+            wallet_pnl: None,
+            derived: self.derived.clone(),
+            errors: self.errors.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalContextOrder {
     pub user: String,
@@ -377,6 +399,179 @@ impl Default for Config {
 }
 
 impl Config {
+    fn normalize_wallet_address(addr: &str) -> Option<String> {
+        let trimmed = addr.trim();
+        if !trimmed.starts_with("0x") || trimmed.len() != 42 {
+            return None;
+        }
+        if !trimmed
+            .chars()
+            .skip(2)
+            .all(|c| c.is_ascii_hexdigit())
+        {
+            return None;
+        }
+        Some(trimmed.to_ascii_lowercase())
+    }
+
+    fn classify_insider_label(primary: &str, secondary: Option<&str>) -> &'static str {
+        let p = primary.trim().to_ascii_lowercase();
+        let s = secondary.unwrap_or("").trim().to_ascii_lowercase();
+        let combined = format!("{} {}", p, s);
+
+        if combined.contains("crypto")
+            || combined.contains("token")
+            || combined.contains("airdrop")
+            || combined.contains("bitcoin")
+            || combined.contains("ethereum")
+        {
+            return "insider_crypto";
+        }
+
+        if combined.contains("sport") || combined.contains("esport") {
+            return "insider_sports";
+        }
+
+        if combined.contains("politic") || combined.contains("geo") || combined.contains("election") {
+            return "insider_politics";
+        }
+
+        if combined.contains("econom")
+            || combined.contains("macro")
+            || combined.contains("cpi")
+            || combined.contains("rate")
+            || combined.contains("fed")
+        {
+            return "insider_finance";
+        }
+
+        if combined.contains("tech")
+            || combined.contains("tesla")
+            || combined.contains("nvidia")
+            || combined.contains("elon")
+        {
+            return "insider_tech";
+        }
+
+        if combined.contains("entertain") || combined.contains("pop culture") {
+            return "insider_entertainment";
+        }
+
+        "insider_other"
+    }
+
+    fn classify_more_insiders_line(line: &str) -> &'static str {
+        let l = line.to_ascii_lowercase();
+
+        // Crypto
+        if l.contains("token")
+            || l.contains("airdrop")
+            || l.contains("bitcoin")
+            || l.contains("ethereum")
+            || l.contains("coinbase")
+            || l.contains("hyperliquid")
+        {
+            return "insider_crypto";
+        }
+
+        // Finance / macro
+        if l.contains("fed") || l.contains("cpi") || l.contains("rate") {
+            return "insider_finance";
+        }
+
+        // Tech
+        if l.contains("nvidia") || l.contains("elon") || l.contains("tesla") {
+            return "insider_tech";
+        }
+
+        // Politics / geopolitics
+        if l.contains("election")
+            || l.contains("prime minister")
+            || l.contains("supreme court")
+            || l.contains("trump")
+            || l.contains("netanyahu")
+            || l.contains("tariff")
+            || l.contains("president")
+        {
+            return "insider_politics";
+        }
+
+        // Entertainment
+        if l.contains("santa") || l.contains("christmas") {
+            return "insider_entertainment";
+        }
+
+        "insider_other"
+    }
+
+    fn extend_tracked_wallets_from_more_insiders_csv(
+        wallets: &mut std::collections::HashMap<String, String>,
+    ) {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let default_path = manifest_dir.join("../more_insiders.csv");
+        let path = std::env::var("MORE_INSIDERS_CSV_PATH")
+            .ok()
+            .and_then(|p| {
+                let trimmed = p.trim().to_string();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(trimmed))
+                }
+            })
+            .unwrap_or(default_path);
+
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return;
+        };
+
+        for line in raw.lines() {
+            let Some(pos) = line.find("user_address=0x") else {
+                continue;
+            };
+            let start = pos + "user_address=".len();
+            let Some(addr) = line.get(start..start + 42) else {
+                continue;
+            };
+            let Some(normalized) = Self::normalize_wallet_address(addr) else {
+                continue;
+            };
+
+            let label = Self::classify_more_insiders_line(line);
+            wallets.entry(normalized).or_insert_with(|| label.to_string());
+        }
+    }
+
+    fn extend_tracked_wallets_with_manual_insiders(
+        wallets: &mut std::collections::HashMap<String, String>,
+    ) {
+        // Additional wallet list provided by the user.
+        let additions: &[(&str, &str, Option<&str>)] = &[
+            ("0x1f0a343513aa6060488fabe96960e6d1e177f7aa", "Sports", Some("Niche Politics")),
+            ("0x000d257d2dc7616feaf4ae0f14600fdf50a758e", "Crypto", Some("Pop Culture")),
+            ("0x1c1e841584db14084e10e7dca2ad0ab7b60dbfe7", "Politics", Some("Generalist")),
+            ("0xdd225a03cd7ed89e3931906c67c75ab31cf89ef1", "Geopolitics", Some("Economics")),
+            ("0xd5ccdf772f795547e299de57f47966e24de8dea4", "Economics", Some("Macro")),
+            ("0x9d84ce0306f8551e02efef1680475fc0f1dc1344", "Politics", Some("Macro")),
+            ("0x9f47f1fcb1701bf9eaf31236ad39875e5d60af93", "Mixed", Some("High-Vol Events")),
+            ("0xd218e474776403a330142299f7796e8ba32eb5c9", "Crypto", Some("Tech (Tesla)")),
+            ("0x17db3fcd93ba12d38382a0cade24b200185c5f6d", "Esports", Some("Politics")),
+            ("0xdbade4c82fb72780a0db9a38f821d8671aba9c95", "Politics", Some("General")),
+            ("0x24c8cf69a0e0a17eee21f69d29752bfa32e823e1", "Crypto", Some("Politics")),
+        ];
+
+        for (addr, primary, secondary) in additions {
+            let Some(normalized) = Self::normalize_wallet_address(addr) else {
+                continue;
+            };
+            let label = Self::classify_insider_label(primary, *secondary);
+
+            wallets
+                .entry(normalized)
+                .or_insert_with(|| label.to_string());
+        }
+    }
+
     /// Verified insider wallet list - auto-generated
     /// Total: 357 unique wallets
     pub fn default_tracked_wallets() -> std::collections::HashMap<String, String> {
@@ -1857,6 +2052,85 @@ impl Config {
             }
         }
 
+        // Merge wallets from the repo CSV (if present) plus manual additions.
+        // Uses `entry().or_insert()` so existing classifications aren't overridden.
+        Self::extend_tracked_wallets_from_more_insiders_csv(&mut config.tracked_wallets);
+        Self::extend_tracked_wallets_with_manual_insiders(&mut config.tracked_wallets);
+
         config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn signal_context_lite_strips_heavy_fields() {
+        let ctx = SignalContext {
+            order: SignalContextOrder {
+                user: "0xabc".to_string(),
+                market_slug: "test-market".to_string(),
+                condition_id: "cond".to_string(),
+                token_id: "123".to_string(),
+                token_label: Some("YES".to_string()),
+                side: "BUY".to_string(),
+                price: 0.42,
+                shares_normalized: 10.0,
+                timestamp: 1,
+                order_hash: "0xorder".to_string(),
+                tx_hash: "0xtx".to_string(),
+                title: "Test".to_string(),
+            },
+            market: Some(json!({"title": "heavy"})),
+            price: Some(SignalContextPrice {
+                at_entry: Some(MarketPriceSnapshot { price: 0.4, at_time: 1 }),
+                latest: Some(MarketPriceSnapshot { price: 0.5, at_time: 2 }),
+            }),
+            trade_history: Some(SignalContextTradeHistory {
+                market_flow_1h: None,
+                wallet_flow_24h: None,
+                sample_market_orders: Some(json!([1, 2, 3])),
+                sample_wallet_orders: Some(json!([4, 5, 6])),
+            }),
+            orderbook: Some(SignalContextOrderbook {
+                best_bid: Some(0.39),
+                best_ask: Some(0.41),
+                mid: Some(0.40),
+                spread: Some(0.02),
+                snapshot_count: Some(123),
+            }),
+            activity: Some(SignalContextActivity {
+                count: 1,
+                merge_count: 0,
+                split_count: 0,
+                redeem_count: 0,
+                sample: Some(json!({"event": "merge"})),
+            }),
+            candlesticks: Some(json!([{"t": 1, "p": 0.4}])) ,
+            wallet: Some(json!({"addr": "0xabc"})),
+            wallet_pnl: Some(json!({"pnl": 123.0})),
+            derived: SignalContextDerived {
+                price_delta_bps: Some(12.3),
+                ..Default::default()
+            },
+            errors: vec!["warn".to_string()],
+        };
+
+        let lite = ctx.lite();
+
+        assert!(lite.market.is_none());
+        assert!(lite.price.is_none());
+        assert!(lite.trade_history.is_none());
+        assert!(lite.orderbook.is_none());
+        assert!(lite.activity.is_none());
+        assert!(lite.candlesticks.is_none());
+        assert!(lite.wallet.is_none());
+        assert!(lite.wallet_pnl.is_none());
+
+        assert_eq!(lite.order.market_slug, "test-market");
+        assert_eq!(lite.derived.price_delta_bps, Some(12.3));
+        assert_eq!(lite.errors, vec!["warn".to_string()]);
     }
 }

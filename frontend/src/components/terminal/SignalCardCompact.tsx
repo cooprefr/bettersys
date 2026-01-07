@@ -243,7 +243,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
             {marketTitle || '---'}
           </div>
           <div className="flex items-center gap-2">
-            {(['DETAILS', 'MARKET', 'WALLET', 'CHART', 'BOOK', 'TRADE'] as InspectorTab[]).map((t) => (
+            {(['DETAILS', 'PERFORMANCE', 'BOOK', 'TRADE'] as InspectorTab[]).map((t) => (
               <button
                 key={t}
                 type="button"

@@ -9,7 +9,8 @@ use crate::{
     models::{MarketSignal, SignalContext, SignalContextRecord, SignalType},
     scrapers::polymarket::OrderBook,
     signals::wallet_analytics::{
-        get_or_compute_wallet_analytics, FrictionMode, WalletAnalytics, WalletAnalyticsParams,
+        get_or_compute_wallet_analytics, wallet_analytics_cache_key, CopyCurveModel, FrictionMode,
+        WalletAnalytics, WalletAnalyticsParams, WALLET_ANALYTICS_CACHE_TTL_SECONDS,
     },
     AppState,
 };
@@ -22,9 +23,16 @@ use chrono::Utc;
 use serde::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{env, time::Duration};
+use std::{collections::HashMap, env, sync::OnceLock, time::Duration};
+use tokio::sync::Mutex;
 use tracing::warn;
 use uuid::Uuid;
+
+static WALLET_ANALYTICS_REFRESH_GUARD: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+
+fn wallet_analytics_refresh_guard() -> &'static Mutex<HashMap<String, i64>> {
+    WALLET_ANALYTICS_REFRESH_GUARD.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SignalQuery {
@@ -33,6 +41,8 @@ pub struct SignalQuery {
     pub before_id: Option<String>,
     /// If true, exclude signals from up/down markets (btc-updown, eth-updown, etc.)
     pub exclude_updown: Option<bool>,
+    /// If true, include the full stored context payload. Defaults to lite context.
+    pub full_context: Option<bool>,
 }
 
 /// Patterns that identify up/down markets in market slugs
@@ -125,6 +135,10 @@ pub struct WalletAnalyticsQuery {
     pub force: Option<bool>,
     /// Friction mode for copy trading simulation: "optimistic", "base", or "pessimistic"
     pub friction_mode: Option<String>,
+    /// Copy curve model: "scaled" (default) or "mtm".
+    pub copy_model: Option<String>,
+    /// If true, only return cached analytics. If not cached, returns 204.
+    pub cached_only: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,8 +246,67 @@ pub async fn get_wallet_analytics(
         .map(|s| FrictionMode::from_str(s))
         .unwrap_or(FrictionMode::Base);
 
+    // Parse copy curve model from query param (defaults to Scaled)
+    let copy_model = params
+        .copy_model
+        .as_ref()
+        .map(|s| CopyCurveModel::from_str(s))
+        .unwrap_or(CopyCurveModel::Scaled);
+
     let mut analytics_params = WalletAnalyticsParams::default();
     analytics_params.friction_mode = friction_mode;
+    analytics_params.copy_model = copy_model;
+
+    let cached_only = params.cached_only.unwrap_or(false);
+    if cached_only {
+        let cache_key =
+            wallet_analytics_cache_key(&params.wallet_address, friction_mode, copy_model);
+        if let Ok(Some((cache_json, _fetched_at))) = state.signal_storage.get_cache(&cache_key) {
+            if let Ok(cached) = serde_json::from_str::<WalletAnalytics>(&cache_json) {
+                return Ok(Json(cached));
+            }
+        }
+        return Err(StatusCode::NO_CONTENT);
+    }
+
+    // SWR: if we have *any* cached blob, serve it immediately for UI snappiness.
+    // If it's stale, kick off a background refresh so the next open is instant.
+    if !force {
+        let cache_key = wallet_analytics_cache_key(&params.wallet_address, friction_mode, copy_model);
+        if let Ok(Some((cache_json, fetched_at))) = state.signal_storage.get_cache(&cache_key) {
+            if let Ok(cached) = serde_json::from_str::<WalletAnalytics>(&cache_json) {
+                if now - fetched_at > WALLET_ANALYTICS_CACHE_TTL_SECONDS {
+                    // Avoid stampeding: refresh each wallet at most once per 30s.
+                    let mut guard = wallet_analytics_refresh_guard().lock().await;
+                    let last_started = guard.get(&cache_key).copied().unwrap_or(0);
+                    if now - last_started >= 30 {
+                        guard.insert(cache_key.clone(), now);
+                        drop(guard);
+
+                        let storage = state.signal_storage.clone();
+                        let rest = rest.clone();
+                        let wallet = params.wallet_address.clone();
+                        let analytics_params = analytics_params.clone();
+
+                        tokio::spawn(async move {
+                            let now = Utc::now().timestamp();
+                            let _ = get_or_compute_wallet_analytics(
+                                &storage,
+                                &rest,
+                                &wallet,
+                                true,
+                                now,
+                                analytics_params,
+                            )
+                            .await;
+                        });
+                    }
+                }
+
+                return Ok(Json(cached));
+            }
+        }
+    }
 
     let analytics = get_or_compute_wallet_analytics(
         &state.signal_storage,
@@ -667,6 +740,7 @@ pub async fn get_signals_simple(
 ) -> Json<SignalResponse> {
     let requested_limit = params.limit.unwrap_or(100);
     let exclude_updown = params.exclude_updown.unwrap_or(false);
+    let full_context = params.full_context.unwrap_or(false);
 
     // When filtering, fetch more signals to ensure we return enough after filtering
     let fetch_limit = if exclude_updown {
@@ -704,11 +778,20 @@ pub async fn get_signals_simple(
         .into_iter()
         .map(|signal| {
             let signal = normalize_signal_market_title(signal);
+            let is_dome_order = signal.id.starts_with("dome_order_");
             let ctx = contexts.get(&signal.id);
             SignalWithContext {
                 signal,
-                context: ctx.map(|c| c.context.clone()),
-                context_status: ctx.map(|c| c.status.clone()),
+                context: ctx.map(|c| if full_context { c.context.clone() } else { c.context.lite() }),
+                context_status: ctx
+                    .map(|c| c.status.clone())
+                    .or_else(|| {
+                        if is_dome_order {
+                            Some("pending".to_string())
+                        } else {
+                            None
+                        }
+                    }),
                 context_version: ctx.map(|c| c.context_version),
                 context_enriched_at: ctx.map(|c| c.enriched_at),
             }

@@ -22,10 +22,29 @@ interface SignalStore {
 }
 
 function mergeSignal(existing: Signal, incoming: Signal): Signal {
+  const contextRichness = (ctx: Signal['context'] | undefined): number => {
+    if (!ctx) return 0;
+    let score = 0;
+    if (ctx.market) score += 1;
+    if (ctx.price) score += 1;
+    if (ctx.trade_history) score += 1;
+    if (ctx.orderbook) score += 1;
+    if (ctx.activity) score += 1;
+    if (ctx.candlesticks) score += 1;
+    if (ctx.wallet) score += 1;
+    if (ctx.wallet_pnl) score += 1;
+    return score;
+  };
+
   const existingCv = typeof existing.context_version === 'number' ? existing.context_version : -1;
   const incomingCv = typeof incoming.context_version === 'number' ? incoming.context_version : -1;
 
-  const preferExistingCtx = existingCv > incomingCv;
+  let preferExistingCtx = existingCv > incomingCv;
+
+  // When versions are equal, keep the richer context (full websocket payload vs lite REST payload).
+  if (existingCv === incomingCv && existing.context && incoming.context) {
+    preferExistingCtx = contextRichness(existing.context) > contextRichness(incoming.context);
+  }
 
   const context = preferExistingCtx ? existing.context : incoming.context ?? existing.context;
   const context_status = preferExistingCtx
@@ -42,7 +61,8 @@ function mergeSignal(existing: Signal, incoming: Signal): Signal {
     ...existing,
     ...incoming,
     context,
-    context_status,
+    context_status:
+      context_status ?? ((incoming.id || existing.id).startsWith('dome_order_') ? 'pending' : undefined),
     context_version,
     context_enriched_at,
   };

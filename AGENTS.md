@@ -68,15 +68,17 @@ rust-backend/src/
 
 ### File-by-File Reference
 
-#### `main.rs` (~900 lines)
+#### `main.rs`
 **Purpose:** Application entry point, async runtime orchestration
 
 **Key Components:**
 - `AppState` - Shared state (storage, risk manager, broadcast channel)
 - `DataSourceKillSwitch` - Health monitoring with auto-disable
 - `parallel_data_collection()` - 45-minute Polymarket/Hashdive/Dome polling
-- `tracked_wallet_polling()` - Hybrid WebSocket + REST for 45 wallets
+- `tracked_wallet_polling()` - Dome WebSocket + REST for tracked wallets (≈357 base + CSV/manual extensions; see `Config::from_env()`)
 - `expiry_edge_polling()` - 60-second market expiry scanner
+- `wallet_analytics_polling()` - Warms wallet analytics caches for recently-active wallets
+- `storage_pruning_polling()` - Prunes old `dome_order_events` to bound DB growth
 - `websocket_handler()` - Client signal streaming
 
 **Concurrency Model:**
@@ -93,50 +95,29 @@ let processed_signals: Vec<MarketSignal> = qualified_signals
 
 ---
 
-#### `models.rs` (~400 lines)
-**Purpose:** Core data type definitions
+#### `models.rs`
+**Purpose:** Core data types + enrichment context + runtime config.
 
-**Key Types:**
+**Key points:**
+- `MarketSignal.source` defaults to `"detector"` (older signals may have `"polymarket"|"hashdive"|"dome"`).
+- `SignalType` is `#[serde(tag = "type")]` (frontend relies on the tagged union shape).
+- `TrackedWalletEntry` includes an optional `token_label` ("Yes/No", "Up/Down") which the UI uses for outcome semantics.
 
-```rust
-pub struct MarketSignal {
-    pub id: String,
-    pub signal_type: SignalType,      // Enum variant
-    pub market_slug: String,
-    pub confidence: f64,              // 0.0 - 1.0
-    pub risk_level: String,           // "low", "medium", "high"
-    pub details: SignalDetails,
-    pub detected_at: String,          // RFC3339 timestamp
-    pub source: String,               // "polymarket", "hashdive", "dome"
-}
+**Tracked wallets (current behavior):**
+- Base list lives in `Config::default_tracked_wallets()` (≈357 curated wallets + `high_frequency_test`).
+- `Config::from_env()` *also* merges:
+  - repo-root `more_insiders.csv` (override path via `MORE_INSIDERS_CSV_PATH`)
+  - a small manual list embedded in `models.rs`
+  - merge uses `entry().or_insert()` so existing classifications are not overridden
+- In practice this yields ~384 tracked wallets depending on duplicates.
+- Full override: `TRACKED_WALLETS_JSON` (JSON map `{ "0x...": "label" }`) is applied first, then CSV/manual are merged on top.
 
-pub enum SignalType {
-    PriceDeviation { market_price: f64, fair_value: f64, deviation_pct: f64 },
-    MarketExpiryEdge { hours_to_expiry: f64, volume_spike: f64 },
-    WhaleFollowing { whale_address: String, position_size: f64, confidence_score: f64 },
-    EliteWallet { wallet_address: String, win_rate: f64, total_volume: f64, position_size: f64 },
-    InsiderWallet { wallet_address: String, early_entry_score: f64, win_rate: f64, position_size: f64 },
-    WhaleCluster { cluster_count: usize, total_volume: f64, consensus_direction: String },
-    CrossPlatformArbitrage { polymarket_price: f64, kalshi_price: Option<f64>, spread_pct: f64 },
-    TrackedWalletEntry { wallet_address: String, wallet_label: String, position_value_usd: f64, order_count: usize },
-}
-
-pub struct Config {
-    pub tracked_wallets: HashMap<String, String>,  // address -> label
-    pub poll_interval_secs: u64,                   // 2700 (45 min)
-    pub dome_api_key: Option<String>,
-}
-```
-
-**Tracked Wallets (45 total):**
-- 15 `insider_sports` - Sports market edge
-- 5 `insider_politics` - Political market edge  
-- 3 `insider_other` - Other verticals
-- 22 `world_class` - Elite general traders
+**Label taxonomy (used across backend + UI):**
+`insider_crypto`, `insider_finance`, `insider_politics`, `insider_tech`, `insider_entertainment`, `insider_sports`, `insider_other`, `high_frequency_test`.
 
 ---
 
-#### `risk.rs` (~600 lines)
+#### `risk.rs`
 **Purpose:** Risk management and position sizing
 
 **Kelly Criterion Implementation:**
@@ -191,6 +172,10 @@ pub async fn get_risk_stats_simple(
     AxumState(state): AxumState<AppState>,
 ) -> Json<RiskStatsResponse>
 ```
+
+`GET /api/signals` notes:
+- Default returns **lite** `SignalContext` for each signal (keeps payloads small).
+- Pass `full_context=true` to return full context blobs (debugging only).
 
 #### Routes (`routes.rs`)
 ```
@@ -678,6 +663,7 @@ export const useSignalStore = create<SignalStore>((set) => ({
 **Key behavior:**
 - Feed renders `SignalCardCompact` rows.
 - 24h scrollback: scrolling near the bottom pages older signals via `GET /api/signals?before=<detected_at>&before_id=<id>`.
+- REST hydration uses **lite** signal context by default; `GET /api/signals?full_context=true` is for debugging only (can be very large).
 - Filters are resilient to Up/Down dominance: if filters produce 0 matches in the currently loaded window, the feed auto-pages backward (up to 24h) until matches appear or the 24h cutoff is reached.
 - Clicking `[OPEN]`/`[DETAILS]`/`[BOOK]`/`[TRADE]` opens the Inspector drawer to that tab.
 - Inspector is fixed-width with internal scroll (higher information density).
@@ -692,12 +678,16 @@ export const useSignalStore = create<SignalStore>((set) => ({
 
 ---
 
-#### `components/terminal/SignalInspectorDrawer.tsx` - Right-side inspector (DETAILS/MARKET/WALLET/CHART/BOOK/TRADE)
+#### `components/terminal/SignalInspectorDrawer.tsx` - Right-side inspector (DETAILS/PERFORMANCE/BOOK/TRADE)
 **Purpose:** Progressive disclosure without layout thrash; “never blank” panels.
 
 **Reliability contract:**
 - Always renders a bounded container: skeleton → live/cached/stale/error.
-- Prefetches wallet analytics on drawer open.
+- PERFORMANCE tab loads wallet analytics (realized curve + copy curve). It supports:
+  - `friction_mode`: OPT/BASE/PESS
+  - `copy_model`: SCALED (default) / MTM (slower, more realistic)
+  - longer timeouts + “still computing… retry” UX for cold caches
+- Prefetches wallet analytics on drawer open (and the feed may `cached_only=true` prefetch for hot wallets).
 - Prefetches book snapshot on BOOK/TRADE tabs.
 - In-flight de-dupe + TTL caches to avoid request storms.
 
@@ -849,65 +839,54 @@ DOME_ENRICH_MAX_CONCURRENT_REQUESTS=8
 DOME_ENRICH_MAX_CONCURRENT_HEAVY_REQUESTS=2
 ```
 
-### Wallet Analytics (HFT-safe) + Equity Curves + ROE/WR/PF
+### Wallet Analytics + Copy Curves (cached + SWR)
 
-**Goal:** Provide a *retail-friendly* and *quant-auditable* wallet panel without touching the HFT path.
+**Goal:** fast, defensible wallet performance + copy curves without blocking the HFT path.
 
-We compute two **realized PnL-to-date** curves per wallet:
-
-1. **Wallet (Realized)** (ground truth): Dome `GET /polymarket/wallet/pnl/{wallet}` with `granularity=day`.
-2. **Copy (Fixed $/order)** (follower model): simulated from BetterBot’s locally persisted Dome WS order log (`dome_order_events`).
-
-> Important: These are *realized* PnL curves (not mark-to-market equity). Polymarket’s dashboard often emphasizes unrealized PnL; Dome’s wallet PnL endpoint is realized (sells + redeems).
+**Curves:**
+1. **Wallet (realized)**: Dome `GET /polymarket/wallet/pnl/{wallet}` (`granularity=day`), normalized so the first day starts at `0`.
+2. **Copy curve** (choose via `copy_model`):
+   - `scaled` (default): scales the wallet realized curve to the follower’s fixed sizing and subtracts execution costs derived from local order flow.
+   - `mtm`: trade-replay backtest with daily mark-to-market using price history (slower; more realistic).
 
 #### API endpoint
 
-- `GET /api/wallet/analytics?wallet_address=0x...&force=false`
-  - Returns cached analytics if fresh.
-  - If `force=true` or cache is stale, recomputes and refreshes cache.
+`GET /api/wallet/analytics?wallet_address=0x...&friction_mode=base&copy_model=scaled&force=false&cached_only=false`
+
+Query params:
+- `friction_mode`: `optimistic|base|pessimistic`
+- `copy_model`: `scaled|mtm`
+- `cached_only=true` → returns **204** when missing (used for safe background prefetch)
+- `force=true` bypasses the TTL (use sparingly)
 
 #### Storage & caching
 
-- Uses the SQLite cache table `dome_cache`.
-- Cache key: `wallet_analytics_v3:{wallet_address}`
-- TTL: **120 seconds** (intentionally short so charts track new WS events quickly).
-- On upstream failures (Dome 502 / timeouts): serve stale cache if available.
+- SQLite cache table: `dome_cache`
+- Cache key: `wallet_analytics_v5:{wallet}:{friction_mode}:{copy_model}`
+- TTL: **900s**
+- SWR: if cached exists and `force=false`, serve immediately; stale entries are refreshed in the background. On upstream failures: fall back to stale cache.
 
-#### Copy-trade simulation model
+#### Execution costs (“Friction”)
 
-- Fixed follower sizing: `fixed_buy_notional_usd` (default `$1`) per **BUY**.
-- Follower shares per BUY: `shares = notional / price`.
-- SELL handling is best-effort; many wallets are effectively BUY-only at the order feed level.
-- Warmup window is used to build initial positions for sells inside the lookback.
+- UI label: **Execution Costs (assumed)**
+- Costs are computed as `friction_pct × traded_notional` across BUY+SELL fills.
+- Costs are already subtracted from the copy curve and also surfaced as `copy_total_friction_usd`.
 
-**Hard-earned reality:** for many HFT wallets, realized gains are dominated by on-chain MERGE/REDEEM flows that don’t cleanly map to WS BUY/SELL events. In that case, event-based copy simulation can be flat.
+#### Metrics (per curve)
 
-**Fallback behavior:** if simulated copy curve is effectively 0 but wallet realized curve is non-zero, BetterBot scales the wallet realized curve by an estimated notional-per-order ratio so the UI never shows an empty copy curve.
-
-#### ROE / Win Rate / Profit Factor (per-curve)
-
-Returned fields include:
-- `*_roe_pct`: `total_realized_pnl / denom_usd * 100`
-- `*_roe_denom_usd`:
-  - wallet denom ≈ sum of BUY notionals from the locally persisted order flow (approximate, but fast)
-  - copy denom ≈ `#BUY orders × fixed_buy_notional_usd`
-- `*_win_rate`: fraction of positive daily deltas in the realized curve
-- `*_profit_factor`: gross_profit / gross_loss (capped at 999 to avoid JSON infinities)
+- `*_roe_pct`: `total_pnl_usd / denom_usd × 100`
+- `*_win_rate`: fraction of positive daily deltas
+- `*_profit_factor`: gross_profit / gross_loss (capped)
+- Sharpe uses daily bucketing + missing-day fill + winsorization for stability.
 
 #### Frontend rendering notes
 
-SignalCard CHART panel now includes axis context:
-- y-axis: min/max **USD realized PnL-to-date**
-- x-axis: start/end date labels
-- stats tiles: ROE%, WR, PF
+PERFORMANCE tab shows wallet + copy curves with axis min/max + date labels, plus stats tiles (ROE%, WR, Profit Factor).
 
-#### Background refresh
+#### Background refresh + pruning
 
-`wallet_analytics_polling` runs periodically but recomputes only when cache is stale:
-
-```bash
-WALLET_ANALYTICS_POLL_SECS=3600
-```
+- `wallet_analytics_polling` periodically warms **scaled** analytics for recently-active wallets for OPT/BASE/PESS.
+- `storage_pruning_polling` prunes old `dome_order_events` (`DOME_ORDER_EVENTS_RETENTION_DAYS`, `STORAGE_PRUNE_POLL_SECS`) to keep the DB bounded.
 
 ### Market Snapshot / Orderbook (Now) - CLOB Token ID Pitfall
 
@@ -944,9 +923,9 @@ lsof -nP -iTCP:3000 -sTCP:LISTEN
 curl -s http://localhost:3000/health
 ```
 
-2) If CHART/BOOK panels spin forever:
+2) If PERFORMANCE/BOOK panels spin forever:
 - Frontend has request timeouts + in-flight TTL to avoid infinite spinners.
-- Check backend logs (`/tmp/betterbot-backend.log`) for upstream 502/timeouts.
+- Check backend logs (terminal output or `.runlogs/backend.log` if you start via scripts) for upstream 502/timeouts.
 
 3) If signal titles look corrupted:
 - `SignalDetails.market_title` must always be the **market title/question**, never a signal headline.
@@ -1155,8 +1134,7 @@ Position = 0.10 × $10,000 = $1,000
 ### Backend `.env`
 
 ```bash
-# Server
-PORT=3000
+# Server (backend currently binds to port 3000)
 RUST_LOG=info,betterbot=debug
 
 # Databases
@@ -1181,8 +1159,15 @@ KELLY_FRACTION=0.25
 # JWT
 JWT_SECRET=minimum-32-characters-change-in-production
 
-# Polling
-HASHDIVE_SCRAPE_INTERVAL=2700  # 45 minutes
+# Polling / background jobs (optional)
+POLL_INTERVAL_SECS=2700               # main polling loop (default 2700 = 45m)
+WALLET_ANALYTICS_POLL_SECS=3600       # wallet analytics warmer
+STORAGE_PRUNE_POLL_SECS=86400         # dome_order_events pruning sweep
+DOME_ORDER_EVENTS_RETENTION_DAYS=365  # min enforced in code
+
+# Tracked wallets (optional)
+# MORE_INSIDERS_CSV_PATH=/abs/path/to/more_insiders.csv
+# TRACKED_WALLETS_JSON='{"0xabc...": "insider_other"}'
 ```
 
 ### IMPORTANT: Preventing "no signals" / "missing DOME token" regressions
@@ -1196,6 +1181,9 @@ HASHDIVE_SCRAPE_INTERVAL=2700  # 45 minutes
 ```bash
 VITE_API_URL=http://localhost:3000
 VITE_WS_URL=ws://localhost:3000/ws
+
+# Optional: Privy login (if empty, Privy UI is disabled and the app falls back to password login)
+VITE_PRIVY_APP_ID=
 
 # Feature flags
 VITE_ENABLE_TRADING=false
@@ -1303,3 +1291,13 @@ curl http://localhost:3000/api/signals \
 const ws = new WebSocket('ws://localhost:3000/ws?token=YOUR_TOKEN');
 ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
+
+---
+
+## Session Learnings (2026-01-05)
+
+- **Privy blank screen:** An empty `VITE_PRIVY_APP_ID` can crash the React mount; gate `PrivyProvider` behind a `PRIVY_ENABLED` flag.
+- **Signal context payloads:** Returning full context for large lists can exceed tens of MB and break browser hydration; default to **lite context** and fetch full context on-demand.
+- **Wallet analytics reliability:** Keep `/api/wallet/analytics` fast via caching + SWR; warm OPT/BASE/PESS; add `cached_only=true` (returns **204** when cold) for safe background prefetch.
+- **Copy curve realism:** Realized-only copy curves go flat; default to `copy_model=scaled` (scaled wallet pnl net execution costs) and offer `copy_model=mtm` (trade replay + daily MTM) for a more defensible backtest.
+- **Frontend UX:** Wallet analytics needs longer timeouts + “still computing… retry” behavior; label friction as **Execution Costs (assumed)** and rename **PF → Profit Factor**.

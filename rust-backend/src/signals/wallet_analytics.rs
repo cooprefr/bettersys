@@ -3,8 +3,11 @@ use crate::{
     signals::db_storage::DbSignalStorage,
 };
 use anyhow::{Context, Result};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use serde_json::Value;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
@@ -20,6 +23,27 @@ pub enum FrictionMode {
     Base,
     /// Pessimistic: 2.00% per trade (1.50% spread + 0.50% slippage)
     Pessimistic,
+}
+
+/// Copy-curve model.
+///
+/// - `scaled`: fast, stable, and explainable (scaled wallet pnl curve net of execution costs)
+/// - `mtm`: trade replay + daily mark-to-market using price history (more realistic, heavier)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CopyCurveModel {
+    #[default]
+    Scaled,
+    Mtm,
+}
+
+impl CopyCurveModel {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "mtm" => Self::Mtm,
+            _ => Self::Scaled,
+        }
+    }
 }
 
 impl FrictionMode {
@@ -107,6 +131,7 @@ pub struct WalletAnalyticsParams {
     pub fixed_buy_notional_usd: f64,
     pub max_orders: usize,
     pub friction_mode: FrictionMode,
+    pub copy_model: CopyCurveModel,
 }
 
 impl Default for WalletAnalyticsParams {
@@ -118,22 +143,43 @@ impl Default for WalletAnalyticsParams {
             // Keep this modest so /api/wallet/analytics stays responsive even for very active wallets.
             max_orders: 2_000,
             friction_mode: FrictionMode::Base,
+            copy_model: CopyCurveModel::Scaled,
         }
     }
 }
 
-// Keep this fairly short so charts reflect new WS events quickly.
-const CACHE_TTL_SECONDS: i64 = 120;
+// Serve cached analytics very aggressively for UI snappiness.
+// A background refresher and on-demand SWR updates keep it reasonably fresh.
+pub const WALLET_ANALYTICS_CACHE_TTL_SECONDS: i64 = 900;
 
 #[inline]
-fn cache_key(wallet: &str, friction_mode: FrictionMode) -> String {
-    // v4: includes friction mode in cache key
+fn cache_key(wallet: &str, friction_mode: FrictionMode, copy_model: CopyCurveModel) -> String {
+    // v5: includes friction mode + copy model in cache key
     let mode_str = match friction_mode {
         FrictionMode::Optimistic => "opt",
         FrictionMode::Base => "base",
         FrictionMode::Pessimistic => "pess",
     };
-    format!("wallet_analytics_v4:{}:{}", wallet.to_lowercase(), mode_str)
+
+    let model_str = match copy_model {
+        CopyCurveModel::Scaled => "scaled",
+        CopyCurveModel::Mtm => "mtm",
+    };
+
+    format!(
+        "wallet_analytics_v5:{}:{}:{}",
+        wallet.to_lowercase(),
+        mode_str,
+        model_str
+    )
+}
+
+pub fn wallet_analytics_cache_key(
+    wallet: &str,
+    friction_mode: FrictionMode,
+    copy_model: CopyCurveModel,
+) -> String {
+    cache_key(wallet, friction_mode, copy_model)
 }
 
 pub async fn get_or_compute_wallet_analytics(
@@ -145,12 +191,12 @@ pub async fn get_or_compute_wallet_analytics(
     params: WalletAnalyticsParams,
 ) -> Result<WalletAnalytics> {
     let wallet_norm = wallet.to_lowercase();
-    let key = cache_key(&wallet_norm, params.friction_mode);
+    let key = cache_key(&wallet_norm, params.friction_mode, params.copy_model);
 
     // If cache exists but is stale, keep it around as a fallback when upstream APIs fail.
     let mut stale_fallback: Option<WalletAnalytics> = None;
     if let Ok(Some((json, fetched_at))) = storage.get_cache(&key) {
-        if !force && now - fetched_at <= CACHE_TTL_SECONDS {
+        if !force && now - fetched_at <= WALLET_ANALYTICS_CACHE_TTL_SECONDS {
             if let Ok(v) = serde_json::from_str::<WalletAnalytics>(&json) {
                 return Ok(v);
             }
@@ -233,7 +279,7 @@ pub async fn compute_wallet_analytics(
     };
 
     let wallet_realized_curve: Vec<EquityPoint> = match tokio::time::timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(2),
         rest.get_wallet_pnl(
             wallet,
             WalletPnlGranularity::Day,
@@ -261,73 +307,89 @@ pub async fn compute_wallet_analytics(
         }
     };
 
-    let mut copy_result = compute_copy_trade_curve(
+    // Normalize the wallet curve to start at 0 within the window. This improves UI interpretability
+    // and keeps ROE/PF/etc unchanged (since they use deltas).
+    let mut wallet_realized_curve = wallet_realized_curve;
+    normalize_curve_to_zero(&mut wallet_realized_curve);
+
+    // Determine the copy sizing scale so that an average BUY maps to `fixed_buy_notional_usd`.
+    let scale = compute_copy_scale_factor(&orders, start_time, params.fixed_buy_notional_usd);
+
+    // Simulate which fills would actually execute (so SELL friction isn’t overcounted when we don’t
+    // have inventory due to truncated warmup), and aggregate notional per day.
+    let (daily_trade_notional, trade_count, buy_count) = simulate_copy_trade_notional(
         &orders,
         &activities,
+        fetch_start_time,
         start_time,
-        params.fixed_buy_notional_usd,
         now,
-        params.friction_mode,
+        scale,
     );
 
-    // Settle open positions using market resolution data.
-    // This is the key difference from the wallet curve - we simulate what a copy trader
-    // would actually realize based on market outcomes, not the whale's actual sizing.
     let friction_pct = params.friction_mode.total_friction_pct() / 100.0;
-    if !copy_result.open_positions.is_empty() {
-        let (settlement_pnl, daily_settlements) = settle_open_positions(
-            rest,
+    let (daily_friction_costs, total_friction_usd) = trade_notional_to_friction_costs(
+        &daily_trade_notional,
+        friction_pct,
+    );
+
+    // Fast model: scaled wallet curve net of execution costs.
+    let scaled_wallet_curve: Vec<EquityPoint> = wallet_realized_curve
+        .iter()
+        .map(|p| EquityPoint {
+            timestamp: p.timestamp,
+            value: p.value * scale,
+        })
+        .collect();
+    let scaled_copy_curve = apply_daily_costs_to_curve(&scaled_wallet_curve, &daily_friction_costs);
+
+    let mtm_fallback_needed = params.copy_model == CopyCurveModel::Mtm || scaled_copy_curve.len() < 2;
+    let mtm_result = if mtm_fallback_needed {
+        compute_copy_trade_curve_mtm(
             storage,
-            &copy_result.open_positions,
+            rest,
+            &orders,
+            &activities,
+            fetch_start_time,
+            start_time,
             now,
+            scale,
             friction_pct,
         )
-        .await;
+        .await
+    } else {
+        None
+    };
 
-        // Merge settlement PnL into the curve
-        if !daily_settlements.is_empty() {
-            // Convert existing curve to a mutable map
-            let mut daily_pnl: BTreeMap<i64, f64> = BTreeMap::new();
-            let mut running_equity = 0.0;
-
-            // First, convert curve back to daily deltas
-            let mut prev_value = 0.0;
-            for point in &copy_result.curve {
-                let delta = point.value - prev_value;
-                *daily_pnl.entry(point.timestamp).or_insert(0.0) += delta;
-                prev_value = point.value;
+    // Select copy curve model.
+    let scaled_ok = scaled_copy_curve.len() >= 2;
+    let scaled_bundle = (scaled_copy_curve, total_friction_usd, trade_count, buy_count);
+    let (mut copy_curve, copy_total_friction_usd, copy_trade_count, copy_buy_count) =
+        match params.copy_model {
+            CopyCurveModel::Scaled => {
+                if scaled_ok {
+                    scaled_bundle
+                } else if let Some(r) = mtm_result {
+                    (r.curve, r.total_friction_usd, r.trade_count, r.buy_count)
+                } else {
+                    scaled_bundle
+                }
             }
-
-            // Add settlement deltas
-            for (day, delta) in daily_settlements {
-                *daily_pnl.entry(day).or_insert(0.0) += delta;
-            }
-
-            // Rebuild curve from merged deltas
-            copy_result.curve.clear();
-            for (day, delta) in daily_pnl {
-                running_equity += delta;
-                copy_result.curve.push(EquityPoint {
-                    timestamp: day,
-                    value: running_equity,
-                });
-            }
-
-            // Update friction total with exit friction from settlements
-            copy_result.total_friction_usd += settlement_pnl.abs() * (friction_pct / 2.0);
-        }
-    }
+            CopyCurveModel::Mtm => match mtm_result {
+                Some(r) if r.curve.len() >= 2 => (r.curve, r.total_friction_usd, r.trade_count, r.buy_count),
+                _ => scaled_bundle,
+            },
+        };
 
     // Ensure curve has at least start/end points for UI rendering
-    if copy_result.curve.is_empty() {
+    if copy_curve.is_empty() {
         let start = day_bucket(start_time);
         let end = day_bucket(now);
-        copy_result.curve.push(EquityPoint {
+        copy_curve.push(EquityPoint {
             timestamp: start,
             value: 0.0,
         });
         if end != start {
-            copy_result.curve.push(EquityPoint {
+            copy_curve.push(EquityPoint {
                 timestamp: end,
                 value: 0.0,
             });
@@ -335,23 +397,25 @@ pub async fn compute_wallet_analytics(
     }
 
     let wallet_total_pnl = curve_total_pnl(&wallet_realized_curve);
-    let copy_total_pnl = curve_total_pnl(&copy_result.curve);
+    let copy_total_pnl = curve_total_pnl(&copy_curve);
 
     let wallet_roe_denom_usd = compute_wallet_roe_denom_usd(&orders, start_time);
     let wallet_roe_pct = compute_roe_pct(wallet_total_pnl, wallet_roe_denom_usd);
     let (wallet_win_rate, wallet_profit_factor) =
         compute_curve_win_rate_profit_factor(&wallet_realized_curve);
 
-    let copy_roe_denom_usd =
-        compute_copy_roe_denom_usd(&orders, start_time, params.fixed_buy_notional_usd);
+    let copy_roe_denom_usd = if copy_buy_count > 0 && params.fixed_buy_notional_usd > 0.0 {
+        Some(copy_buy_count as f64 * params.fixed_buy_notional_usd)
+    } else {
+        None
+    };
     let copy_roe_pct = compute_roe_pct(copy_total_pnl, copy_roe_denom_usd);
-    let (copy_win_rate, copy_profit_factor) =
-        compute_curve_win_rate_profit_factor(&copy_result.curve);
+    let (copy_win_rate, copy_profit_factor) = compute_curve_win_rate_profit_factor(&copy_curve);
 
-    let sharpe_7d = compute_curve_sharpe(&copy_result.curve, now, 7);
-    let sharpe_14d = compute_curve_sharpe(&copy_result.curve, now, 14);
-    let sharpe_30d = compute_curve_sharpe(&copy_result.curve, now, 30);
-    let sharpe_90d = compute_curve_sharpe(&copy_result.curve, now, 90);
+    let sharpe_7d = compute_curve_sharpe(&copy_curve, now, 7);
+    let sharpe_14d = compute_curve_sharpe(&copy_curve, now, 14);
+    let sharpe_30d = compute_curve_sharpe(&copy_curve, now, 30);
+    let sharpe_90d = compute_curve_sharpe(&copy_curve, now, 90);
 
     // Friction stats for the copy trading simulation
     let friction_mode_str = match params.friction_mode {
@@ -366,7 +430,7 @@ pub async fn compute_wallet_analytics(
         lookback_days: params.lookback_days,
         fixed_buy_notional_usd: params.fixed_buy_notional_usd,
         wallet_realized_curve,
-        copy_trade_curve: copy_result.curve,
+        copy_trade_curve: copy_curve,
         wallet_total_pnl,
         wallet_roe_pct,
         wallet_roe_denom_usd,
@@ -383,8 +447,8 @@ pub async fn compute_wallet_analytics(
         copy_sharpe_90d: sharpe_90d,
         copy_friction_mode: Some(friction_mode_str.to_string()),
         copy_friction_pct_per_trade: Some(params.friction_mode.total_friction_pct()),
-        copy_total_friction_usd: Some(copy_result.total_friction_usd),
-        copy_trade_count: Some(copy_result.trade_count),
+        copy_total_friction_usd: Some(copy_total_friction_usd),
+        copy_trade_count: Some(copy_trade_count),
     })
 }
 
@@ -837,6 +901,718 @@ async fn settle_open_positions(
     (total_settlement_pnl, daily_settlements)
 }
 
+fn normalize_curve_to_zero(curve: &mut Vec<EquityPoint>) {
+    if curve.len() < 2 {
+        return;
+    }
+    curve.sort_by_key(|p| p.timestamp);
+    let base = curve.first().map(|p| p.value).unwrap_or(0.0);
+    if !base.is_finite() {
+        return;
+    }
+    for p in curve.iter_mut() {
+        if p.value.is_finite() {
+            p.value -= base;
+        }
+    }
+}
+
+fn compute_copy_scale_factor(orders: &[DomeOrder], start_time: i64, fixed_buy_notional_usd: f64) -> f64 {
+    if !fixed_buy_notional_usd.is_finite() || fixed_buy_notional_usd <= 0.0 {
+        return 1.0;
+    }
+
+    let mut notional_sum = 0.0;
+    let mut n = 0.0;
+    for o in orders {
+        if o.timestamp < start_time {
+            continue;
+        }
+        if o.side.to_uppercase() != "BUY" {
+            continue;
+        }
+        let price = o.price;
+        let shares = o.shares_normalized;
+        if !price.is_finite() || price <= 0.0 || !shares.is_finite() || shares <= 0.0 {
+            continue;
+        }
+        notional_sum += shares * price;
+        n += 1.0;
+    }
+
+    if n <= 0.0 {
+        return 1.0;
+    }
+    let avg = (notional_sum / n).max(1e-6);
+    fixed_buy_notional_usd / avg
+}
+
+fn simulate_copy_trade_notional(
+    orders: &[DomeOrder],
+    activities: &[ActivityItem],
+    fetch_start_time: i64,
+    start_time: i64,
+    now: i64,
+    scale: f64,
+) -> (BTreeMap<i64, f64>, u64, u64) {
+    #[derive(Clone)]
+    enum CopyEvent {
+        Order {
+            token_id: String,
+            condition_id: String,
+            side: String,
+            price: f64,
+            shares_normalized: f64,
+            timestamp: i64,
+        },
+        Redeem {
+            token_id: Option<String>,
+            condition_id: String,
+            timestamp: i64,
+        },
+    }
+
+    let mut events: Vec<CopyEvent> = Vec::with_capacity(orders.len() + activities.len());
+    for o in orders {
+        if o.timestamp < fetch_start_time || o.timestamp > now {
+            continue;
+        }
+        events.push(CopyEvent::Order {
+            token_id: o.token_id.clone(),
+            condition_id: o.condition_id.clone(),
+            side: o.side.clone(),
+            price: o.price,
+            shares_normalized: o.shares_normalized,
+            timestamp: o.timestamp,
+        });
+    }
+    for a in activities {
+        if a.timestamp < fetch_start_time || a.timestamp > now {
+            continue;
+        }
+        if a.side.to_uppercase() != "REDEEM" {
+            continue;
+        }
+        let token_id = if a.token_id.trim().is_empty() {
+            None
+        } else {
+            Some(a.token_id.clone())
+        };
+        events.push(CopyEvent::Redeem {
+            token_id,
+            condition_id: a.condition_id.clone(),
+            timestamp: a.timestamp,
+        });
+    }
+    events.sort_by_key(|e| match e {
+        CopyEvent::Order { timestamp, .. } => *timestamp,
+        CopyEvent::Redeem { timestamp, .. } => *timestamp,
+    });
+
+    // Positions keyed by token_id (token-specific pricing/settlement), plus token_id -> condition_id.
+    let mut shares_by_token: HashMap<String, f64> = HashMap::new();
+    let mut condition_by_token: HashMap<String, String> = HashMap::new();
+
+    let mut daily_notional: BTreeMap<i64, f64> = BTreeMap::new();
+    let mut trade_count: u64 = 0;
+    let mut buy_count: u64 = 0;
+
+    for e in events {
+        match e {
+            CopyEvent::Order {
+                token_id,
+                condition_id,
+                side,
+                price,
+                shares_normalized,
+                timestamp,
+            } => {
+                if !price.is_finite() || price <= 0.0 {
+                    continue;
+                }
+                if !shares_normalized.is_finite() || shares_normalized <= 0.0 {
+                    continue;
+                }
+
+                condition_by_token
+                    .entry(token_id.clone())
+                    .or_insert(condition_id);
+
+                let side = side.to_uppercase();
+                let scaled_shares = shares_normalized * scale;
+                if scaled_shares <= 0.0 || !scaled_shares.is_finite() {
+                    continue;
+                }
+
+                if side == "BUY" {
+                    let p = shares_by_token.entry(token_id).or_insert(0.0);
+                    *p += scaled_shares;
+                    if timestamp >= start_time {
+                        buy_count += 1;
+                        trade_count += 1;
+                        let day = day_bucket(timestamp);
+                        *daily_notional.entry(day).or_insert(0.0) += scaled_shares * price;
+                    }
+                } else if side == "SELL" {
+                    let p = shares_by_token.entry(token_id).or_insert(0.0);
+                    if *p <= 1e-12 {
+                        continue;
+                    }
+                    let sell_shares = scaled_shares.min(*p);
+                    if sell_shares <= 1e-12 {
+                        continue;
+                    }
+                    *p -= sell_shares;
+                    if *p <= 1e-12 {
+                        *p = 0.0;
+                    }
+
+                    if timestamp >= start_time {
+                        trade_count += 1;
+                        let day = day_bucket(timestamp);
+                        *daily_notional.entry(day).or_insert(0.0) += sell_shares * price;
+                    }
+                }
+            }
+            CopyEvent::Redeem {
+                token_id,
+                condition_id,
+                ..
+            } => {
+                if let Some(token_id) = token_id {
+                    shares_by_token.insert(token_id, 0.0);
+                    continue;
+                }
+
+                // If token_id is missing, close any token positions matching this condition.
+                let to_close: Vec<String> = condition_by_token
+                    .iter()
+                    .filter_map(|(tid, cid)| {
+                        if cid == &condition_id {
+                            Some(tid.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                for tid in to_close {
+                    shares_by_token.insert(tid, 0.0);
+                }
+            }
+        }
+    }
+
+    (daily_notional, trade_count, buy_count)
+}
+
+fn trade_notional_to_friction_costs(
+    daily_trade_notional: &BTreeMap<i64, f64>,
+    friction_pct: f64,
+) -> (BTreeMap<i64, f64>, f64) {
+    let mut daily_costs: BTreeMap<i64, f64> = BTreeMap::new();
+    let mut total = 0.0;
+
+    if !friction_pct.is_finite() || friction_pct <= 0.0 {
+        return (daily_costs, 0.0);
+    }
+
+    for (day, notional) in daily_trade_notional {
+        if !notional.is_finite() || *notional <= 0.0 {
+            continue;
+        }
+        let cost = notional * friction_pct;
+        if !cost.is_finite() || cost <= 0.0 {
+            continue;
+        }
+        daily_costs.insert(*day, cost);
+        total += cost;
+    }
+
+    (daily_costs, total)
+}
+
+fn apply_daily_costs_to_curve(
+    curve: &[EquityPoint],
+    daily_costs: &BTreeMap<i64, f64>,
+) -> Vec<EquityPoint> {
+    if curve.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out: Vec<EquityPoint> = curve.to_vec();
+    out.sort_by_key(|p| p.timestamp);
+
+    let mut running_cost = 0.0;
+    let mut cost_iter = daily_costs.iter().peekable();
+
+    for p in out.iter_mut() {
+        let day = day_bucket(p.timestamp);
+        while let Some((&cost_day, &cost)) = cost_iter.peek() {
+            if cost_day > day {
+                break;
+            }
+            running_cost += cost;
+            let _ = cost_iter.next();
+        }
+        p.value -= running_cost;
+    }
+
+    out
+}
+
+#[derive(Debug, Clone)]
+struct CopyMtmResult {
+    curve: Vec<EquityPoint>,
+    total_friction_usd: f64,
+    trade_count: u64,
+    buy_count: u64,
+}
+
+async fn compute_copy_trade_curve_mtm(
+    storage: &DbSignalStorage,
+    rest: &DomeRestClient,
+    orders: &[DomeOrder],
+    activities: &[ActivityItem],
+    fetch_start_time: i64,
+    start_time: i64,
+    now: i64,
+    scale: f64,
+    friction_pct: f64,
+) -> Option<CopyMtmResult> {
+    if scale <= 0.0 || !scale.is_finite() {
+        return None;
+    }
+
+    #[derive(Clone)]
+    enum CopyEvent {
+        Order {
+            token_id: String,
+            condition_id: String,
+            side: String,
+            price: f64,
+            shares_normalized: f64,
+            timestamp: i64,
+        },
+        Redeem {
+            token_id: Option<String>,
+            condition_id: String,
+            price: f64,
+            timestamp: i64,
+        },
+    }
+
+    let mut events: Vec<CopyEvent> = Vec::with_capacity(orders.len() + activities.len());
+
+    for o in orders {
+        if o.timestamp < fetch_start_time || o.timestamp > now {
+            continue;
+        }
+        events.push(CopyEvent::Order {
+            token_id: o.token_id.clone(),
+            condition_id: o.condition_id.clone(),
+            side: o.side.clone(),
+            price: o.price,
+            shares_normalized: o.shares_normalized,
+            timestamp: o.timestamp,
+        });
+    }
+
+    for a in activities {
+        if a.timestamp < fetch_start_time || a.timestamp > now {
+            continue;
+        }
+        if a.side.to_uppercase() != "REDEEM" {
+            continue;
+        }
+        let token_id = if a.token_id.trim().is_empty() {
+            None
+        } else {
+            Some(a.token_id.clone())
+        };
+        events.push(CopyEvent::Redeem {
+            token_id,
+            condition_id: a.condition_id.clone(),
+            price: a.price,
+            timestamp: a.timestamp,
+        });
+    }
+
+    events.sort_by_key(|e| match e {
+        CopyEvent::Order { timestamp, .. } => *timestamp,
+        CopyEvent::Redeem { timestamp, .. } => *timestamp,
+    });
+
+    // Fetch daily candles for the traded conditions (token-specific series). Best-effort and cached.
+    const MAX_CONDITIONS: usize = 40;
+    const CANDLE_LOOKBACK_DAYS: i64 = 200;
+    const CANDLE_CACHE_TTL_SECONDS: i64 = 6 * 3600;
+
+    // Pull the most-recent traded conditions first.
+    let mut condition_ids: Vec<String> = Vec::new();
+    let mut seen_conditions: HashSet<String> = HashSet::new();
+    for o in orders.iter().rev() {
+        if o.timestamp < fetch_start_time || o.timestamp > now {
+            continue;
+        }
+        if seen_conditions.insert(o.condition_id.clone()) {
+            condition_ids.push(o.condition_id.clone());
+        }
+        if condition_ids.len() >= MAX_CONDITIONS {
+            break;
+        }
+    }
+
+    let candle_start = now - (CANDLE_LOOKBACK_DAYS * 86_400);
+    let mut token_close_by_day: HashMap<String, HashMap<i64, f64>> = HashMap::new();
+
+    let sem = Arc::new(tokio::sync::Semaphore::new(6));
+    let mut futs: FuturesUnordered<_> = FuturesUnordered::new();
+    for condition_id in condition_ids {
+        let sem = sem.clone();
+        futs.push(async move {
+            let _permit = sem.acquire().await.ok()?;
+
+            let cache_key = format!("candles_day_v1:{}", condition_id);
+            let cached = storage.get_cache(&cache_key).ok().flatten();
+
+            let raw: Option<Value> = match cached {
+                Some((json, fetched_at)) if now - fetched_at < CANDLE_CACHE_TTL_SECONDS => {
+                    serde_json::from_str::<Value>(&json).ok()
+                }
+                _ => {
+                    match tokio::time::timeout(
+                        Duration::from_millis(750),
+                        rest.get_candlesticks_raw(&condition_id, candle_start, now, Some(1440)),
+                    )
+                    .await
+                    {
+                        Ok(Ok(v)) => {
+                            let _ = storage.upsert_cache(&cache_key, &v.to_string(), now);
+                            Some(v)
+                        }
+                        Ok(Err(e)) => {
+                            warn!("candlesticks fetch failed for {}: {}", condition_id, e);
+                            None
+                        }
+                        Err(_) => None,
+                    }
+                }
+            };
+
+            let raw = raw?;
+            Some(parse_token_daily_closes(&raw))
+        });
+    }
+
+    while let Some(res) = futs.next().await {
+        let Some(parsed) = res else {
+            continue;
+        };
+        for (token_id, closes) in parsed {
+            if closes.is_empty() {
+                continue;
+            }
+            token_close_by_day
+                .entry(token_id)
+                .or_insert_with(HashMap::new)
+                .extend(closes);
+        }
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct TokenPosition {
+        condition_id: String,
+        shares: f64,
+        cost_usd: f64,
+        last_price: f64,
+    }
+
+    let mut pos_by_token: HashMap<String, TokenPosition> = HashMap::new();
+    let mut condition_by_token: HashMap<String, String> = HashMap::new();
+
+    let mut realized_total = 0.0;
+    let mut friction_total = 0.0;
+
+    let mut in_window_trade_count: u64 = 0;
+    let mut in_window_buy_count: u64 = 0;
+    let mut in_window_friction: f64 = 0.0;
+
+    let mut curve: Vec<EquityPoint> = Vec::new();
+
+    let fetch_day = day_bucket(fetch_start_time);
+    let start_day = day_bucket(start_time);
+    let end_day = day_bucket(now);
+    if end_day < fetch_day {
+        return None;
+    }
+
+    let mut event_idx = 0usize;
+    let mut day = fetch_day;
+    while day <= end_day {
+        while event_idx < events.len() {
+            let e_day = match &events[event_idx] {
+                CopyEvent::Order { timestamp, .. } => day_bucket(*timestamp),
+                CopyEvent::Redeem { timestamp, .. } => day_bucket(*timestamp),
+            };
+            if e_day > day {
+                break;
+            }
+
+            let e = events[event_idx].clone();
+            event_idx += 1;
+
+            match e {
+                CopyEvent::Order {
+                    token_id,
+                    condition_id,
+                    side,
+                    price,
+                    shares_normalized,
+                    timestamp,
+                } => {
+                    if !price.is_finite() || price <= 0.0 {
+                        continue;
+                    }
+                    if !shares_normalized.is_finite() || shares_normalized <= 0.0 {
+                        continue;
+                    }
+                    let side = side.to_uppercase();
+                    let scaled_shares = shares_normalized * scale;
+                    if !scaled_shares.is_finite() || scaled_shares <= 0.0 {
+                        continue;
+                    }
+
+                    condition_by_token
+                        .entry(token_id.clone())
+                        .or_insert(condition_id.clone());
+
+                    let p = pos_by_token.entry(token_id.clone()).or_insert_with(|| TokenPosition {
+                        condition_id,
+                        ..Default::default()
+                    });
+                    p.last_price = price;
+
+                    if side == "BUY" {
+                        p.shares += scaled_shares;
+                        p.cost_usd += scaled_shares * price;
+
+                        let notional = scaled_shares * price;
+                        let friction_cost = notional * friction_pct;
+                        friction_total += friction_cost;
+
+                        if timestamp >= start_time {
+                            in_window_buy_count += 1;
+                            in_window_trade_count += 1;
+                            in_window_friction += friction_cost;
+                        }
+                    } else if side == "SELL" {
+                        if p.shares <= 1e-12 {
+                            continue;
+                        }
+                        let sell_shares = scaled_shares.min(p.shares);
+                        if sell_shares <= 1e-12 {
+                            continue;
+                        }
+
+                        let avg_cost = if p.shares > 0.0 {
+                            p.cost_usd / p.shares
+                        } else {
+                            0.0
+                        };
+                        let proceeds = sell_shares * price;
+                        let cost = sell_shares * avg_cost;
+                        let realized = proceeds - cost;
+
+                        p.shares -= sell_shares;
+                        p.cost_usd -= cost;
+                        if p.shares <= 1e-12 {
+                            p.shares = 0.0;
+                            p.cost_usd = 0.0;
+                        }
+
+                        realized_total += realized;
+
+                        let friction_cost = proceeds * friction_pct;
+                        friction_total += friction_cost;
+
+                        if timestamp >= start_time {
+                            in_window_trade_count += 1;
+                            in_window_friction += friction_cost;
+                        }
+                    }
+                }
+                CopyEvent::Redeem {
+                    token_id,
+                    condition_id,
+                    price,
+                    timestamp,
+                } => {
+                    let price = if price.is_finite() && price >= 0.0 {
+                        price
+                    } else {
+                        1.0
+                    };
+
+                    let mut to_close: Vec<String> = Vec::new();
+                    if let Some(token_id) = token_id {
+                        to_close.push(token_id);
+                    } else {
+                        for (tid, cid) in &condition_by_token {
+                            if cid == &condition_id {
+                                to_close.push(tid.clone());
+                            }
+                        }
+                    }
+
+                    for tid in to_close {
+                        let Some(p) = pos_by_token.get_mut(&tid) else {
+                            continue;
+                        };
+                        if p.shares <= 1e-12 {
+                            continue;
+                        }
+                        let proceeds = p.shares * price;
+                        let realized = proceeds - p.cost_usd;
+                        realized_total += realized;
+                        p.shares = 0.0;
+                        p.cost_usd = 0.0;
+
+                        // No execution friction on redeem.
+                        if timestamp >= start_time {
+                            // Redeems are not counted as trades.
+                        }
+                    }
+                }
+            }
+        }
+
+        // Mark-to-market at end-of-day.
+        let mut unrealized = 0.0;
+        for (tid, p) in &pos_by_token {
+            if p.shares <= 1e-12 {
+                continue;
+            }
+            let mark = token_close_by_day
+                .get(tid)
+                .and_then(|m| m.get(&day))
+                .copied()
+                .unwrap_or(p.last_price);
+            if !mark.is_finite() || mark < 0.0 {
+                continue;
+            }
+            unrealized += (p.shares * mark) - p.cost_usd;
+        }
+
+        let equity = realized_total - friction_total + unrealized;
+        curve.push(EquityPoint {
+            timestamp: day,
+            value: equity,
+        });
+
+        day += 86_400;
+    }
+
+    // Slice to window and normalize to start at 0.
+    let mut window_curve: Vec<EquityPoint> = curve
+        .into_iter()
+        .filter(|p| p.timestamp >= start_day)
+        .collect();
+
+    if window_curve.len() < 2 {
+        return None;
+    }
+
+    window_curve.sort_by_key(|p| p.timestamp);
+    let base = window_curve
+        .iter()
+        .find(|p| p.timestamp == start_day)
+        .or_else(|| window_curve.first())
+        .map(|p| p.value)
+        .unwrap_or(0.0);
+
+    if base.is_finite() {
+        for p in window_curve.iter_mut() {
+            p.value -= base;
+        }
+    }
+
+    Some(CopyMtmResult {
+        curve: window_curve,
+        total_friction_usd: in_window_friction,
+        trade_count: in_window_trade_count,
+        buy_count: in_window_buy_count,
+    })
+}
+
+fn parse_token_daily_closes(raw: &Value) -> HashMap<String, HashMap<i64, f64>> {
+    let mut out: HashMap<String, HashMap<i64, f64>> = HashMap::new();
+
+    let Some(tokens) = raw
+        .get("candlesticks")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
+    else {
+        return out;
+    };
+
+    for token_entry in tokens {
+        let Some(pair) = token_entry.as_array() else {
+            continue;
+        };
+        if pair.len() < 2 {
+            continue;
+        }
+        let Some(candles) = pair[0].as_array() else {
+            continue;
+        };
+        let token_id = pair[1]
+            .get("token_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let Some(token_id) = token_id else {
+            continue;
+        };
+
+        let mut by_day: HashMap<i64, f64> = HashMap::new();
+        for c in candles {
+            let ts = c
+                .get("end_period_ts")
+                .and_then(|v| v.as_i64())
+                .or_else(|| c.get("timestamp").and_then(|v| v.as_i64()));
+            let Some(ts) = ts else {
+                continue;
+            };
+
+            let close = c
+                .get("price")
+                .and_then(|p| p.get("close_dollars"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<f64>().ok())
+                .or_else(|| {
+                    c.get("price")
+                        .and_then(|p| p.get("close"))
+                        .and_then(|v| v.as_f64())
+                        .map(|n| if n > 1.5 { n / 100.0 } else { n })
+                });
+
+            let Some(close) = close else {
+                continue;
+            };
+            if !close.is_finite() {
+                continue;
+            }
+
+            by_day.insert(day_bucket(ts), close);
+        }
+
+        if !by_day.is_empty() {
+            out.insert(token_id, by_day);
+        }
+    }
+
+    out
+}
+
 fn compute_scaled_copy_curve(
     wallet_curve: &[EquityPoint],
     orders_sample: &[DomeOrder],
@@ -884,26 +1660,77 @@ fn day_bucket(ts: i64) -> i64 {
     (ts / 86_400) * 86_400
 }
 
+fn winsorize_in_place(values: &mut [f64], pct: f64) {
+    if values.len() < 10 {
+        return;
+    }
+
+    let mut sorted: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    if sorted.len() < 10 {
+        return;
+    }
+
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+
+    let lo_idx = (((n - 1) as f64) * pct).floor() as usize;
+    let hi_idx = (((n - 1) as f64) * (1.0 - pct)).ceil() as usize;
+    let lo = sorted[lo_idx.min(n - 1)];
+    let hi = sorted[hi_idx.min(n - 1)];
+    if !lo.is_finite() || !hi.is_finite() || lo >= hi {
+        return;
+    }
+
+    for v in values.iter_mut() {
+        if !v.is_finite() {
+            continue;
+        }
+        if *v < lo {
+            *v = lo;
+        } else if *v > hi {
+            *v = hi;
+        }
+    }
+}
+
 fn compute_curve_sharpe(curve: &[EquityPoint], now: i64, window_days: i64) -> Option<f64> {
     if curve.len() < 3 {
         return None;
     }
 
-    let cutoff = now - window_days * 86_400;
-    let mut deltas: Vec<(i64, f64)> = Vec::with_capacity(curve.len().saturating_sub(1));
-    for w in curve.windows(2) {
-        let (a, b) = (&w[0], &w[1]);
-        deltas.push((b.timestamp, b.value - a.value));
+    let start_day = day_bucket(now - window_days * 86_400);
+    let end_day = day_bucket(now);
+    if end_day < start_day {
+        return None;
     }
 
-    let window: Vec<f64> = deltas
-        .into_iter()
-        .filter(|(ts, _)| *ts >= cutoff)
-        .map(|(_, d)| d)
-        .collect();
+    // Normalize to daily deltas + fill missing days with 0 so the Sharpe is stable.
+    let mut by_day: BTreeMap<i64, f64> = BTreeMap::new();
+    for w in curve.windows(2) {
+        let (a, b) = (&w[0], &w[1]);
+        let day = day_bucket(b.timestamp);
+        if day < start_day || day > end_day {
+            continue;
+        }
+        let delta = b.value - a.value;
+        if !delta.is_finite() {
+            continue;
+        }
+        *by_day.entry(day).or_insert(0.0) += delta;
+    }
+
+    let mut window: Vec<f64> = Vec::new();
+    let mut day = start_day;
+    while day <= end_day {
+        window.push(*by_day.get(&day).unwrap_or(&0.0));
+        day += 86_400;
+    }
+
     if window.len() < 3 {
         return None;
     }
+
+    winsorize_in_place(&mut window, 0.05);
 
     let mean = window.iter().sum::<f64>() / window.len() as f64;
     let var = window

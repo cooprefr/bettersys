@@ -297,6 +297,9 @@ async fn main() -> Result<()> {
     // Phase 4+: Refresh wallet analytics (cached daily) for recently-active wallets.
     tokio::spawn(wallet_analytics_polling(signal_storage.clone(), dome_rest));
 
+    // Periodically prune old WS event logs (equity curve source of truth) to keep the DB lean.
+    tokio::spawn(storage_pruning_polling(signal_storage.clone()));
+
     // Phase 6: Spawn expiry edge alpha signal scanner (60-second intervals)
     tokio::spawn(expiry_edge_polling(
         signal_storage.clone(),
@@ -368,7 +371,7 @@ async fn wallet_analytics_polling(
             tokio::time::sleep(Duration::from_secs(3600)).await;
         }
     };
-    let params = WalletAnalyticsParams::default();
+    let base_params = WalletAnalyticsParams::default();
 
     loop {
         ticker.tick().await;
@@ -403,19 +406,68 @@ async fn wallet_analytics_polling(
 
         let mut refreshed = 0usize;
         for w in wallets {
-            let _ =
-                get_or_compute_wallet_analytics(&storage, &rest, &w, false, now, params.clone())
-                    .await;
+            for mode in [
+                crate::signals::wallet_analytics::FrictionMode::Optimistic,
+                crate::signals::wallet_analytics::FrictionMode::Base,
+                crate::signals::wallet_analytics::FrictionMode::Pessimistic,
+            ] {
+                let mut params = base_params.clone();
+                params.friction_mode = mode;
+                let _ = get_or_compute_wallet_analytics(
+                    &storage,
+                    &rest,
+                    &w,
+                    false,
+                    now,
+                    params,
+                )
+                .await;
+
+                // Be conservative with rate limits.
+                tokio::time::sleep(Duration::from_millis(125)).await;
+            }
             refreshed += 1;
 
-            // Be conservative with rate limits.
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            // Additional spacing per-wallet.
+            tokio::time::sleep(Duration::from_millis(125)).await;
         }
 
         info!(
             "📈 Wallet analytics refresh sweep done: {} wallets checked",
             refreshed
         );
+    }
+}
+
+async fn storage_pruning_polling(storage: Arc<DbSignalStorage>) -> Result<()> {
+    let poll_secs = env::var("STORAGE_PRUNE_POLL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(86_400);
+    let retention_days = env::var("DOME_ORDER_EVENTS_RETENTION_DAYS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(365)
+        .max(140);
+
+    let mut ticker = interval(Duration::from_secs(poll_secs));
+    loop {
+        ticker.tick().await;
+        let now = Utc::now().timestamp();
+        let cutoff = now - retention_days * 86_400;
+
+        match storage.prune_dome_order_events_before(cutoff) {
+            Ok(deleted) => {
+                if deleted > 0 {
+                    info!(
+                        "🧹 Pruned {} dome_order_events (retention={}d)",
+                        deleted, retention_days
+                    );
+                    let _ = storage.optimize();
+                }
+            }
+            Err(e) => warn!("storage prune failed: {}", e),
+        }
     }
 }
 
@@ -1153,11 +1205,36 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
     // On connect, immediately replay recent signals so the UI isn't empty even if REST polling fails.
     if let Ok(recent) = state.signal_storage.get_recent(200) {
+        let mut signal_ids: Vec<String> = Vec::with_capacity(recent.len());
+
+        // Send signals first.
         for signal in recent {
+            signal_ids.push(signal.id.clone());
             let msg = serde_json::to_string(&WsServerEvent::Signal(signal))
                 .unwrap_or_else(|_| "{}".to_string());
             if socket.send(Message::Text(msg)).await.is_err() {
                 return;
+            }
+        }
+
+        // Then replay any stored context for those signals so list metadata is hydrated immediately.
+        if let Ok(contexts) = state.signal_storage.get_contexts_for_signals(&signal_ids) {
+            for signal_id in signal_ids {
+                let Some(ctx) = contexts.get(&signal_id) else {
+                    continue;
+                };
+                let update = crate::models::SignalContextUpdate {
+                    signal_id: signal_id.clone(),
+                    context_version: ctx.context_version,
+                    enriched_at: ctx.enriched_at,
+                    status: ctx.status.clone(),
+                    context: ctx.context.lite(),
+                };
+                let msg = serde_json::to_string(&WsServerEvent::SignalContext(update))
+                    .unwrap_or_else(|_| "{}".to_string());
+                if socket.send(Message::Text(msg)).await.is_err() {
+                    return;
+                }
             }
         }
     }

@@ -9,6 +9,8 @@ import { useSignalStore } from '../../stores/signalStore';
 const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PAGE_SIZE = 500;
 const UPDOWN_NEEDLES = ['updown', 'up-or-down', 'up/down', 'up or down', 'up-down'];
+const WALLET_PREFETCH_MAX = 25;
+const WALLET_PREFETCH_CONCURRENCY = 3;
 
 interface SignalFeedProps {
   signals: Signal[];
@@ -29,11 +31,13 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
 
   const [inspectorSignalId, setInspectorSignalId] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('DETAILS');
+
+  const prefetchedWalletsRef = useRef<Set<string>>(new Set());
   
   // Filter state
   const [filters, setFilters] = useState<FilterState>({
     hideUpDown: false,
-    minConfidence: 0,
+    minConfidence: 50,
     whaleOnly: false,
   });
 
@@ -89,6 +93,64 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
       return true;
     });
   }, [signals, filters, isUpDownMarket]);
+
+  // Warm wallet analytics cache for the most visible wallets so PERFORMANCE opens instantly.
+  useEffect(() => {
+    if (!filteredSignals.length) return;
+
+    const wallets: string[] = [];
+    for (const s of filteredSignals) {
+      const st: any = s.signal_type as any;
+      const addr: string | null =
+        s.signal_type.type === 'TrackedWalletEntry'
+          ? st.wallet_address
+          : s.signal_type.type === 'WhaleFollowing'
+            ? st.whale_address
+            : s.signal_type.type === 'EliteWallet'
+              ? st.wallet_address
+              : s.signal_type.type === 'InsiderWallet'
+                ? st.wallet_address
+                : s.context?.order?.user || null;
+      if (typeof addr === 'string' && addr) wallets.push(addr.toLowerCase());
+      if (wallets.length >= WALLET_PREFETCH_MAX * 2) break;
+    }
+
+    const unique: string[] = [];
+    const seen = new Set<string>();
+    for (const w of wallets) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+      unique.push(w);
+    }
+
+    const toFetch = unique
+      .filter((w) => !prefetchedWalletsRef.current.has(w))
+      .slice(0, WALLET_PREFETCH_MAX);
+    if (!toFetch.length) return;
+
+    let cancelled = false;
+    const queue = [...toFetch];
+    for (const w of toFetch) prefetchedWalletsRef.current.add(w);
+
+    (async () => {
+      const workers = Array.from({ length: WALLET_PREFETCH_CONCURRENCY }, async () => {
+        while (!cancelled) {
+          const next = queue.pop();
+          if (!next) return;
+          try {
+            await api.getWalletAnalytics(next, false, 'base', 'scaled', true);
+          } catch {
+            // Best-effort.
+          }
+        }
+      });
+      await Promise.all(workers);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredSignals]);
 
   const loadOlderSignals = useCallback(async () => {
     if (isLoadingHistory || historyComplete) return;

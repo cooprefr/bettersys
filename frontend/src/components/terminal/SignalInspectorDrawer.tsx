@@ -11,7 +11,7 @@ import {
   metricColorClass,
 } from '../../utils/formatters';
 
-export type InspectorTab = 'DETAILS' | 'MARKET' | 'WALLET' | 'CHART' | 'BOOK' | 'TRADE';
+export type InspectorTab = 'DETAILS' | 'PERFORMANCE' | 'BOOK' | 'TRADE';
 
 type InFlight<T> = { startedAtMs: number; promise: Promise<T> };
 
@@ -137,6 +137,11 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [analyticsSource, setAnalyticsSource] = useState<'cache' | 'network' | null>(null);
   const [frictionMode, setFrictionMode] = useState<'optimistic' | 'base' | 'pessimistic'>('base');
+  const [copyModel, setCopyModel] = useState<'scaled' | 'mtm'>('scaled');
+
+  const analyticsRetryTimerRef = React.useRef<number | null>(null);
+  const analyticsRetryCountRef = React.useRef<number>(0);
+  const analyticsRetryKeyRef = React.useRef<string | null>(null);
 
   const [bookData, setBookData] = useState<MarketSnapshotResponse | null>(null);
   const [bookLoading, setBookLoading] = useState(false);
@@ -174,7 +179,24 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
     setAnalyticsSource(null);
     setTradeArmed(false);
     setTradeStatus(null);
+
+    if (analyticsRetryTimerRef.current) {
+      window.clearTimeout(analyticsRetryTimerRef.current);
+      analyticsRetryTimerRef.current = null;
+    }
+    analyticsRetryCountRef.current = 0;
+    analyticsRetryKeyRef.current = null;
   }, [signal?.id]);
+
+  useEffect(() => {
+    if (open) return;
+    if (analyticsRetryTimerRef.current) {
+      window.clearTimeout(analyticsRetryTimerRef.current);
+      analyticsRetryTimerRef.current = null;
+    }
+    analyticsRetryCountRef.current = 0;
+    analyticsRetryKeyRef.current = null;
+  }, [open]);
 
   const ctx = signal?.context;
   const derived = ctx?.derived;
@@ -206,18 +228,18 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
   const hasNumericClobTokenId = typeof clobTokenIdForBook === 'string' && /^[0-9]+$/.test(clobTokenIdForBook);
   const canFetchBook = Boolean(hasNumericClobTokenId || (marketSlugForBook && outcomeForBook));
 
-  const resolvedClobTokenId = useMemo(() => {
-    const token = bookData?.token_id;
-    if (typeof token === 'string' && /^[0-9]+$/.test(token)) return token;
-    if (hasNumericClobTokenId && typeof clobTokenIdForBook === 'string') return clobTokenIdForBook;
-    return null;
-  }, [bookData?.token_id, hasNumericClobTokenId, clobTokenIdForBook]);
-
   const fetchWalletAnalytics = useCallback(
     async (force: boolean = false) => {
       if (!walletAddress) return;
-      const key = `${walletAddress.toLowerCase()}:${frictionMode}`;
+      const key = `${walletAddress.toLowerCase()}:${frictionMode}:${copyModel}`;
       setAnalyticsError(null);
+
+      if (force || analyticsRetryKeyRef.current !== key) {
+        analyticsRetryKeyRef.current = key;
+        analyticsRetryCountRef.current = 0;
+      }
+
+      let keepLoading = false;
 
       try {
         if (!force && walletAnalyticsCache.has(key)) {
@@ -231,7 +253,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
         const nowMs = Date.now();
         const existing = walletAnalyticsInFlight.get(key);
         if (!existing || force || nowMs - existing.startedAtMs > INFLIGHT_WALLET_TTL_MS) {
-          const promise = api.getWalletAnalytics(walletAddress, force, frictionMode);
+          const promise = api.getWalletAnalytics(walletAddress, force, frictionMode, copyModel);
           walletAnalyticsInFlight.set(key, { startedAtMs: nowMs, promise });
         }
         const data = await walletAnalyticsInFlight.get(key)!.promise;
@@ -241,12 +263,28 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
         setAnalyticsSource('network');
       } catch (e: any) {
         walletAnalyticsInFlight.delete(key);
-        setAnalyticsError(e?.message ?? 'Failed to fetch wallet analytics');
+        const msg = String(e?.message || 'Failed to fetch wallet analytics');
+        if (msg.toLowerCase().includes('timed out') && analyticsRetryCountRef.current < 6) {
+          analyticsRetryCountRef.current += 1;
+          setAnalyticsError('Still computing… retrying');
+          keepLoading = true;
+          if (analyticsRetryTimerRef.current) {
+            window.clearTimeout(analyticsRetryTimerRef.current);
+          }
+          analyticsRetryTimerRef.current = window.setTimeout(() => {
+            analyticsRetryTimerRef.current = null;
+            fetchWalletAnalytics(false);
+          }, 900);
+          return;
+        }
+        setAnalyticsError(msg);
       } finally {
-        setAnalyticsLoading(false);
+        if (!keepLoading) {
+          setAnalyticsLoading(false);
+        }
       }
     },
-    [walletAddress, frictionMode]
+    [walletAddress, frictionMode, copyModel]
   );
 
   const fetchBook = useCallback(
@@ -322,27 +360,29 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
     // Only refetch if friction mode actually changed (not on initial mount)
     if (prevFrictionModeRef.current !== frictionMode) {
       prevFrictionModeRef.current = frictionMode;
-      // Clear cache entry for old friction mode and force fetch with new mode
+      // Clear displayed analytics and fetch for new mode (prefer cache for speed).
       setWalletAnalytics(null);
-      fetchWalletAnalytics(true); // Force fresh fetch from backend
+      fetchWalletAnalytics(false);
     }
   }, [frictionMode, open, canFetchAnalytics, fetchWalletAnalytics]);
 
+  const prevCopyModelRef = React.useRef(copyModel);
+  useEffect(() => {
+    if (!open || !canFetchAnalytics) return;
+    if (prevCopyModelRef.current !== copyModel) {
+      prevCopyModelRef.current = copyModel;
+      setWalletAnalytics(null);
+      fetchWalletAnalytics(false);
+    }
+  }, [copyModel, open, canFetchAnalytics, fetchWalletAnalytics]);
+
   useEffect(() => {
     if (!open) return;
-    if (activeTab !== 'BOOK' && activeTab !== 'TRADE' && activeTab !== 'MARKET') return;
+    if (activeTab !== 'BOOK' && activeTab !== 'TRADE') return;
     if (!canFetchBook) return;
     if (bookData || bookLoading) return;
     fetchBook(false);
   }, [open, activeTab, canFetchBook, bookData, bookLoading, fetchBook]);
-
-  const copyToClipboard = useCallback(async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // ignore
-    }
-  }, []);
 
   const walletCurvePoints = walletAnalytics?.wallet_realized_curve || [];
   const copyCurvePoints = walletAnalytics?.copy_trade_curve || [];
@@ -389,7 +429,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
 
       {/* Tabs */}
       <div className="px-4 py-2 border-b border-grey/10 flex flex-wrap gap-2">
-        {(['DETAILS', 'MARKET', 'WALLET', 'CHART', 'BOOK', 'TRADE'] as InspectorTab[]).map((t) => (
+        {(['DETAILS', 'PERFORMANCE', 'BOOK', 'TRADE'] as InspectorTab[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -470,56 +510,6 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                 {ctx.errors.join('\n')}
               </div>
             )}
-          </div>
-        )}
-
-        {activeTab === 'MARKET' && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-white/5 rounded p-2">
-                <div className="text-[9px] text-better-blue-light/90 uppercase">market_slug</div>
-                <div className="text-[11px] font-mono text-white break-all">{signal.market_slug || '---'}</div>
-              </div>
-              <div className="bg-white/5 rounded p-2">
-                <div className="text-[9px] text-better-blue-light/90 uppercase">outcome</div>
-                <div className="text-[11px] font-mono text-white">{outcomeForBook || '---'}</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-white/5 rounded p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[9px] text-better-blue-light/90 uppercase">condition_id</div>
-                  {order?.condition_id && (
-                    <button
-                      type="button"
-                      onClick={() => copyToClipboard(order.condition_id)}
-                      className="text-[10px] font-mono text-better-blue-lavender hover:text-white"
-                    >
-                      [COPY]
-                    </button>
-                  )}
-                </div>
-                <div className="text-[11px] font-mono text-white break-all">{order?.condition_id || '---'}</div>
-              </div>
-              <div className="bg-white/5 rounded p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[9px] text-better-blue-light/90 uppercase">clobTokenId</div>
-                  {resolvedClobTokenId && (
-                    <button
-                      type="button"
-                      onClick={() => copyToClipboard(resolvedClobTokenId)}
-                      className="text-[10px] font-mono text-better-blue-lavender hover:text-white"
-                    >
-                      [COPY]
-                    </button>
-                  )}
-                </div>
-                <div className="text-[11px] font-mono text-white break-all">
-                  {resolvedClobTokenId || (bookLoading && canFetchBook ? '...' : '---')}
-                </div>
-              </div>
-            </div>
           </div>
         )}
 
@@ -705,46 +695,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
           </div>
         )}
 
-        {activeTab === 'WALLET' && (
-          <div className="space-y-3">
-            <div className="bg-white/5 rounded p-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-[9px] text-better-blue-light/90 uppercase">wallet_address</div>
-                {walletAddress && (
-                  <button
-                    type="button"
-                    onClick={() => copyToClipboard(walletAddress)}
-                    className="text-[10px] font-mono text-better-blue-lavender hover:text-white"
-                  >
-                    [COPY]
-                  </button>
-                )}
-              </div>
-              <div className="text-[11px] font-mono text-white break-all">{walletAddress || '---'}</div>
-            </div>
-
-            {walletAnalytics && (
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-white/5 rounded p-2">
-                  <div className="text-[9px] text-better-blue-light/90 uppercase">wallet roe denom</div>
-                  <div className="text-[13px] font-mono text-white tabular-nums">
-                    {walletAnalytics.wallet_roe_denom_usd
-                      ? formatVolumeCompact(walletAnalytics.wallet_roe_denom_usd)
-                      : '---'}
-                  </div>
-                </div>
-                <div className="bg-white/5 rounded p-2">
-                  <div className="text-[9px] text-better-blue-light/90 uppercase">copy roe denom</div>
-                  <div className="text-[13px] font-mono text-white tabular-nums">
-                    {walletAnalytics.copy_roe_denom_usd ? formatVolumeCompact(walletAnalytics.copy_roe_denom_usd) : '---'}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === 'CHART' && (
+        {activeTab === 'PERFORMANCE' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="min-w-0">
@@ -787,8 +738,40 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
               ))}
             </div>
 
+            {/* Copy curve model selector */}
+            <div className="flex items-center gap-2">
+              <div className="text-[10px] font-mono text-grey/80">COPY CURVE:</div>
+              {(['scaled', 'mtm'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setCopyModel(mode)}
+                  className={`px-2 py-0.5 text-[10px] font-mono transition-colors ${
+                    copyModel === mode
+                      ? 'bg-white text-black'
+                      : 'text-grey/80 hover:text-white'
+                  }`}
+                >
+                  {mode.toUpperCase()}
+                </button>
+              ))}
+              {copyModel === 'mtm' && (
+                <div className="text-[10px] font-mono text-grey/60">(slower)</div>
+              )}
+            </div>
+
             {!canFetchAnalytics && <div className="text-[11px] text-grey/80 font-mono">No wallet address</div>}
-            {analyticsError && <div className="text-[11px] text-danger font-mono">{analyticsError}</div>}
+            {analyticsError && (
+              <div
+                className={`text-[11px] font-mono ${
+                  analyticsError.toLowerCase().includes('still computing')
+                    ? 'text-grey/80'
+                    : 'text-danger'
+                }`}
+              >
+                {analyticsError}
+              </div>
+            )}
 
             {/* Never blank: show a fixed skeleton container while loading/no-data */}
             {!walletAnalytics && (
@@ -846,7 +829,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                       <div className="text-[11px] font-mono text-white tabular-nums">{formatWinRate(walletAnalytics.wallet_win_rate)}</div>
                     </div>
                     <div>
-                      <div className="text-[9px] text-better-blue-light/90">PF</div>
+                      <div className="text-[9px] text-better-blue-light/90">Profit Factor</div>
                       <div className="text-[11px] font-mono text-white tabular-nums">{formatProfitFactor(walletAnalytics.wallet_profit_factor)}</div>
                     </div>
                   </div>
@@ -856,7 +839,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                 <div className="bg-white/5 rounded p-2">
                   <div className="flex items-center justify-between">
                     <div className="text-[9px] text-better-blue-light/90 uppercase">
-                      Copy (${walletAnalytics.fixed_buy_notional_usd}/order)
+                      Copy {copyModel.toUpperCase()} (${walletAnalytics.fixed_buy_notional_usd}/order)
                     </div>
                     <div className="text-[9px] font-mono text-grey/80">{walletAnalytics.lookback_days}D</div>
                   </div>
@@ -889,7 +872,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                       <div className="text-[11px] font-mono text-white tabular-nums">{formatWinRate(walletAnalytics.copy_win_rate)}</div>
                     </div>
                     <div>
-                      <div className="text-[9px] text-better-blue-light/90">PF</div>
+                      <div className="text-[9px] text-better-blue-light/90">Profit Factor</div>
                       <div className="text-[11px] font-mono text-white tabular-nums">{formatProfitFactor(walletAnalytics.copy_profit_factor)}</div>
                     </div>
                   </div>
@@ -899,15 +882,16 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                 <div className="bg-white/5 rounded p-2 mt-2">
                   <div className="flex items-center justify-between">
                     <div className="text-[9px] text-better-blue-light/90 uppercase">
-                      Est. Friction ({walletAnalytics.copy_friction_mode?.toUpperCase() || 'BASE'})
+                      Execution Costs (assumed)
                     </div>
                     <div className="text-[9px] font-mono text-grey/80">
-                      {walletAnalytics.copy_friction_pct_per_trade?.toFixed(2) || '1.00'}% per trade
+                      {(walletAnalytics.copy_friction_mode?.toUpperCase() || 'BASE') + ' • '}
+                      {walletAnalytics.copy_friction_pct_per_trade?.toFixed(2) || '1.00'}% per fill
                     </div>
                   </div>
                   <div className="mt-1 grid grid-cols-2 gap-2">
                     <div>
-                      <div className="text-[9px] text-better-blue-light/90">Total Friction</div>
+                      <div className="text-[9px] text-better-blue-light/90">Total Costs</div>
                       <div className="text-[11px] font-mono text-warning tabular-nums">
                         {typeof walletAnalytics.copy_total_friction_usd === 'number'
                           ? `-$${walletAnalytics.copy_total_friction_usd.toFixed(2)}`
@@ -915,11 +899,14 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                       </div>
                     </div>
                     <div>
-                      <div className="text-[9px] text-better-blue-light/90">Trades</div>
+                      <div className="text-[9px] text-better-blue-light/90">Fills</div>
                       <div className="text-[11px] font-mono text-white tabular-nums">
                         {walletAnalytics.copy_trade_count ?? '---'}
                       </div>
                     </div>
+                  </div>
+                  <div className="mt-1 text-[9px] font-mono text-grey/70">
+                    Net copy curve includes these costs.
                   </div>
                 </div>
 

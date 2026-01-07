@@ -829,16 +829,84 @@ fn extract_pnl_deltas(pnl_over_time: &[Value]) -> Vec<(i64, f64)> {
     deltas
 }
 
+#[inline]
+fn day_bucket(ts: i64) -> i64 {
+    // Dome timestamps are in seconds.
+    (ts / 86_400) * 86_400
+}
+
+fn winsorize_in_place(values: &mut [f64], pct: f64) {
+    if values.len() < 10 {
+        return;
+    }
+
+    let mut sorted: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    if sorted.len() < 10 {
+        return;
+    }
+
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+
+    let lo_idx = (((n - 1) as f64) * pct).floor() as usize;
+    let hi_idx = (((n - 1) as f64) * (1.0 - pct)).ceil() as usize;
+    let lo = sorted[lo_idx.min(n - 1)];
+    let hi = sorted[hi_idx.min(n - 1)];
+    if !lo.is_finite() || !hi.is_finite() || lo >= hi {
+        return;
+    }
+
+    for v in values.iter_mut() {
+        if !v.is_finite() {
+            continue;
+        }
+        if *v < lo {
+            *v = lo;
+        } else if *v > hi {
+            *v = hi;
+        }
+    }
+}
+
 fn compute_sharpe(deltas: &[(i64, f64)], cutoff_ts: i64) -> Option<f64> {
-    let window: Vec<f64> = deltas
-        .iter()
-        .filter(|(ts, _)| *ts >= cutoff_ts)
-        .map(|(_, v)| *v)
-        .collect();
+    let Some(end_ts) = deltas.iter().map(|(ts, _)| *ts).max() else {
+        return None;
+    };
+
+    let start_day = day_bucket(cutoff_ts);
+    let end_day = day_bucket(end_ts);
+    if end_day < start_day {
+        return None;
+    }
+
+    // Dome can skip days or emit multiple points per day; normalize to daily deltas.
+    let mut by_day: std::collections::BTreeMap<i64, f64> = std::collections::BTreeMap::new();
+    for (ts, delta) in deltas {
+        if *ts < cutoff_ts {
+            continue;
+        }
+        if !delta.is_finite() {
+            continue;
+        }
+        let day = day_bucket(*ts);
+        if day < start_day {
+            continue;
+        }
+        *by_day.entry(day).or_insert(0.0) += *delta;
+    }
+
+    let mut window: Vec<f64> = Vec::new();
+    let mut day = start_day;
+    while day <= end_day {
+        window.push(*by_day.get(&day).unwrap_or(&0.0));
+        day += 86_400;
+    }
 
     if window.len() < 3 {
         return None;
     }
+
+    winsorize_in_place(&mut window, 0.05);
 
     let mean = window.iter().sum::<f64>() / window.len() as f64;
 

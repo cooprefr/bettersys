@@ -74,6 +74,10 @@ class ApiClient {
         throw new Error(`API Error: ${response.status} ${response.statusText}`);
       }
 
+      if (response.status === 204) {
+        return null as unknown as T;
+      }
+
       return response.json();
     } catch (err: any) {
       if (err?.name === 'AbortError') {
@@ -180,14 +184,19 @@ class ApiClient {
   async getWalletAnalytics(
     walletAddress: string,
     force: boolean = false,
-    frictionMode: 'optimistic' | 'base' | 'pessimistic' = 'base'
+    frictionMode: 'optimistic' | 'base' | 'pessimistic' = 'base',
+    copyModel: 'scaled' | 'mtm' = 'scaled',
+    cachedOnly: boolean = false
   ): Promise<WalletAnalyticsResponse> {
     const query = new URLSearchParams({
       wallet_address: walletAddress,
       force: String(force),
       friction_mode: frictionMode,
+      copy_model: copyModel,
+      cached_only: String(cachedOnly),
     });
-    return this.fetch<WalletAnalyticsResponse>(`/api/wallet/analytics?${query.toString()}`, {}, 2_500);
+    const timeoutMs = cachedOnly ? 2_000 : copyModel === 'mtm' ? 20_000 : 10_000;
+    return this.fetch<WalletAnalyticsResponse>(`/api/wallet/analytics?${query.toString()}`, {}, timeoutMs);
   }
 
   // Trading (feature-flagged server-side)

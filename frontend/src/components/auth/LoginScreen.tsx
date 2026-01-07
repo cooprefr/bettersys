@@ -1,20 +1,66 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useIdentityToken, usePrivy } from '@privy-io/react-auth';
 import { useAuth } from '../../hooks/useAuth';
+import { PRIVY_ENABLED } from '../../config/privy';
+
+const PrivyLoginSection: React.FC = () => {
+  const { loginWithPrivy, isLoading: authLoading, isAuthenticated } = useAuth();
+  const {
+    ready,
+    authenticated: privyAuthenticated,
+    user: privyUser,
+    login: privyLogin,
+    logout: privyLogout,
+  } = usePrivy();
+  const { identityToken } = useIdentityToken();
+  const [exchangeAttempted, setExchangeAttempted] = useState(false);
+
+  useEffect(() => {
+    if (!ready) return;
+    if (isAuthenticated) return;
+    if (!privyAuthenticated) return;
+    if (!identityToken) return;
+    if (exchangeAttempted) return;
+
+    setExchangeAttempted(true);
+    loginWithPrivy(identityToken).catch(() => {});
+  }, [ready, isAuthenticated, privyAuthenticated, identityToken, exchangeAttempted, loginWithPrivy]);
+
+  return (
+    <div className="mb-8 space-y-3">
+      <button
+        type="button"
+        onClick={privyAuthenticated ? () => void privyLogout() : () => {
+          setExchangeAttempted(false);
+          privyLogin();
+        }}
+        disabled={!ready || authLoading}
+        className={`w-full border py-3 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+          privyAuthenticated
+            ? 'border-success bg-success/10 hover:bg-success/15'
+            : 'border-grey/20 hover:border-better-blue hover:bg-better-blue/10'
+        }`}
+      >
+        <span className="font-mono text-xs tracking-widest text-white">
+          {privyAuthenticated ? 'PRIVY CONNECTED (CLICK TO LOG OUT)' : 'LOGIN WITH PRIVY'}
+        </span>
+      </button>
+
+      <div className="text-[10px] font-mono text-grey/70">ACCESS: ≥100,000 $BETTER (BASE)</div>
+
+      {privyAuthenticated && (
+        <div className="p-3 border border-success/30 bg-success/5">
+          <div className="text-[10px] font-mono text-success">PRIVY USER: {privyUser?.id || '---'}</div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const LoginScreen: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const { login, loginWithPrivy, isLoading: authLoading, error: authError, isAuthenticated } = useAuth();
-  const { ready, authenticated: privyAuthenticated, user: privyUser, login: privyLogin, logout: privyLogout } = usePrivy();
-  const { identityToken } = useIdentityToken();
-  const [privyError, setPrivyError] = useState<string | null>(null);
-  const [exchangeAttempted, setExchangeAttempted] = useState(false);
-
-  const privyConfigured = useMemo(() => {
-    const appId = import.meta.env.VITE_PRIVY_APP_ID;
-    return typeof appId === 'string' && appId.trim().length > 0;
-  }, []);
+  const { login, isLoading: authLoading, error: authError } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,30 +71,7 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
-  const handlePrivy = async () => {
-    setPrivyError(null);
-    setExchangeAttempted(false);
-    if (!privyConfigured) {
-      setPrivyError('Privy not configured (missing VITE_PRIVY_APP_ID)');
-      return;
-    }
-    privyLogin();
-  };
-
-  useEffect(() => {
-    if (!ready) return;
-    if (isAuthenticated) return;
-    if (!privyAuthenticated) return;
-    if (!identityToken) return;
-    if (exchangeAttempted) return;
-
-    setExchangeAttempted(true);
-    loginWithPrivy(identityToken).catch((err: any) => {
-      setPrivyError(err?.message || 'Privy login failed');
-    });
-  }, [ready, isAuthenticated, privyAuthenticated, identityToken, exchangeAttempted, loginWithPrivy]);
-
-  const error = authError || privyError;
+  const error = authError;
   const isLoading = authLoading;
 
   return (
@@ -66,40 +89,16 @@ export const LoginScreen: React.FC = () => {
         <div className="bg-surface border border-grey/10 p-8">
 
           {/* Privy */}
-          <div className="mb-8 space-y-3">
-            <button
-              type="button"
-              onClick={privyAuthenticated ? () => void privyLogout() : handlePrivy}
-              disabled={!ready || isLoading || !privyConfigured}
-              className={`w-full border py-3 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
-                privyAuthenticated
-                  ? 'border-success bg-success/10 hover:bg-success/15'
-                  : 'border-grey/20 hover:border-better-blue hover:bg-better-blue/10'
-              }`}
-            >
-              <span className="font-mono text-xs tracking-widest text-white">
-                {privyAuthenticated ? 'PRIVY CONNECTED (CLICK TO LOG OUT)' : 'LOGIN WITH PRIVY'}
-              </span>
-            </button>
-
-            <div className="text-[10px] font-mono text-grey/70">
-              ACCESS: ≥100,000 $BETTER (BASE)
-            </div>
-
-            {privyAuthenticated && (
-              <div className="p-3 border border-success/30 bg-success/5">
-                <div className="text-[10px] font-mono text-success">
-                  PRIVY USER: {privyUser?.id || '---'}
-                </div>
+          {PRIVY_ENABLED && (
+            <>
+              <PrivyLoginSection />
+              <div className="relative flex items-center gap-4 mb-8">
+                <div className="h-px bg-grey/20 flex-1"></div>
+                <div className="text-[10px] text-grey/70 font-mono">OR LOGIN</div>
+                <div className="h-px bg-grey/20 flex-1"></div>
               </div>
-            )}
-          </div>
-
-          <div className="relative flex items-center gap-4 mb-8">
-            <div className="h-px bg-grey/20 flex-1"></div>
-            <div className="text-[10px] text-grey/70 font-mono">OR LOGIN</div>
-            <div className="h-px bg-grey/20 flex-1"></div>
-          </div>
+            </>
+          )}
 
           {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-4">

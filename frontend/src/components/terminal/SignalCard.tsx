@@ -806,7 +806,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                       </div>
                     </div>
                     <div className="mt-1">
-                      <div className="text-[9px] text-better-blue-light/60">PF</div>
+                      <div className="text-[9px] text-better-blue-light/60">Profit Factor</div>
                       <div className="text-[10px] font-mono text-white">
                         {formatProfitFactor(walletAnalytics?.wallet_profit_factor)}
                       </div>
@@ -848,7 +848,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                       </div>
                     </div>
                     <div className="mt-1">
-                      <div className="text-[9px] text-better-blue-light/60">PF</div>
+                      <div className="text-[9px] text-better-blue-light/60">Profit Factor</div>
                       <div className="text-[10px] font-mono text-white">
                         {formatProfitFactor(walletAnalytics?.copy_profit_factor)}
                       </div>

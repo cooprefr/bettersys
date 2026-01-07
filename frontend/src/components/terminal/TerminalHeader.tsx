@@ -2,6 +2,7 @@ import React from 'react';
 import { usePrivy } from '@privy-io/react-auth';
 import { SignalStats } from '../../types/signal';
 import { useAuth } from '../../hooks/useAuth';
+import { PRIVY_ENABLED } from '../../config/privy';
 
 interface TerminalHeaderProps {
   stats: SignalStats | null;
@@ -19,7 +20,6 @@ export const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   onViewChange,
 }) => {
   const { user, logout } = useAuth();
-  const { logout: privyLogout } = usePrivy();
   
   // Only use WebSocket latency - REST latency is not relevant for real-time display
   const displayLatency = wsLatency;
@@ -112,21 +112,46 @@ export const TerminalHeader: React.FC<TerminalHeaderProps> = ({
             <div className="text-grey/80 text-[10px]">OPERATOR</div>
             <div className="text-white">{user?.username || 'ANON'}</div>
           </div>
-          
-          <button
-            onClick={async () => {
-              try {
-                await privyLogout();
-              } finally {
-                logout();
-              }
-            }}
-            className="border border-grey/30 px-3 py-1 text-[10px] font-mono text-grey/80 hover:text-danger hover:border-danger transition-colors duration-150"
-          >
-            EXIT
-          </button>
+
+          <ExitButton onLogout={logout} />
         </div>
       </div>
     </div>
+  );
+};
+
+const exitButtonClassName =
+  'border border-grey/30 px-3 py-1 text-[10px] font-mono text-grey/80 hover:text-danger hover:border-danger transition-colors duration-150';
+
+const ExitButton: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
+  if (!PRIVY_ENABLED) {
+    return (
+      <button onClick={onLogout} className={exitButtonClassName}>
+        EXIT
+      </button>
+    );
+  }
+
+  return <ExitButtonPrivy onLogout={onLogout} />;
+};
+
+const ExitButtonPrivy: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
+  const { logout: privyLogout } = usePrivy();
+
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await privyLogout();
+        } catch {
+          // Ignore Privy logout errors; still clear BetterBot session.
+        } finally {
+          onLogout();
+        }
+      }}
+      className={exitButtonClassName}
+    >
+      EXIT
+    </button>
   );
 };
