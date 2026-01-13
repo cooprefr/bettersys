@@ -117,6 +117,26 @@ export interface MarketSnapshotResponse {
   asks: MarketSnapshotLevel[];
 }
 
+export interface Binance15mEnrichment {
+  symbol: string;
+  mid?: number;
+  start_mid?: number;
+  sigma_per_sqrt_s?: number;
+  t_rem_sec?: number;
+  p_up_raw?: number;
+  p_up_shrunk?: number;
+}
+
+export interface SignalEnrichResponse {
+  signal_id: string;
+  market_slug: string;
+  fetched_at: number;
+  is_updown_15m: boolean;
+  up?: MarketSnapshotResponse;
+  down?: MarketSnapshotResponse;
+  binance?: Binance15mEnrichment;
+}
+
 export interface EquityPoint {
   timestamp: number;
   value: number;
@@ -148,6 +168,18 @@ export interface WalletAnalyticsResponse {
   copy_friction_pct_per_trade?: number;
   copy_total_friction_usd?: number;
   copy_trade_count?: number;
+}
+
+export interface WalletAnalyticsPrimeRequest {
+  wallets: string[];
+  force?: boolean;
+  friction_mode?: 'optimistic' | 'base' | 'pessimistic';
+  copy_model?: 'scaled' | 'mtm';
+}
+
+export interface WalletAnalyticsPrimeResponse {
+  scheduled: number;
+  skipped: number;
 }
 
 export interface SignalContextPrice {

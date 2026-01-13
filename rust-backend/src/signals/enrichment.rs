@@ -121,6 +121,12 @@ impl DomeEnrichmentService {
         let entry_value = job.shares_normalized * job.price;
         let mut errors: Vec<String> = Vec::new();
 
+        // 15m Up/Down markets are extremely high-frequency; persist only lite context and rely on
+        // on-demand enrichment endpoints for orderbook/price.
+        if crate::vault::parse_updown_15m_slug(&job.market_slug).is_some() {
+            return self.process_job_lite(job, entry_value).await;
+        }
+
         // Market metadata (cache)
         // Primary: Polymarket Gamma (faster + more stable for market metadata)
         // Fallback: Dome /polymarket/markets
@@ -612,6 +618,76 @@ impl DomeEnrichmentService {
             .map_err(|e| anyhow::anyhow!("ws broadcast failed: {e}"));
 
         debug!("Enrichment completed");
+        Ok(())
+    }
+
+    async fn process_job_lite(&self, job: EnrichmentJob, entry_value: f64) -> Result<()> {
+        let derived = SignalContextDerived {
+            entry_value_usd: Some(entry_value),
+            ..Default::default()
+        };
+
+        let context = SignalContext {
+            order: SignalContextOrder {
+                user: job.user.clone(),
+                market_slug: job.market_slug.clone(),
+                condition_id: job.condition_id.clone(),
+                token_id: job.token_id.clone(),
+                token_label: job.token_label.clone(),
+                side: job.side.clone(),
+                price: job.price,
+                shares_normalized: job.shares_normalized,
+                timestamp: job.timestamp,
+                order_hash: job.order_hash.clone(),
+                tx_hash: job.tx_hash.clone(),
+                title: job.title.clone(),
+            },
+            market: None,
+            price: None,
+            trade_history: None,
+            orderbook: None,
+            activity: None,
+            candlesticks: None,
+            wallet: None,
+            wallet_pnl: None,
+            derived,
+            errors: Vec::new(),
+        };
+
+        let enriched_at = Utc::now().timestamp();
+        let context_version = self
+            .storage
+            .get_signal_context(&job.signal_id)
+            .ok()
+            .flatten()
+            .map(|r| r.context_version + 1)
+            .unwrap_or(1);
+
+        let _ = self
+            .storage
+            .store_signal_context(
+                &job.signal_id,
+                context_version,
+                enriched_at,
+                "ok",
+                None,
+                &context,
+            )
+            .await;
+
+        let update = SignalContextUpdate {
+            signal_id: job.signal_id,
+            context_version,
+            enriched_at,
+            status: "ok".to_string(),
+            context,
+        };
+
+        let _ = self
+            .ws_tx
+            .send(WsServerEvent::SignalContext(update))
+            .map_err(|e| anyhow::anyhow!("ws broadcast failed: {e}"));
+
         Ok(())
     }
 

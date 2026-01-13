@@ -17,6 +17,10 @@ tower-http = { version = "0.5", features = ["cors", "trace"] }
 tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
+# Binance market data (barter-rs)
+barter-data = "0.10.2"
+barter-instrument = "0.3.1"
+
 # HTTP client (using rustls instead of openssl to avoid build issues)
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
 
@@ -50,6 +54,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Error handling
 anyhow = "1.0"
+async-trait = "0.1"
 
 # Authentication & Security (Phase 7)
 jsonwebtoken = "9.2"

@@ -10,14 +10,64 @@
 //! - No row limits - scales to 10M+ signals
 
 use crate::{
-    models::{MarketSignal, SignalContext, SignalContextRecord},
+    models::{MarketSignal, SignalContext, SignalContextRecord, SignalType},
     scrapers::dome_rest::DomeOrder,
 };
 use anyhow::{Context, Result};
 use parking_lot::Mutex; // Faster than std::sync::Mutex
 use rusqlite::{params, params_from_iter, Connection, OpenFlags};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultLlmDecisionRow {
+    pub decision_id: String,
+    pub market_slug: String,
+    pub created_at: i64,
+    pub action: String,
+    pub outcome_index: Option<i64>,
+    pub outcome_text: Option<String>,
+    pub p_true: Option<f64>,
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
+    pub p_eff: Option<f64>,
+    pub edge: Option<f64>,
+    pub size_mult: Option<f64>,
+    pub consensus_models: Option<String>,
+    pub flags: Option<String>,
+    pub rationale_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultLlmModelRecordRow {
+    pub id: String,
+    pub decision_id: String,
+    pub model: String,
+    pub created_at: i64,
+    pub parsed_ok: bool,
+    pub action: Option<String>,
+    pub outcome_index: Option<i64>,
+    pub p_true: Option<f64>,
+    pub uncertainty: Option<String>,
+    pub size_mult: Option<f64>,
+    pub flags: Option<String>,
+    pub rationale_hash: Option<String>,
+    pub raw_dsl: Option<String>,
+    pub latency_ms: Option<i64>,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultLlmUsageStats {
+    pub day_start_ts: i64,
+    pub calls_today: u32,
+    pub tokens_today: u64,
+    pub per_market_calls_today: Vec<(String, u32)>,
+}
 
 /// Schema with optimizations for high-volume storage
 const SCHEMA_SQL: &str = r#"
@@ -62,6 +112,145 @@ CREATE INDEX IF NOT EXISTS idx_signals_market
 CREATE INDEX IF NOT EXISTS idx_signals_high_conf 
     ON signals(detected_at DESC) WHERE confidence >= 0.7;
 
+-- Full-text search index (FTS5) for robust market lookup
+CREATE TABLE IF NOT EXISTS signal_search (
+    signal_id TEXT NOT NULL UNIQUE,
+    detected_at TEXT NOT NULL,
+    market_slug TEXT NOT NULL,
+    market_title TEXT,
+    market_question TEXT,
+    order_title TEXT,
+    wallet_address TEXT,
+    wallet_label TEXT,
+    token_label TEXT,
+    source TEXT,
+    signal_type TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_search_detected_at
+    ON signal_search(detected_at DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS signal_search_fts USING fts5(
+    market_slug,
+    market_title,
+    market_question,
+    order_title,
+    wallet_address,
+    wallet_label,
+    token_label,
+    source,
+    signal_type,
+    content='signal_search',
+    content_rowid='rowid',
+    tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS signal_search_ai AFTER INSERT ON signal_search BEGIN
+    INSERT INTO signal_search_fts(
+        rowid,
+        market_slug,
+        market_title,
+        market_question,
+        order_title,
+        wallet_address,
+        wallet_label,
+        token_label,
+        source,
+        signal_type
+    ) VALUES (
+        new.rowid,
+        new.market_slug,
+        new.market_title,
+        new.market_question,
+        new.order_title,
+        new.wallet_address,
+        new.wallet_label,
+        new.token_label,
+        new.source,
+        new.signal_type
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS signal_search_ad AFTER DELETE ON signal_search BEGIN
+    INSERT INTO signal_search_fts(
+        signal_search_fts,
+        rowid,
+        market_slug,
+        market_title,
+        market_question,
+        order_title,
+        wallet_address,
+        wallet_label,
+        token_label,
+        source,
+        signal_type
+    ) VALUES (
+        'delete',
+        old.rowid,
+        old.market_slug,
+        old.market_title,
+        old.market_question,
+        old.order_title,
+        old.wallet_address,
+        old.wallet_label,
+        old.token_label,
+        old.source,
+        old.signal_type
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS signal_search_au AFTER UPDATE ON signal_search BEGIN
+    INSERT INTO signal_search_fts(
+        signal_search_fts,
+        rowid,
+        market_slug,
+        market_title,
+        market_question,
+        order_title,
+        wallet_address,
+        wallet_label,
+        token_label,
+        source,
+        signal_type
+    ) VALUES (
+        'delete',
+        old.rowid,
+        old.market_slug,
+        old.market_title,
+        old.market_question,
+        old.order_title,
+        old.wallet_address,
+        old.wallet_label,
+        old.token_label,
+        old.source,
+        old.signal_type
+    );
+    INSERT INTO signal_search_fts(
+        rowid,
+        market_slug,
+        market_title,
+        market_question,
+        order_title,
+        wallet_address,
+        wallet_label,
+        token_label,
+        source,
+        signal_type
+    ) VALUES (
+        new.rowid,
+        new.market_slug,
+        new.market_title,
+        new.market_question,
+        new.order_title,
+        new.wallet_address,
+        new.wallet_label,
+        new.token_label,
+        new.source,
+        new.signal_type
+    );
+END;
+
 -- Signal enrichment context (attached to signals by signal_id)
 CREATE TABLE IF NOT EXISTS signal_context (
     signal_id TEXT PRIMARY KEY,
@@ -100,6 +289,52 @@ CREATE TABLE IF NOT EXISTS dome_cache (
 
 CREATE INDEX IF NOT EXISTS idx_dome_cache_fetched_at
     ON dome_cache(fetched_at DESC);
+
+-- Vault LONG engine: bounded LLM decision logs (small, auditable)
+CREATE TABLE IF NOT EXISTS vault_llm_decisions (
+    decision_id TEXT PRIMARY KEY,
+    market_slug TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    outcome_index INTEGER,
+    outcome_text TEXT,
+    p_true REAL,
+    bid REAL,
+    ask REAL,
+    p_eff REAL,
+    edge REAL,
+    size_mult REAL,
+    consensus_models TEXT,
+    flags TEXT,
+    rationale_hash TEXT
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_vault_llm_decisions_market_created
+    ON vault_llm_decisions(market_slug, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS vault_llm_model_records (
+    id TEXT PRIMARY KEY,
+    decision_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    parsed_ok INTEGER NOT NULL,
+    action TEXT,
+    outcome_index INTEGER,
+    p_true REAL,
+    uncertainty TEXT,
+    size_mult REAL,
+    flags TEXT,
+    rationale_hash TEXT,
+    raw_dsl TEXT,
+    latency_ms INTEGER,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    error TEXT
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_vault_llm_model_records_decision
+    ON vault_llm_model_records(decision_id);
 "#;
 
 /// High-performance signal storage
@@ -146,9 +381,300 @@ impl DbSignalStorage {
         )
         .ok();
 
+        // Search index backfill state (best-effort).
+        conn.execute(
+            "INSERT OR IGNORE INTO metadata (key, value) VALUES ('search_backfill_done', '0')",
+            [],
+        )
+        .ok();
+
+        // Warm the search index with a small recent window so search works immediately.
+        // Full backfill runs in the background.
+        let indexed: i64 = conn
+            .query_row("SELECT COUNT(*) FROM signal_search", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        if indexed == 0 && count > 0 {
+            const WARM_LIMIT: usize = 2_000;
+
+            let warm_limit = (count as usize).min(WARM_LIMIT);
+            if warm_limit > 0 {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT id, signal_type, market_slug, confidence, risk_level, \
+                            details_json, detected_at, source \
+                     FROM signals \
+                     ORDER BY detected_at DESC, id \
+                     LIMIT ?1",
+                )?;
+
+                let warm_signals: Vec<MarketSignal> = stmt
+                    .query_map([warm_limit], Self::row_to_signal)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                if !warm_signals.is_empty() {
+                    conn.execute("BEGIN IMMEDIATE", [])?;
+                    for s in &warm_signals {
+                        Self::upsert_signal_search_row(&conn, s)?;
+                    }
+
+                    if let Some(last) = warm_signals.last() {
+                        let _ = Self::set_metadata(&conn, "search_backfill_cursor_detected_at", &last.detected_at);
+                        let _ = Self::set_metadata(&conn, "search_backfill_cursor_id", &last.id);
+                    }
+
+                    conn.execute("COMMIT", [])?;
+                    info!("🔎 Search index warm-up: indexed {} recent signals", warm_signals.len());
+                }
+            }
+        }
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    #[inline]
+    fn get_metadata(conn: &Connection, key: &str) -> Option<String> {
+        let value: String = conn
+            .query_row(
+            "SELECT value FROM metadata WHERE key = ?1 LIMIT 1",
+            [key],
+            |row| row.get(0),
+        )
+            .ok()?;
+
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    #[inline]
+    fn set_metadata(conn: &Connection, key: &str, value: &str) -> Result<()> {
+        conn.execute(
+            "INSERT INTO metadata (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    fn extract_quoted_market_title(s: &str) -> Option<String> {
+        let s = s.trim();
+        if s.is_empty() {
+            return None;
+        }
+
+        // Support strings like: "TRACKED WALLET ENTRY: ... on 'Market Title' by 0x..."
+        let lower = s.to_ascii_lowercase();
+        for (needle, quote) in [(" on '", '\''), (" on \"", '"')] {
+            if let Some(pos) = lower.find(needle) {
+                let start = pos + needle.len();
+                if start >= s.len() {
+                    continue;
+                }
+                let rest = &s[start..];
+                if let Some(end) = rest.find(quote) {
+                    let extracted = rest[..end].trim();
+                    if !extracted.is_empty() {
+                        return Some(extracted.to_string());
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn normalized_market_title_for_search(signal: &MarketSignal) -> Option<String> {
+        let raw = signal.details.market_title.trim();
+        if raw.is_empty() {
+            return None;
+        }
+
+        if matches!(signal.signal_type, SignalType::TrackedWalletEntry { .. }) {
+            let lower = raw.to_ascii_lowercase();
+            let looks_like_headline = lower.starts_with("tracked wallet entry")
+                || lower.starts_with("insider entry")
+                || lower.starts_with("world class trader entry");
+            if looks_like_headline {
+                if let Some(extracted) = Self::extract_quoted_market_title(raw) {
+                    return Some(extracted);
+                }
+            }
+        }
+
+        Some(raw.to_string())
+    }
+
+    #[inline]
+    fn signal_type_name(st: &SignalType) -> &'static str {
+        match st {
+            SignalType::PriceDeviation { .. } => "PriceDeviation",
+            SignalType::MarketExpiryEdge { .. } => "MarketExpiryEdge",
+            SignalType::WhaleFollowing { .. } => "WhaleFollowing",
+            SignalType::EliteWallet { .. } => "EliteWallet",
+            SignalType::InsiderWallet { .. } => "InsiderWallet",
+            SignalType::WhaleCluster { .. } => "WhaleCluster",
+            SignalType::CrossPlatformArbitrage { .. } => "CrossPlatformArbitrage",
+            SignalType::TrackedWalletEntry { .. } => "TrackedWalletEntry",
+        }
+    }
+
+    #[inline]
+    fn wallet_fields(st: &SignalType) -> (Option<String>, Option<String>, Option<String>) {
+        match st {
+            SignalType::TrackedWalletEntry {
+                wallet_address,
+                wallet_label,
+                token_label,
+                ..
+            } => (
+                Some(wallet_address.clone()),
+                Some(wallet_label.clone()),
+                token_label.clone(),
+            ),
+            SignalType::WhaleFollowing { whale_address, .. } => (Some(whale_address.clone()), None, None),
+            SignalType::EliteWallet { wallet_address, .. } => (Some(wallet_address.clone()), None, None),
+            SignalType::InsiderWallet { wallet_address, .. } => (Some(wallet_address.clone()), None, None),
+            _ => (None, None, None),
+        }
+    }
+
+    fn upsert_signal_search_row(conn: &Connection, signal: &MarketSignal) -> Result<()> {
+        let market_title = Self::normalized_market_title_for_search(signal);
+        let (wallet_address, wallet_label, token_label) = Self::wallet_fields(&signal.signal_type);
+        let signal_type = Self::signal_type_name(&signal.signal_type);
+
+        conn.execute(
+            "INSERT INTO signal_search (
+                signal_id,
+                detected_at,
+                market_slug,
+                market_title,
+                wallet_address,
+                wallet_label,
+                token_label,
+                source,
+                signal_type,
+                updated_at
+             ) VALUES (
+                ?1,
+                ?2,
+                ?3,
+                ?4,
+                ?5,
+                ?6,
+                ?7,
+                ?8,
+                ?9,
+                strftime('%s','now')
+             )
+             ON CONFLICT(signal_id) DO UPDATE SET
+                detected_at=excluded.detected_at,
+                market_slug=excluded.market_slug,
+                market_title=COALESCE(excluded.market_title, market_title),
+                wallet_address=COALESCE(excluded.wallet_address, wallet_address),
+                wallet_label=COALESCE(excluded.wallet_label, wallet_label),
+                token_label=COALESCE(excluded.token_label, token_label),
+                source=excluded.source,
+                signal_type=excluded.signal_type,
+                updated_at=excluded.updated_at",
+            params![
+                signal.id,
+                signal.detected_at,
+                signal.market_slug,
+                market_title,
+                wallet_address,
+                wallet_label,
+                token_label,
+                signal.source,
+                signal_type,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    fn get_signal_locked(conn: &Connection, signal_id: &str) -> Result<Option<MarketSignal>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, signal_type, market_slug, confidence, risk_level,
+                    details_json, detected_at, source
+             FROM signals
+             WHERE id = ?1
+             LIMIT 1",
+        )?;
+
+        let mut rows = stmt.query([signal_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Self::row_to_signal(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn update_signal_search_from_context(conn: &Connection, signal_id: &str, context: &SignalContext) -> Result<()> {
+        let order_title = {
+            let s = context.order.title.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        };
+
+        let market_question: Option<String> = context
+            .market
+            .as_ref()
+            .and_then(|m| m.get("question").and_then(|v| v.as_str()))
+            .or_else(|| context.market.as_ref().and_then(|m| m.get("title").and_then(|v| v.as_str())))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let token_label = context.order.token_label.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let wallet_address = {
+            let s = context.order.user.trim();
+            if s.is_empty() { None } else { Some(s.to_string()) }
+        };
+
+        let market_slug = {
+            let s = context.order.market_slug.trim();
+            if s.is_empty() { None } else { Some(s.to_string()) }
+        };
+
+        let changed = conn.execute(
+            "UPDATE signal_search SET
+                order_title=COALESCE(?1, order_title),
+                market_question=COALESCE(?2, market_question),
+                token_label=COALESCE(?3, token_label),
+                wallet_address=COALESCE(?4, wallet_address),
+                market_slug=COALESCE(?5, market_slug),
+                updated_at=strftime('%s','now')
+             WHERE signal_id = ?6",
+            params![order_title, market_question, token_label, wallet_address, market_slug, signal_id],
+        )?;
+
+        if changed == 0 {
+            if let Some(signal) = Self::get_signal_locked(conn, signal_id)? {
+                Self::upsert_signal_search_row(conn, &signal)?;
+                let _ = conn.execute(
+                    "UPDATE signal_search SET
+                        order_title=COALESCE(?1, order_title),
+                        market_question=COALESCE(?2, market_question),
+                        token_label=COALESCE(?3, token_label),
+                        wallet_address=COALESCE(?4, wallet_address),
+                        market_slug=COALESCE(?5, market_slug),
+                        updated_at=strftime('%s','now')
+                     WHERE signal_id = ?6",
+                    params![order_title, market_question, token_label, wallet_address, market_slug, signal_id],
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Store a signal with optimized single-row insert
@@ -186,6 +712,10 @@ impl DbSignalStorage {
                 [],
             )
             .ok();
+
+            if let Err(e) = Self::upsert_signal_search_row(&conn, signal) {
+                warn!("failed to upsert signal_search row for {}: {}", signal.id, e);
+            }
         }
 
         Ok(())
@@ -230,6 +760,12 @@ impl DbSignalStorage {
                 ],
             )?;
             inserted += changes;
+
+            if changes > 0 {
+                if let Err(e) = Self::upsert_signal_search_row(&conn, signal) {
+                    warn!("failed to upsert signal_search row for {}: {}", signal.id, e);
+                }
+            }
         }
 
         // Update counter with total new inserts
@@ -362,6 +898,26 @@ impl DbSignalStorage {
         Ok(signals)
     }
 
+    /// Fetch a single signal by id.
+    #[inline]
+    pub fn get_signal(&self, signal_id: &str) -> Result<Option<MarketSignal>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, signal_type, market_slug, confidence, risk_level,
+                    details_json, detected_at, source
+             FROM signals
+             WHERE id = ?1
+             LIMIT 1",
+        )?;
+
+        let mut rows = stmt.query([signal_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Self::row_to_signal(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Get signals by source
     #[inline]
     pub fn get_by_source(&self, source: &str, limit: usize) -> Result<Vec<MarketSignal>> {
@@ -406,6 +962,107 @@ impl DbSignalStorage {
         Ok(signals)
     }
 
+    /// Full-text search over signals (FTS5-backed).
+    ///
+    /// Pagination matches `get_before`: ordering is (detected_at DESC, id ASC).
+    pub fn search_signals_fts(
+        &self,
+        fts_query: &str,
+        before_detected_at: Option<&str>,
+        before_id: Option<&str>,
+        limit: usize,
+        exclude_updown: bool,
+        min_confidence: Option<f64>,
+    ) -> Result<Vec<MarketSignal>> {
+        let q = fts_query.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.conn.lock();
+        let exclude_flag: i64 = if exclude_updown { 1 } else { 0 };
+
+        // NOTE: `before_id` is optional; when absent we must NOT include the tie-break clause.
+        let mut stmt = conn.prepare_cached(
+            "SELECT s.id, s.signal_type, s.market_slug, s.confidence, s.risk_level,
+                    s.details_json, s.detected_at, s.source
+             FROM signal_search_fts
+             JOIN signal_search ss ON ss.rowid = signal_search_fts.rowid
+             JOIN signals s ON s.id = ss.signal_id
+             WHERE signal_search_fts MATCH ?1
+               AND (?2 IS NULL OR s.confidence >= ?2)
+               AND (?3 = 0 OR (s.market_slug NOT LIKE '%updown%' AND s.market_slug NOT LIKE '%up-or-down%' AND s.market_slug NOT LIKE '%up-down%'))
+               AND (
+                 ?4 IS NULL
+                 OR s.detected_at < ?4
+                 OR (s.detected_at = ?4 AND (?5 IS NOT NULL AND s.id > ?5))
+               )
+             ORDER BY s.detected_at DESC, s.id
+             LIMIT ?6",
+        )?;
+
+        let signals: Vec<MarketSignal> = stmt
+            .query_map(
+                params![q, min_confidence, exclude_flag, before_detected_at, before_id, limit],
+                Self::row_to_signal,
+            )?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(signals)
+    }
+
+    /// Ensure the search index has at least a small recent warm window indexed.
+    ///
+    /// This is a best-effort safety net so search doesn't appear "dead" before the
+    /// background backfill finishes (or if the process was restarted mid-backfill).
+    pub fn ensure_search_warm(&self, warm_limit: usize) -> Result<usize> {
+        let warm_limit = warm_limit.clamp(1, 5_000);
+        let conn = self.conn.lock();
+
+        let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM signal_search", [], |row| row.get(0))?;
+        if indexed > 0 {
+            return Ok(0);
+        }
+
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM signals", [], |row| row.get(0))
+            .unwrap_or(0);
+        if total <= 0 {
+            return Ok(0);
+        }
+
+        let limit = (total as usize).min(warm_limit);
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, signal_type, market_slug, confidence, risk_level, \
+                    details_json, detected_at, source \
+             FROM signals \
+             ORDER BY detected_at DESC, id \
+             LIMIT ?1",
+        )?;
+
+        let warm_signals: Vec<MarketSignal> = stmt
+            .query_map([limit], Self::row_to_signal)?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if warm_signals.is_empty() {
+            return Ok(0);
+        }
+
+        conn.execute("BEGIN IMMEDIATE", [])?;
+        for s in &warm_signals {
+            Self::upsert_signal_search_row(&conn, s)?;
+        }
+        if let Some(last) = warm_signals.last() {
+            let _ = Self::set_metadata(&conn, "search_backfill_cursor_detected_at", &last.detected_at);
+            let _ = Self::set_metadata(&conn, "search_backfill_cursor_id", &last.id);
+        }
+        conn.execute("COMMIT", [])?;
+
+        Ok(warm_signals.len())
+    }
+
     /// Convert a database row to MarketSignal
     #[inline]
     fn row_to_signal(row: &rusqlite::Row) -> rusqlite::Result<MarketSignal> {
@@ -448,6 +1105,46 @@ impl DbSignalStorage {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Snapshot of search index readiness/backfill progress (best-effort).
+    pub fn get_search_index_status(&self) -> SearchIndexStatus {
+        let conn = self.conn.lock();
+
+        let total_signals: i64 = conn
+            .query_row("SELECT COUNT(*) FROM signals", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        let indexed_rows_res =
+            conn.query_row("SELECT COUNT(*) FROM signal_search", [], |row| row.get::<_, i64>(0));
+        let (signal_search_exists, indexed_rows): (bool, i64) = match indexed_rows_res {
+            Ok(v) => (true, v),
+            Err(_) => (false, 0),
+        };
+
+        let fts_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='signal_search_fts'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        let schema_ready = signal_search_exists && fts_exists;
+
+        let backfill_done = Self::get_metadata(&conn, "search_backfill_done").as_deref() == Some("1");
+        let cursor_detected_at = Self::get_metadata(&conn, "search_backfill_cursor_detected_at");
+        let cursor_id = Self::get_metadata(&conn, "search_backfill_cursor_id");
+
+        SearchIndexStatus {
+            schema_ready,
+            backfill_done,
+            total_signals: total_signals.max(0) as usize,
+            indexed_rows: indexed_rows.max(0) as usize,
+            cursor_detected_at,
+            cursor_id,
+        }
     }
 
     /// Get database statistics
@@ -512,6 +1209,119 @@ impl DbSignalStorage {
         Ok(())
     }
 
+    /// Incrementally backfill the FTS search index.
+    ///
+    /// This is designed to run in a low-duty-cycle background task so search becomes robust over
+    /// full history without blocking real-time ingestion.
+    pub async fn backfill_search_index_step(&self, batch_size: usize) -> Result<usize> {
+        let batch_size = batch_size.clamp(1, 5_000);
+        let conn = self.conn.lock();
+
+        if Self::get_metadata(&conn, "search_backfill_done").as_deref() == Some("1") {
+            return Ok(0);
+        }
+
+        let cursor_detected_at = Self::get_metadata(&conn, "search_backfill_cursor_detected_at");
+        let cursor_id = Self::get_metadata(&conn, "search_backfill_cursor_id");
+
+        let batch: Vec<MarketSignal> = if let Some(dt) = cursor_detected_at.as_deref() {
+            if let Some(id) = cursor_id.as_deref() {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT id, signal_type, market_slug, confidence, risk_level,
+                            details_json, detected_at, source
+                     FROM signals
+                     WHERE detected_at < ?1 OR (detected_at = ?1 AND id > ?2)
+                     ORDER BY detected_at DESC, id
+                     LIMIT ?3",
+                )?;
+
+                let batch: Vec<MarketSignal> = stmt
+                    .query_map(params![dt, id, batch_size], Self::row_to_signal)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                batch
+            } else {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT id, signal_type, market_slug, confidence, risk_level,
+                            details_json, detected_at, source
+                     FROM signals
+                     WHERE detected_at < ?1
+                     ORDER BY detected_at DESC, id
+                     LIMIT ?2",
+                )?;
+
+                let batch: Vec<MarketSignal> = stmt
+                    .query_map(params![dt, batch_size], Self::row_to_signal)?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                batch
+            }
+        } else {
+            let mut stmt = conn.prepare_cached(
+                "SELECT id, signal_type, market_slug, confidence, risk_level,
+                        details_json, detected_at, source
+                 FROM signals
+                 ORDER BY detected_at DESC, id
+                 LIMIT ?1",
+            )?;
+
+            let batch: Vec<MarketSignal> = stmt
+                .query_map([batch_size], Self::row_to_signal)?
+                .filter_map(|r| r.ok())
+                .collect();
+            batch
+        };
+
+        if batch.is_empty() {
+            let _ = Self::set_metadata(&conn, "search_backfill_done", "1");
+            info!("🔎 Search index backfill complete");
+            return Ok(0);
+        }
+
+        conn.execute("BEGIN IMMEDIATE", [])?;
+
+        for s in &batch {
+            Self::upsert_signal_search_row(&conn, s)?;
+        }
+
+        // Opportunistically enrich indexed rows with any stored context.
+        // SQLite defaults to 999 bound variables, so chunk IN queries conservatively.
+        const MAX_VARS: usize = 900;
+        let signal_ids: Vec<String> = batch.iter().map(|s| s.id.clone()).collect();
+        for chunk in signal_ids.chunks(MAX_VARS) {
+            if chunk.is_empty() {
+                continue;
+            }
+
+            let placeholders: String = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT signal_id, context_json FROM signal_context WHERE signal_id IN ({})",
+                placeholders
+            );
+
+            let mut stmt = conn.prepare_cached(&sql)?;
+            let mut rows = stmt.query(params_from_iter(chunk.iter()))?;
+            while let Some(row) = rows.next()? {
+                let signal_id: String = row.get(0)?;
+                let context_json: String = row.get(1)?;
+                if let Ok(ctx) = serde_json::from_str::<SignalContext>(&context_json) {
+                    if let Err(e) = Self::update_signal_search_from_context(&conn, &signal_id, &ctx) {
+                        warn!("search backfill: failed to apply context for {}: {}", signal_id, e);
+                    }
+                }
+            }
+        }
+
+        if let Some(last) = batch.last() {
+            let _ = Self::set_metadata(&conn, "search_backfill_cursor_detected_at", &last.detected_at);
+            let _ = Self::set_metadata(&conn, "search_backfill_cursor_id", &last.id);
+        }
+
+        conn.execute("COMMIT", [])?;
+
+        Ok(batch.len())
+    }
+
     /// Prune raw Dome order events older than `cutoff_ts` (unix seconds).
     pub fn prune_dome_order_events_before(&self, cutoff_ts: i64) -> Result<usize> {
         let conn = self.conn.lock();
@@ -527,7 +1337,11 @@ impl DbSignalStorage {
         let conn = self.conn.lock();
         conn.execute("DELETE FROM signals", [])?;
         conn.execute("DELETE FROM signal_context", [])?;
+        conn.execute("DELETE FROM signal_search", [])?;
         conn.execute("DELETE FROM dome_order_events", [])?;
+        let _ = Self::set_metadata(&conn, "search_backfill_done", "0");
+        let _ = Self::set_metadata(&conn, "search_backfill_cursor_detected_at", "");
+        let _ = Self::set_metadata(&conn, "search_backfill_cursor_id", "");
         info!("🗑️  All signals cleared from database");
         Ok(())
     }
@@ -621,6 +1435,10 @@ impl DbSignalStorage {
                 error=excluded.error",
             params![signal_id, context_version, context_json, enriched_at, status, error],
         )?;
+
+        if let Err(e) = Self::update_signal_search_from_context(&conn, signal_id, context) {
+            warn!("failed to update signal_search from context for {}: {}", signal_id, e);
+        }
         Ok(())
     }
 
@@ -775,6 +1593,275 @@ impl DbSignalStorage {
         )?;
         Ok(())
     }
+
+    pub async fn insert_vault_llm_decision(
+        &self,
+        decision_id: &str,
+        market_slug: &str,
+        created_at: i64,
+        action: &str,
+        outcome_index: Option<i64>,
+        outcome_text: Option<&str>,
+        p_true: Option<f64>,
+        bid: Option<f64>,
+        ask: Option<f64>,
+        p_eff: Option<f64>,
+        edge: Option<f64>,
+        size_mult: Option<f64>,
+        consensus_models: Option<&str>,
+        flags: Option<&str>,
+        rationale_hash: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_llm_decisions \
+             (decision_id, market_slug, created_at, action, outcome_index, outcome_text, p_true, bid, ask, p_eff, edge, size_mult, consensus_models, flags, rationale_hash) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                decision_id,
+                market_slug,
+                created_at,
+                action,
+                outcome_index,
+                outcome_text,
+                p_true,
+                bid,
+                ask,
+                p_eff,
+                edge,
+                size_mult,
+                consensus_models,
+                flags,
+                rationale_hash,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub async fn insert_vault_llm_model_record(
+        &self,
+        id: &str,
+        decision_id: &str,
+        model: &str,
+        created_at: i64,
+        parsed_ok: bool,
+        action: Option<&str>,
+        outcome_index: Option<i64>,
+        p_true: Option<f64>,
+        uncertainty: Option<&str>,
+        size_mult: Option<f64>,
+        flags: Option<&str>,
+        rationale_hash: Option<&str>,
+        raw_dsl: Option<&str>,
+        latency_ms: Option<i64>,
+        prompt_tokens: Option<i64>,
+        completion_tokens: Option<i64>,
+        total_tokens: Option<i64>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO vault_llm_model_records \
+             (id, decision_id, model, created_at, parsed_ok, action, outcome_index, p_true, uncertainty, size_mult, flags, rationale_hash, raw_dsl, latency_ms, prompt_tokens, completion_tokens, total_tokens, error) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            params![
+                id,
+                decision_id,
+                model,
+                created_at,
+                if parsed_ok { 1 } else { 0 },
+                action,
+                outcome_index,
+                p_true,
+                uncertainty,
+                size_mult,
+                flags,
+                rationale_hash,
+                raw_dsl,
+                latency_ms,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                error,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_vault_llm_decisions(
+        &self,
+        limit: usize,
+        market_slug: Option<&str>,
+    ) -> Result<Vec<VaultLlmDecisionRow>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let conn = self.conn.lock();
+
+        let mut out: Vec<VaultLlmDecisionRow> = Vec::new();
+
+        if let Some(slug) = market_slug {
+            let slug = slug.trim().to_lowercase();
+            let mut stmt = conn.prepare_cached(
+                "SELECT decision_id, market_slug, created_at, action, outcome_index, outcome_text, p_true, bid, ask, p_eff, edge, size_mult, consensus_models, flags, rationale_hash \
+                 FROM vault_llm_decisions WHERE market_slug = ?1 ORDER BY created_at DESC LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![slug, limit], |row| {
+                Ok(VaultLlmDecisionRow {
+                    decision_id: row.get(0)?,
+                    market_slug: row.get(1)?,
+                    created_at: row.get(2)?,
+                    action: row.get(3)?,
+                    outcome_index: row.get(4)?,
+                    outcome_text: row.get(5)?,
+                    p_true: row.get(6)?,
+                    bid: row.get(7)?,
+                    ask: row.get(8)?,
+                    p_eff: row.get(9)?,
+                    edge: row.get(10)?,
+                    size_mult: row.get(11)?,
+                    consensus_models: row.get(12)?,
+                    flags: row.get(13)?,
+                    rationale_hash: row.get(14)?,
+                })
+            })?;
+            for r in rows {
+                if let Ok(v) = r {
+                    out.push(v);
+                }
+            }
+            return Ok(out);
+        }
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT decision_id, market_slug, created_at, action, outcome_index, outcome_text, p_true, bid, ask, p_eff, edge, size_mult, consensus_models, flags, rationale_hash \
+             FROM vault_llm_decisions ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(VaultLlmDecisionRow {
+                decision_id: row.get(0)?,
+                market_slug: row.get(1)?,
+                created_at: row.get(2)?,
+                action: row.get(3)?,
+                outcome_index: row.get(4)?,
+                outcome_text: row.get(5)?,
+                p_true: row.get(6)?,
+                bid: row.get(7)?,
+                ask: row.get(8)?,
+                p_eff: row.get(9)?,
+                edge: row.get(10)?,
+                size_mult: row.get(11)?,
+                consensus_models: row.get(12)?,
+                flags: row.get(13)?,
+                rationale_hash: row.get(14)?,
+            })
+        })?;
+        for r in rows {
+            if let Ok(v) = r {
+                out.push(v);
+            }
+        }
+
+        Ok(out)
+    }
+
+    pub fn get_vault_llm_model_records(
+        &self,
+        decision_id: &str,
+        limit: usize,
+    ) -> Result<Vec<VaultLlmModelRecordRow>> {
+        let decision_id = decision_id.trim();
+        if decision_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 100) as i64;
+        let conn = self.conn.lock();
+
+        let mut out: Vec<VaultLlmModelRecordRow> = Vec::new();
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, decision_id, model, created_at, parsed_ok, action, outcome_index, p_true, uncertainty, size_mult, flags, rationale_hash, raw_dsl, latency_ms, prompt_tokens, completion_tokens, total_tokens, error \
+             FROM vault_llm_model_records WHERE decision_id = ?1 ORDER BY created_at ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![decision_id, limit], |row| {
+            let parsed_ok_int: i64 = row.get(4)?;
+            Ok(VaultLlmModelRecordRow {
+                id: row.get(0)?,
+                decision_id: row.get(1)?,
+                model: row.get(2)?,
+                created_at: row.get(3)?,
+                parsed_ok: parsed_ok_int != 0,
+                action: row.get(5)?,
+                outcome_index: row.get(6)?,
+                p_true: row.get(7)?,
+                uncertainty: row.get(8)?,
+                size_mult: row.get(9)?,
+                flags: row.get(10)?,
+                rationale_hash: row.get(11)?,
+                raw_dsl: row.get(12)?,
+                latency_ms: row.get(13)?,
+                prompt_tokens: row.get(14)?,
+                completion_tokens: row.get(15)?,
+                total_tokens: row.get(16)?,
+                error: row.get(17)?,
+            })
+        })?;
+        for r in rows {
+            if let Ok(v) = r {
+                out.push(v);
+            }
+        }
+
+        Ok(out)
+    }
+
+    pub fn get_vault_llm_usage_today(&self, now_ts: i64) -> Result<VaultLlmUsageStats> {
+        let day_start_ts = (now_ts / 86_400) * 86_400;
+        let conn = self.conn.lock();
+
+        let calls_today: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vault_llm_model_records WHERE created_at >= ?1",
+                params![day_start_ts],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let tokens_today: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(COALESCE(total_tokens, 0)), 0) FROM vault_llm_model_records WHERE created_at >= ?1",
+                params![day_start_ts],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let mut per_market: Vec<(String, u32)> = Vec::new();
+        if let Ok(mut stmt) = conn.prepare_cached(
+            "SELECT d.market_slug, COUNT(*) AS c \
+             FROM vault_llm_model_records m \
+             JOIN vault_llm_decisions d ON m.decision_id = d.decision_id \
+             WHERE m.created_at >= ?1 \
+             GROUP BY d.market_slug \
+             ORDER BY c DESC \
+             LIMIT 10",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![day_start_ts], |row| {
+                let slug: String = row.get(0)?;
+                let c: i64 = row.get(1)?;
+                Ok((slug, c as u32))
+            }) {
+                for r in rows {
+                    if let Ok(v) = r {
+                        per_market.push(v);
+                    }
+                }
+            }
+        }
+
+        Ok(VaultLlmUsageStats {
+            day_start_ts,
+            calls_today: calls_today.max(0) as u32,
+            tokens_today: tokens_today.max(0) as u64,
+            per_market_calls_today: per_market,
+        })
+    }
 }
 
 /// Database statistics
@@ -785,6 +1872,16 @@ pub struct DatabaseStats {
     pub signals_by_source: Vec<(String, usize)>,
     pub avg_confidence: f64,
     pub high_confidence_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchIndexStatus {
+    pub schema_ready: bool,
+    pub backfill_done: bool,
+    pub total_signals: usize,
+    pub indexed_rows: usize,
+    pub cursor_detected_at: Option<String>,
+    pub cursor_id: Option<String>,
 }
 
 #[cfg(test)]

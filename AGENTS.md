@@ -1,8 +1,8 @@
 # AGENTS.MD - Complete Technical System Reference
 
-**Last Updated:** December 22, 2025  
+**Last Updated:** January 13, 2026  
 **Purpose:** Comprehensive technical reference for AI agents working on BetterBot  
-**Status:** Production-Ready, Optimized for 10M+ Signals
+**Status:** Signal pipeline + pooled vault (paper) operational; live execution/on-chain settlement still pending
 
 ---
 
@@ -46,6 +46,19 @@ BetterBot is a quantitative trading signal platform for Polymarket prediction ma
 | DomeAPI REST | Wallet activity history | 100ms delay |
 | DomeAPI WebSocket | Real-time wallet orders | Streaming |
 
+### Current Status (Vault / Phase 8)
+
+Implemented (paper trading + accounting-only APIs):
+- **FAST15M engine:** deterministic BTC/ETH/SOL/XRP 15m Up/Down markets (Binance mid via `barter-data`, conservative `p_up` model, fractional Kelly sizing, Polymarket WS/REST orderbooks).
+- **LONG engine (BRAID-bounded LLM):** OpenRouter `chat/completions` with **scout-first gating** + **3-of-4 consensus**; deterministic admissibility + cost-adjusted edge + conservative sizing; global/day budgets and per-market cadence.
+- **Pooled vault accounting:** share-based NAV with `deposit()` / `withdraw()` and persistence.
+- **UX:** 15m signals persist **lite** context only; live 15m enrichments are fetched on-demand; wallet analytics can be bulk-primed.
+
+Not implemented yet (current focus):
+- **Live execution** (`DomeExecutionAdapter`) once router endpoint + payload are available (idempotent client_order_id, cancel/replace, reconciliation).
+- **On-chain settlement / real custody** for deposits/withdrawals (current APIs are accounting-only).
+- **Multi-account routing** (multiple Polymarket accounts / sub-allocations) and full position valuation/resolution.
+
 ---
 
 ## 2. Backend - Rust Architecture
@@ -72,7 +85,7 @@ rust-backend/src/
 **Purpose:** Application entry point, async runtime orchestration
 
 **Key Components:**
-- `AppState` - Shared state (storage, risk manager, broadcast channel)
+- `AppState` - Shared state (storage, risk manager, broadcast channel, HTTP client, Polymarket WS cache, Binance price feed, pooled vault)
 - `DataSourceKillSwitch` - Health monitoring with auto-disable
 - `parallel_data_collection()` - 45-minute Polymarket/Hashdive/Dome polling
 - `tracked_wallet_polling()` - Dome WebSocket + REST for tracked wallets (≈357 base + CSV/manual extensions; see `Config::from_env()`)
@@ -162,6 +175,17 @@ pub async fn get_signals_simple(
     AxumState(state): AxumState<AppState>,
 ) -> Json<SignalResponse>
 
+// GET /api/signals/search?q=...&limit=...&before=...&before_id=...
+pub async fn get_signals_search(
+    Query(params): Query<SignalSearchQuery>,
+    AxumState(state): AxumState<AppState>,
+) -> Result<Json<SignalResponse>, (StatusCode, String)>
+
+// GET /api/signals/search/status
+pub async fn get_signals_search_status(
+    AxumState(state): AxumState<AppState>,
+) -> Json<SignalSearchStatusResponse>
+
 // GET /api/signals/stats
 pub async fn get_signal_stats(
     AxumState(state): AxumState<AppState>,
@@ -171,22 +195,59 @@ pub async fn get_signal_stats(
 pub async fn get_risk_stats_simple(
     AxumState(state): AxumState<AppState>,
 ) -> Json<RiskStatsResponse>
+
+// GET /api/vault/state
+pub async fn get_vault_state(
+    AxumState(state): AxumState<AppState>,
+) -> Json<VaultStateResponse>
+
+// POST /api/vault/deposit
+pub async fn post_vault_deposit(
+    AxumState(state): AxumState<AppState>,
+    AxumJson(req): AxumJson<VaultDepositRequest>,
+) -> Result<Json<VaultDepositResponse>, StatusCode>
+
+// POST /api/vault/withdraw
+pub async fn post_vault_withdraw(
+    AxumState(state): AxumState<AppState>,
+    AxumJson(req): AxumJson<VaultWithdrawRequest>,
+) -> Result<Json<VaultWithdrawResponse>, StatusCode>
+
+// GET /api/signals/enrich?signal_id=...&levels=10&fresh=true
+pub async fn get_signal_enrich(
+    Query(params): Query<SignalEnrichQuery>,
+    AxumState(state): AxumState<AppState>,
+) -> Result<Json<SignalEnrichResponse>, StatusCode>
+
+// POST /api/wallet/analytics/prime
+pub async fn post_wallet_analytics_prime(
+    AxumState(state): AxumState<AppState>,
+    AxumJson(req): AxumJson<WalletAnalyticsPrimeRequest>,
+) -> Result<Json<WalletAnalyticsPrimeResponse>, StatusCode>
 ```
 
 `GET /api/signals` notes:
 - Default returns **lite** `SignalContext` for each signal (keeps payloads small).
 - Pass `full_context=true` to return full context blobs (debugging only).
 
-#### Routes (`routes.rs`)
+#### Routes (wired in `main.rs`)
 ```
 GET  /health              - Health check
 POST /api/auth/login      - JWT login
+POST /api/auth/privy      - Privy login (optional)
 GET  /api/auth/me         - Current user (protected)
 GET  /api/signals         - Signal list (protected)
+GET  /api/signals/search  - Full-history search (FTS5) (protected)
+GET  /api/signals/search/status - Search index status / backfill progress (protected)
 GET  /api/signals/context - Per-signal enrichment blob (protected)
+GET  /api/signals/enrich  - Ephemeral 15m Up/Down enrichment (protected)
 GET  /api/signals/stats   - Signal statistics (protected)
 GET  /api/market/snapshot - Orderbook snapshot + depth/imbalance (protected)
 GET  /api/wallet/analytics - Wallet + copy-trade analytics (protected)
+POST /api/wallet/analytics/prime - Bulk pre-warm wallet analytics caches (protected)
+GET  /api/vault/state     - Pooled vault state (accounting-only) (protected)
+POST /api/vault/deposit   - Mint shares for deposit (accounting-only) (protected)
+POST /api/vault/withdraw  - Burn shares for withdrawal (accounting-only) (protected)
 POST /api/trade/order     - One-click trade (feature-flagged; paper/live) (protected)
 GET  /api/risk/stats      - Risk statistics (protected)
 GET  /ws                  - WebSocket upgrade (protected)
@@ -490,6 +551,17 @@ pub struct SignalQualityGate {
 
 ### Vault Module (`vault/`)
 
+**Phase 8 (Option A): pooled vault + automated trading (paper-first).**
+
+Key files:
+- `engine.rs` - Orchestrates FAST15M + LONG engine loops, ingests wallet-entry signals, enforces cadence/budgets, and places orders via `ExecutionAdapter`.
+- `updown15m.rs` - 15m market slug parsing + driftless lognormal `p_up` + shrink-to-half conservatism.
+- `llm.rs` - Bounded Decision DSL parser + OpenRouter client (env-keyed; no secrets in code).
+- `execution.rs` - `ExecutionAdapter` + `PaperExecutionAdapter` (fills instantly at limit price) + `DomeExecutionAdapter` placeholder.
+- `paper_ledger.rs` - Cash + positions ledger; supports BUY/SELL (paper).
+- `pool.rs` - Share accounting (`deposit`/`withdraw`) + approximate NAV.
+- `vault_db.rs` - SQLite persistence for vault state + per-wallet shares (separate DB from `betterbot_signals.db`).
+
 #### `kelly.rs` - Position sizing
 **Purpose:** Optimal bet sizing using Kelly Criterion
 
@@ -595,6 +667,12 @@ class ApiClient {
 }
 ```
 
+Notes:
+- `fetch()` supports an external `AbortSignal` and distinguishes timeout vs abort; errors include HTTP status + response body when available.
+- Full-history search endpoints:
+  - `searchSignals()` → `GET /api/signals/search`
+  - `searchSignalsStatus()` → `GET /api/signals/search/status` (short timeout, used for index/backfill progress)
+
 ---
 
 #### `services/websocket.ts` - WebSocket client
@@ -657,11 +735,32 @@ export const useSignalStore = create<SignalStore>((set) => ({
 
 ---
 
+#### `components/terminal/TerminalHeader.tsx` - Terminal header + navigation
+**Purpose:** Make the terminal feel like a complete dApp shell: centered brand, consistent spacing, and quick access to views/controls.
+
+Key behavior:
+- 2-row layout: **logo row** (centered, extra breathing room) + **controls row** (nav, stats, latency, user/exit).
+- Logo scaled up (~30%) and typography/spacing tuned for a less “clinical dashboard” feel.
+
+---
+
+#### `components/terminal/SignalSearch.tsx` - Always-visible search bar
+**Purpose:** One search entry point for both server (full-history) and local (loaded window) search.
+
+Key behavior:
+- Input + clear button + match counter.
+- Optional banner messaging for server/indexing issues.
+- Shows `LOCAL` badge when in fallback mode.
+
 #### `components/terminal/SignalFeed.tsx` - Feed + Inspector orchestration
 **Purpose:** Dense horizontal feed with a right-side Inspector drawer (no vertical expanding cards)
 
 **Key behavior:**
 - Feed renders `SignalCardCompact` rows.
+- Search is always visible via `SignalSearch`.
+  - **Server mode:** queries `/api/signals/search` (FTS5, full-history) with pagination.
+  - **Local mode:** substring match over the loaded feed window (up to 24h) when server search is unavailable; auto-heals back to server when `/api/signals/search/status` indicates the schema is ready.
+  - Uses debounce + AbortController cancellation to prevent request storms.
 - 24h scrollback: scrolling near the bottom pages older signals via `GET /api/signals?before=<detected_at>&before_id=<id>`.
 - REST hydration uses **lite** signal context by default; `GET /api/signals?full_context=true` is for debugging only (can be very large).
 - Filters are resilient to Up/Down dominance: if filters produce 0 matches in the currently loaded window, the feed auto-pages backward (up to 24h) until matches appear or the 24h cutoff is reached.
@@ -1070,7 +1169,71 @@ CREATE INDEX idx_signals_source ON signals(source, detected_at DESC);
 CREATE INDEX idx_signals_market ON signals(market_slug, detected_at DESC);
 ```
 
+### Full-history search index (SQLite FTS5)
+
+BetterBot maintains an **FTS5-backed full-history search** over signals so the terminal search can find markets beyond the currently loaded window.
+
+High-level schema (see `signals/db_storage.rs`):
+
+```sql
+-- Content table (canonical columns; rowid is used as the FTS content_rowid)
+CREATE TABLE IF NOT EXISTS signal_search (
+  signal_id TEXT NOT NULL UNIQUE,
+  detected_at TEXT NOT NULL,
+  market_slug TEXT NOT NULL,
+  market_title TEXT,
+  order_title TEXT,
+  market_question TEXT,
+  wallet_address TEXT,
+  wallet_label TEXT,
+  token_label TEXT,
+  source TEXT,
+  signal_type TEXT,
+  updated_at INTEGER NOT NULL
+);
+
+-- FTS virtual table + sync triggers
+CREATE VIRTUAL TABLE IF NOT EXISTS signal_search_fts USING fts5(
+  market_slug,
+  market_title,
+  order_title,
+  market_question,
+  wallet_address,
+  wallet_label,
+  token_label,
+  source,
+  signal_type,
+  content='signal_search',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+```
+
+Indexing strategy:
+- **Warm-up:** on startup (and on-demand via `ensure_search_warm()`), index the most recent N signals so search never looks “dead”.
+- **Incremental backfill:** a low-duty-cycle task pages backward through history, tracking cursor metadata:
+  - `search_backfill_cursor_detected_at`
+  - `search_backfill_cursor_id`
+  - `search_backfill_done`
+
+Reliability notes:
+- SQLite has a default **999 bind variable limit**; chunk `IN (...)` enrichment lookups (we use 900).
+- Avoid Rust string `\\` line continuations in SQL literals: they can concatenate tokens (e.g., `SETdetected_at`) and cause SQLite syntax errors.
+
 ---
+
+### Additional tables in `betterbot_signals.db` (high-level)
+
+- `signal_context` - per-signal enrichment payloads (**15m Up/Down signals store lite context only**; full enrichment is fetched on-demand).
+- `dome_order_events` - raw Dome wallet order events (lossless).
+- `dome_cache` - small JSON cache (also used for Gamma lookups).
+- `vault_llm_decisions` / `vault_llm_model_records` - compact audit log for LONG (LLM) decisions and per-model parses.
+
+### Separate vault DB: `betterbot_vault.db`
+
+The pooled vault accounting state is stored separately (see `VAULT_DB_PATH`):
+- `vault_state` (singleton row: cash_usdc, total_shares, updated_at)
+- `vault_user_shares` (wallet_address → shares)
 
 ## 7. Authentication System
 
@@ -1168,6 +1331,51 @@ DOME_ORDER_EVENTS_RETENTION_DAYS=365  # min enforced in code
 # Tracked wallets (optional)
 # MORE_INSIDERS_CSV_PATH=/abs/path/to/more_insiders.csv
 # TRACKED_WALLETS_JSON='{"0xabc...": "insider_other"}'
+
+# Binance price feed (FAST15M)
+BINANCE_ENABLED=true
+
+# Vault DB (separate from signals DB)
+VAULT_DB_PATH=betterbot_vault.db
+
+# Vault engine master switches (default is OFF)
+VAULT_ENGINE_ENABLED=false
+VAULT_ENGINE_PAPER=true
+
+# FAST15M (deterministic Up/Down) tuning
+UPDOWN15M_POLL_MS=2000
+UPDOWN15M_MIN_EDGE=0.01
+UPDOWN15M_KELLY_FRACTION=0.05
+UPDOWN15M_MAX_POSITION_PCT=0.01
+UPDOWN15M_SHRINK=0.35
+UPDOWN15M_COOLDOWN_SEC=30
+
+# LONG engine (BRAID-bounded LLM) switches + budgets
+VAULT_LLM_ENABLED=false
+OPENROUTER_API_KEY=your_key_here   # ROTATE if ever pasted in chat/logs
+# Optional OpenRouter headers:
+# OPENROUTER_HTTP_REFERER=https://your.domain
+# OPENROUTER_APP_TITLE=BetterBot
+
+# Models (comma-separated; first is scout; must be 4)
+# VAULT_LLM_MODELS=x-ai/grok-4.1-thinking,google/gemini-3.0-high-think,openai/gpt-5.2-extra-high-thinking,anthropic/opus-4.5-thinking
+
+# LONG tuning (defaults exist; override as needed)
+VAULT_LLM_MIN_EDGE=0.02
+VAULT_LLM_POLL_MS=5000
+VAULT_LLM_MIN_INFER_INTERVAL_SEC=60
+VAULT_LLM_COOLDOWN_SEC=300
+VAULT_LLM_MAX_CALLS_PER_DAY=200
+VAULT_LLM_MAX_CALLS_PER_MARKET_PER_DAY=30
+VAULT_LLM_MAX_TOKENS_PER_DAY=300000
+VAULT_LLM_TIMEOUT_SEC=20
+VAULT_LLM_MAX_TOKENS=220
+VAULT_LLM_TEMPERATURE=0.15
+
+# LONG admissibility (defaults exist; override as needed)
+VAULT_LLM_MAX_TTE_DAYS=240
+VAULT_LLM_MAX_SPREAD_BPS=500
+VAULT_LLM_MIN_TOP_OF_BOOK_USD=250
 ```
 
 ### IMPORTANT: Preventing "no signals" / "missing DOME token" regressions
@@ -1211,6 +1419,10 @@ When an agent wires live execution, these are the inputs you will need (store as
 - **A signer** that can produce the required signatures (Privy wallet or equivalent).
 - **Privy server credentials** (to verify sessions and request signatures from Privy on behalf of a logged-in user).
 - **Enclave credentials** (only if you enable MagicSpend++ / unified deposit abstraction).
+
+For vault live execution specifically, we also need:
+- **Dome router endpoint + payload contract** (to implement `DomeExecutionAdapter`).
+- A clear **idempotency + cancel/replace** story to avoid duplicate orders.
 
 Agents should define explicit env var names for these when implementing (e.g. `PRIVY_APP_ID`, `PRIVY_SERVER_AUTH_KEY`, `ENCLAVE_API_KEY`) and document them here.
 
@@ -1301,3 +1513,16 @@ ws.onmessage = (e) => console.log(JSON.parse(e.data));
 - **Wallet analytics reliability:** Keep `/api/wallet/analytics` fast via caching + SWR; warm OPT/BASE/PESS; add `cached_only=true` (returns **204** when cold) for safe background prefetch.
 - **Copy curve realism:** Realized-only copy curves go flat; default to `copy_model=scaled` (scaled wallet pnl net execution costs) and offer `copy_model=mtm` (trade replay + daily MTM) for a more defensible backtest.
 - **Frontend UX:** Wallet analytics needs longer timeouts + “still computing… retry” behavior; label friction as **Execution Costs (assumed)** and rename **PF → Profit Factor**.
+
+## Session Learnings (2026-01-12)
+
+- **15m context bloat:** Persist only lite context for `*-updown-15m-*` and fetch live book/price via `GET /api/signals/enrich`.
+- **LLM key hygiene:** Any OpenRouter key pasted in chat should be treated as compromised; load via `OPENROUTER_API_KEY` env var only and never log it.
+- **Cost control:** Scout-first + 3-of-4 consensus dramatically reduces inference spend while keeping a hard permission gate.
+
+## Session Learnings (2026-01-13)
+
+- **Full-history search (FTS5):** Added `/api/signals/search` backed by SQLite FTS5 (`signal_search` + `signal_search_fts` + triggers) with warm-up indexing + incremental backfill.
+- **Search never “dead”:** Added `/api/signals/search/status` and on-demand warm indexing (`ensure_search_warm`) so the UI can show indexing progress and still return recent matches.
+- **Hybrid UX:** Terminal search is always visible; it falls back to local (loaded-window) search on 404/501 or repeated 5xx, and auto-heals back to server mode when the backend is ready.
+- **Pitfalls:** Vite may bind `localhost` (IPv6) on macOS so `127.0.0.1:5173` can fail; and Rust SQL strings with `\\` line continuations can concatenate tokens and break SQLite parsing.

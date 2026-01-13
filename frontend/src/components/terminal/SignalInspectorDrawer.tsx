@@ -1,6 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../services/api';
-import { MarketSnapshotResponse, Signal, WalletAnalyticsResponse } from '../../types/signal';
+import {
+  MarketSnapshotResponse,
+  Signal,
+  SignalEnrichResponse,
+  WalletAnalyticsResponse,
+} from '../../types/signal';
 import {
   formatConfidence,
   formatDelta,
@@ -22,6 +27,10 @@ const INFLIGHT_WALLET_TTL_MS = 35_000;
 const bookCache = new Map<string, MarketSnapshotResponse>();
 const bookInFlight = new Map<string, InFlight<MarketSnapshotResponse>>();
 const INFLIGHT_BOOK_TTL_MS = 12_000;
+
+const enrichCache = new Map<string, SignalEnrichResponse>();
+const enrichInFlight = new Map<string, InFlight<SignalEnrichResponse>>();
+const INFLIGHT_ENRICH_TTL_MS = 5_000;
 
 function formatDayLabel(tsSeconds: number | undefined): string {
   if (!tsSeconds || !Number.isFinite(tsSeconds)) return '';
@@ -147,6 +156,10 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
   const [bookLoading, setBookLoading] = useState(false);
   const [bookError, setBookError] = useState<string | null>(null);
 
+  const [enrich15m, setEnrich15m] = useState<SignalEnrichResponse | null>(null);
+  const [enrich15mLoading, setEnrich15mLoading] = useState(false);
+  const [enrich15mError, setEnrich15mError] = useState<string | null>(null);
+
   const [tradeSide, setTradeSide] = useState<'BUY' | 'SELL'>('BUY');
   const [tradeNotionalUsd, setTradeNotionalUsd] = useState<number>(25);
   const [tradeOrderType, setTradeOrderType] = useState<'GTC' | 'FAK' | 'FOK'>('GTC');
@@ -172,11 +185,14 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
   useEffect(() => {
     setAnalyticsError(null);
     setBookError(null);
+    setEnrich15mError(null);
     setAnalyticsLoading(false);
     setBookLoading(false);
     setBookData(null);
     setWalletAnalytics(null);
     setAnalyticsSource(null);
+    setEnrich15m(null);
+    setEnrich15mLoading(false);
     setTradeArmed(false);
     setTradeStatus(null);
 
@@ -201,6 +217,13 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
   const ctx = signal?.context;
   const derived = ctx?.derived;
   const order = ctx?.order;
+
+  const signalId = signal?.id ?? null;
+  const marketSlug = signal?.market_slug ?? '';
+  const isUpDown15m = useMemo(() => {
+    const slug = marketSlug.toLowerCase();
+    return /^(btc|eth|sol|xrp)-updown-15m-\d+/.test(slug);
+  }, [marketSlug]);
 
   const walletAddress = useMemo(() => {
     if (!signal) return null;
@@ -325,6 +348,46 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
     [canFetchBook, hasNumericClobTokenId, clobTokenIdForBook, marketSlugForBook, outcomeForBook]
   );
 
+  const fetchUpDown15mEnrich = useCallback(
+    async (fresh: boolean = false) => {
+      if (!signalId || !isUpDown15m) return;
+      const levels = 10;
+      const key = `${signalId}:${levels}`;
+
+      setEnrich15mError(null);
+
+      const cached = enrichCache.get(key);
+      if (!fresh && cached) {
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (nowSec - cached.fetched_at <= 2) {
+          setEnrich15m(cached);
+          return;
+        }
+      }
+
+      setEnrich15mLoading(true);
+      try {
+        const nowMs = Date.now();
+        const existing = enrichInFlight.get(key);
+        if (!existing || fresh || nowMs - existing.startedAtMs > INFLIGHT_ENRICH_TTL_MS) {
+          const promise = api.getSignalEnrich(signalId, levels, fresh);
+          enrichInFlight.set(key, { startedAtMs: nowMs, promise });
+        }
+
+        const resp = await enrichInFlight.get(key)!.promise;
+        enrichInFlight.delete(key);
+        enrichCache.set(key, resp);
+        setEnrich15m(resp);
+      } catch (e: any) {
+        enrichInFlight.delete(key);
+        setEnrich15mError(e?.message ?? 'Failed to enrich');
+      } finally {
+        setEnrich15mLoading(false);
+      }
+    },
+    [signalId, isUpDown15m]
+  );
+
   const bookDepth = useMemo(() => {
     if (!bookData) return null;
 
@@ -383,6 +446,24 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
     if (bookData || bookLoading) return;
     fetchBook(false);
   }, [open, activeTab, canFetchBook, bookData, bookLoading, fetchBook]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeTab !== 'DETAILS') return;
+    if (!signalId || !isUpDown15m) return;
+    if (enrich15m || enrich15mLoading) return;
+    fetchUpDown15mEnrich(false);
+  }, [open, activeTab, signalId, isUpDown15m, enrich15m, enrich15mLoading, fetchUpDown15mEnrich]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeTab !== 'DETAILS') return;
+    if (!signalId || !isUpDown15m) return;
+    const t = window.setInterval(() => {
+      fetchUpDown15mEnrich(false);
+    }, 5_000);
+    return () => window.clearInterval(t);
+  }, [open, activeTab, signalId, isUpDown15m, fetchUpDown15mEnrich]);
 
   const walletCurvePoints = walletAnalytics?.wallet_realized_curve || [];
   const copyCurvePoints = walletAnalytics?.copy_trade_curve || [];
@@ -445,6 +526,132 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {activeTab === 'DETAILS' && (
           <div className="space-y-3">
+            {isUpDown15m && (
+              <div className="bg-white/5 rounded p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-mono text-grey/80">15m live (Binance + CLOB)</div>
+                  <button
+                    type="button"
+                    className="text-[11px] font-mono border border-grey/20 px-2 py-1 text-grey/80 hover:text-white hover:border-grey/40"
+                    disabled={enrich15mLoading}
+                    onClick={() => fetchUpDown15mEnrich(true)}
+                  >
+                    [REFRESH]
+                  </button>
+                </div>
+
+                {enrich15mError && <div className="text-[11px] text-danger font-mono">{enrich15mError}</div>}
+                {enrich15mLoading && <div className="text-[11px] text-grey/80 font-mono">Loading…</div>}
+
+                {enrich15m && (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-4 gap-2">
+                      <div className="bg-black/40 rounded p-2">
+                        <div className="text-[9px] text-better-blue-light/90">Binance</div>
+                        <div className="text-[12px] font-mono text-white tabular-nums">
+                          {typeof enrich15m.binance?.mid === 'number' ? formatPrice(enrich15m.binance.mid) : '---'}
+                        </div>
+                      </div>
+                      <div className="bg-black/40 rounded p-2">
+                        <div className="text-[9px] text-better-blue-light/90">σ/√s</div>
+                        <div className="text-[12px] font-mono text-white tabular-nums">
+                          {typeof enrich15m.binance?.sigma_per_sqrt_s === 'number'
+                            ? enrich15m.binance.sigma_per_sqrt_s.toExponential(2)
+                            : '---'}
+                        </div>
+                      </div>
+                      <div className="bg-black/40 rounded p-2">
+                        <div className="text-[9px] text-better-blue-light/90">p(up)</div>
+                        <div className="text-[12px] font-mono text-white tabular-nums">
+                          {typeof enrich15m.binance?.p_up_shrunk === 'number'
+                            ? `${(enrich15m.binance.p_up_shrunk * 100).toFixed(1)}%`
+                            : '---'}
+                        </div>
+                      </div>
+                      <div className="bg-black/40 rounded p-2">
+                        <div className="text-[9px] text-better-blue-light/90">t_rem</div>
+                        <div className="text-[12px] font-mono text-white tabular-nums">
+                          {typeof enrich15m.binance?.t_rem_sec === 'number' ? `${Math.round(enrich15m.binance.t_rem_sec)}s` : '---'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {(() => {
+                        const pUp = enrich15m.binance?.p_up_shrunk;
+                        const pDown = typeof pUp === 'number' ? 1 - pUp : null;
+
+                        const upAsk = enrich15m.up?.best_ask;
+                        const downAsk = enrich15m.down?.best_ask;
+
+                        const edgeUp =
+                          typeof pUp === 'number' && typeof upAsk === 'number' ? pUp - upAsk : null;
+                        const edgeDown =
+                          typeof pDown === 'number' && typeof downAsk === 'number' ? pDown - downAsk : null;
+
+                        const fmtEdge = (v: number | null) => {
+                          if (typeof v !== 'number' || !Number.isFinite(v)) return '---';
+                          const cents = v * 100;
+                          const sign = cents >= 0 ? '+' : '';
+                          return `${sign}${cents.toFixed(2)}¢`;
+                        };
+
+                        return (
+                          <>
+                            <div className="bg-black/40 rounded p-2">
+                              <div className="flex items-center justify-between">
+                                <div className="text-[9px] text-better-blue-light/90">UP</div>
+                                <div className={`text-[9px] font-mono tabular-nums ${metricColorClass(edgeUp)}`}>
+                                  edge {fmtEdge(edgeUp)}
+                                </div>
+                              </div>
+                              <div className="mt-1 grid grid-cols-2 gap-2">
+                                <div>
+                                  <div className="text-[9px] text-grey/70">Bid</div>
+                                  <div className="text-[12px] font-mono text-success tabular-nums">
+                                    {typeof enrich15m.up?.best_bid === 'number' ? formatPrice(enrich15m.up.best_bid) : '---'}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[9px] text-grey/70">Ask</div>
+                                  <div className="text-[12px] font-mono text-danger tabular-nums">
+                                    {typeof enrich15m.up?.best_ask === 'number' ? formatPrice(enrich15m.up.best_ask) : '---'}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="bg-black/40 rounded p-2">
+                              <div className="flex items-center justify-between">
+                                <div className="text-[9px] text-better-blue-light/90">DOWN</div>
+                                <div className={`text-[9px] font-mono tabular-nums ${metricColorClass(edgeDown)}`}>
+                                  edge {fmtEdge(edgeDown)}
+                                </div>
+                              </div>
+                              <div className="mt-1 grid grid-cols-2 gap-2">
+                                <div>
+                                  <div className="text-[9px] text-grey/70">Bid</div>
+                                  <div className="text-[12px] font-mono text-success tabular-nums">
+                                    {typeof enrich15m.down?.best_bid === 'number' ? formatPrice(enrich15m.down.best_bid) : '---'}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-[9px] text-grey/70">Ask</div>
+                                  <div className="text-[12px] font-mono text-danger tabular-nums">
+                                    {typeof enrich15m.down?.best_ask === 'number' ? formatPrice(enrich15m.down.best_ask) : '---'}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-white/5 rounded p-2">
                 <div className="text-[10px] text-better-blue-light/90 uppercase">Δ</div>

@@ -404,11 +404,7 @@ impl Config {
         if !trimmed.starts_with("0x") || trimmed.len() != 42 {
             return None;
         }
-        if !trimmed
-            .chars()
-            .skip(2)
-            .all(|c| c.is_ascii_hexdigit())
-        {
+        if !trimmed.chars().skip(2).all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
         Some(trimmed.to_ascii_lowercase())
@@ -432,7 +428,8 @@ impl Config {
             return "insider_sports";
         }
 
-        if combined.contains("politic") || combined.contains("geo") || combined.contains("election") {
+        if combined.contains("politic") || combined.contains("geo") || combined.contains("election")
+        {
             return "insider_politics";
         }
 
@@ -538,7 +535,9 @@ impl Config {
             };
 
             let label = Self::classify_more_insiders_line(line);
-            wallets.entry(normalized).or_insert_with(|| label.to_string());
+            wallets
+                .entry(normalized)
+                .or_insert_with(|| label.to_string());
         }
     }
 
@@ -547,17 +546,61 @@ impl Config {
     ) {
         // Additional wallet list provided by the user.
         let additions: &[(&str, &str, Option<&str>)] = &[
-            ("0x1f0a343513aa6060488fabe96960e6d1e177f7aa", "Sports", Some("Niche Politics")),
-            ("0x000d257d2dc7616feaf4ae0f14600fdf50a758e", "Crypto", Some("Pop Culture")),
-            ("0x1c1e841584db14084e10e7dca2ad0ab7b60dbfe7", "Politics", Some("Generalist")),
-            ("0xdd225a03cd7ed89e3931906c67c75ab31cf89ef1", "Geopolitics", Some("Economics")),
-            ("0xd5ccdf772f795547e299de57f47966e24de8dea4", "Economics", Some("Macro")),
-            ("0x9d84ce0306f8551e02efef1680475fc0f1dc1344", "Politics", Some("Macro")),
-            ("0x9f47f1fcb1701bf9eaf31236ad39875e5d60af93", "Mixed", Some("High-Vol Events")),
-            ("0xd218e474776403a330142299f7796e8ba32eb5c9", "Crypto", Some("Tech (Tesla)")),
-            ("0x17db3fcd93ba12d38382a0cade24b200185c5f6d", "Esports", Some("Politics")),
-            ("0xdbade4c82fb72780a0db9a38f821d8671aba9c95", "Politics", Some("General")),
-            ("0x24c8cf69a0e0a17eee21f69d29752bfa32e823e1", "Crypto", Some("Politics")),
+            (
+                "0x1f0a343513aa6060488fabe96960e6d1e177f7aa",
+                "Sports",
+                Some("Niche Politics"),
+            ),
+            (
+                "0x000d257d2dc7616feaf4ae0f14600fdf50a758e",
+                "Crypto",
+                Some("Pop Culture"),
+            ),
+            (
+                "0x1c1e841584db14084e10e7dca2ad0ab7b60dbfe7",
+                "Politics",
+                Some("Generalist"),
+            ),
+            (
+                "0xdd225a03cd7ed89e3931906c67c75ab31cf89ef1",
+                "Geopolitics",
+                Some("Economics"),
+            ),
+            (
+                "0xd5ccdf772f795547e299de57f47966e24de8dea4",
+                "Economics",
+                Some("Macro"),
+            ),
+            (
+                "0x9d84ce0306f8551e02efef1680475fc0f1dc1344",
+                "Politics",
+                Some("Macro"),
+            ),
+            (
+                "0x9f47f1fcb1701bf9eaf31236ad39875e5d60af93",
+                "Mixed",
+                Some("High-Vol Events"),
+            ),
+            (
+                "0xd218e474776403a330142299f7796e8ba32eb5c9",
+                "Crypto",
+                Some("Tech (Tesla)"),
+            ),
+            (
+                "0x17db3fcd93ba12d38382a0cade24b200185c5f6d",
+                "Esports",
+                Some("Politics"),
+            ),
+            (
+                "0xdbade4c82fb72780a0db9a38f821d8671aba9c95",
+                "Politics",
+                Some("General"),
+            ),
+            (
+                "0x24c8cf69a0e0a17eee21f69d29752bfa32e823e1",
+                "Crypto",
+                Some("Politics"),
+            ),
         ];
 
         for (addr, primary, secondary) in additions {
@@ -2085,8 +2128,14 @@ mod tests {
             },
             market: Some(json!({"title": "heavy"})),
             price: Some(SignalContextPrice {
-                at_entry: Some(MarketPriceSnapshot { price: 0.4, at_time: 1 }),
-                latest: Some(MarketPriceSnapshot { price: 0.5, at_time: 2 }),
+                at_entry: Some(MarketPriceSnapshot {
+                    price: 0.4,
+                    at_time: 1,
+                }),
+                latest: Some(MarketPriceSnapshot {
+                    price: 0.5,
+                    at_time: 2,
+                }),
             }),
             trade_history: Some(SignalContextTradeHistory {
                 market_flow_1h: None,
@@ -2108,7 +2157,7 @@ mod tests {
                 redeem_count: 0,
                 sample: Some(json!({"event": "merge"})),
             }),
-            candlesticks: Some(json!([{"t": 1, "p": 0.4}])) ,
+            candlesticks: Some(json!([{"t": 1, "p": 0.4}])),
             wallet: Some(json!({"addr": "0xabc"})),
             wallet_pnl: Some(json!({"pnl": 123.0})),
             derived: SignalContextDerived {

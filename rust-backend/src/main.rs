@@ -48,8 +48,8 @@ use crate::{
     models::{Config, MarketSignal, SignalDetails, SignalType, WsServerEvent},
     risk::{RiskInput, RiskManager},
     scrapers::{
-        dome::DomeScraper, dome_rest::DomeRestClient, dome_tracker::DomeClient,
-        hashdive_api::HashdiveScraper, polymarket_api::PolymarketScraper,
+        binance_price_feed::BinancePriceFeed, dome::DomeScraper, dome_rest::DomeRestClient,
+        dome_tracker::DomeClient, hashdive_api::HashdiveScraper, polymarket_api::PolymarketScraper,
     },
     signals::{
         db_storage::DbSignalStorage,
@@ -192,6 +192,8 @@ struct AppState {
     http_client: reqwest::Client,
     dome_rest: Option<Arc<DomeRestClient>>,
     polymarket_market_ws: Arc<crate::scrapers::polymarket_ws::PolymarketMarketWsCache>,
+    binance_feed: Arc<BinancePriceFeed>,
+    vault: Arc<crate::vault::PooledVault>,
 }
 
 #[tokio::main]
@@ -272,6 +274,57 @@ async fn main() -> Result<()> {
 
     let polymarket_market_ws = crate::scrapers::polymarket_ws::PolymarketMarketWsCache::spawn();
 
+    let binance_enabled = env::var("BINANCE_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(true);
+    let binance_feed = if !binance_enabled {
+        BinancePriceFeed::disabled()
+    } else {
+        match BinancePriceFeed::spawn_default().await {
+            Ok(feed) => feed,
+            Err(e) => {
+                warn!("Failed to start Binance price feed: {e}");
+                BinancePriceFeed::disabled()
+            }
+        }
+    };
+
+    // Phase 8: Pooled vault state (shares + paper ledger).
+    let vault_db_path = resolve_data_path(env::var("VAULT_DB_PATH").ok(), "betterbot_vault.db");
+    let vault_db = Arc::new(crate::vault::VaultDb::new(&vault_db_path)?);
+    let (vault_cash_db, vault_total_shares_db) = vault_db.load_state().await.unwrap_or((0.0, 0.0));
+    let vault_user_shares_db = vault_db.load_user_shares().await.unwrap_or_default();
+
+    let vault_initial_cash = if vault_cash_db > 0.0 {
+        vault_cash_db
+    } else {
+        initial_bankroll
+    };
+    risk_manager.write().kelly.bankroll = vault_initial_cash;
+
+    let vault_ledger = Arc::new(tokio::sync::Mutex::new(crate::vault::VaultPaperLedger {
+        cash_usdc: vault_initial_cash,
+        ..Default::default()
+    }));
+    let vault_shares = Arc::new(tokio::sync::Mutex::new(crate::vault::VaultShareState {
+        total_shares: vault_total_shares_db,
+        user_shares: vault_user_shares_db,
+    }));
+    let vault = Arc::new(crate::vault::PooledVault::new(
+        vault_db.clone(),
+        vault_ledger,
+        vault_shares,
+    ));
+
+    let _ = vault
+        .db
+        .upsert_state(
+            vault_initial_cash,
+            vault_total_shares_db,
+            Utc::now().timestamp(),
+        )
+        .await;
+
     let app_state = AppState {
         signal_storage: signal_storage.clone(),
         risk_manager: risk_manager.clone(),
@@ -279,7 +332,12 @@ async fn main() -> Result<()> {
         http_client,
         dome_rest: dome_rest.clone(),
         polymarket_market_ws,
+        binance_feed,
+        vault,
     };
+
+    // Phase 8: Vault engine (15m deterministic, non-15m router stub).
+    crate::vault::VaultEngine::spawn(app_state.clone());
 
     // Spawn parallel data collection tasks
     tokio::spawn(parallel_data_collection(
@@ -300,6 +358,9 @@ async fn main() -> Result<()> {
     // Periodically prune old WS event logs (equity curve source of truth) to keep the DB lean.
     tokio::spawn(storage_pruning_polling(signal_storage.clone()));
 
+    // Background: backfill FTS search index so full-history search works.
+    tokio::spawn(search_index_backfill_polling(signal_storage.clone()));
+
     // Phase 6: Spawn expiry edge alpha signal scanner (60-second intervals)
     tokio::spawn(expiry_edge_polling(
         signal_storage.clone(),
@@ -318,10 +379,33 @@ async fn main() -> Result<()> {
     // Protected API routes
     let protected_routes = Router::new()
         .route("/api/signals", get(api::get_signals_simple))
+        .route("/api/signals/search", get(api::get_signals_search))
+        .route(
+            "/api/signals/search/status",
+            get(api::get_signals_search_status),
+        )
         .route("/api/signals/context", get(api::get_signal_context_simple))
+        .route("/api/signals/enrich", get(api::get_signal_enrich))
         .route("/api/signals/stats", get(api::get_signal_stats))
         .route("/api/market/snapshot", get(api::get_market_snapshot))
         .route("/api/wallet/analytics", get(api::get_wallet_analytics))
+        .route(
+            "/api/wallet/analytics/prime",
+            post(api::post_wallet_analytics_prime),
+        )
+        .route("/api/vault/state", get(api::get_vault_state))
+        .route("/api/vault/overview", get(api::get_vault_overview))
+        .route("/api/vault/performance", get(api::get_vault_performance))
+        .route("/api/vault/positions", get(api::get_vault_positions))
+        .route("/api/vault/activity", get(api::get_vault_activity))
+        .route("/api/vault/config", get(api::get_vault_config))
+        .route(
+            "/api/vault/llm/decisions",
+            get(api::get_vault_llm_decisions),
+        )
+        .route("/api/vault/llm/models", get(api::get_vault_llm_models))
+        .route("/api/vault/deposit", post(api::post_vault_deposit))
+        .route("/api/vault/withdraw", post(api::post_vault_withdraw))
         .route("/api/trade/order", post(api::post_trade_order))
         .route("/api/risk/stats", get(api::get_risk_stats_simple))
         .route("/api/auth/me", get(auth_api::get_current_user))
@@ -413,15 +497,8 @@ async fn wallet_analytics_polling(
             ] {
                 let mut params = base_params.clone();
                 params.friction_mode = mode;
-                let _ = get_or_compute_wallet_analytics(
-                    &storage,
-                    &rest,
-                    &w,
-                    false,
-                    now,
-                    params,
-                )
-                .await;
+                let _ =
+                    get_or_compute_wallet_analytics(&storage, &rest, &w, false, now, params).await;
 
                 // Be conservative with rate limits.
                 tokio::time::sleep(Duration::from_millis(125)).await;
@@ -469,6 +546,43 @@ async fn storage_pruning_polling(storage: Arc<DbSignalStorage>) -> Result<()> {
             Err(e) => warn!("storage prune failed: {}", e),
         }
     }
+}
+
+async fn search_index_backfill_polling(storage: Arc<DbSignalStorage>) -> Result<()> {
+    let enabled = env::var("SEARCH_BACKFILL_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(true);
+
+    if !enabled {
+        info!("🔎 Search index backfill disabled");
+        return Ok(());
+    }
+
+    let batch_size = env::var("SEARCH_BACKFILL_BATCH_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(500);
+    let poll_ms = env::var("SEARCH_BACKFILL_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(250);
+
+    loop {
+        match storage.backfill_search_index_step(batch_size).await {
+            Ok(0) => break,
+            Ok(n) => {
+                debug!("🔎 Search index backfill: indexed {} signals", n);
+            }
+            Err(e) => {
+                warn!("search index backfill failed: {}", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
+    }
+
+    Ok(())
 }
 
 /// Initialize tracing with enhanced observability

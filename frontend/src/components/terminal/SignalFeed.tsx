@@ -1,16 +1,31 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback, useDeferredValue } from 'react';
 import { Signal, SignalStats } from '../../types/signal';
 import { SignalCardCompact } from './SignalCardCompact';
 import { SignalFilters, FilterState } from './SignalFilters';
+import { SignalSearch } from './SignalSearch';
 import { InspectorTab, SignalInspectorDrawer } from './SignalInspectorDrawer';
 import { api } from '../../services/api';
 import { useSignalStore } from '../../stores/signalStore';
 
 const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PAGE_SIZE = 500;
+const SEARCH_PAGE_SIZE = 200;
+const SEARCH_DEBOUNCE_MS = 150;
 const UPDOWN_NEEDLES = ['updown', 'up-or-down', 'up/down', 'up or down', 'up-down'];
 const WALLET_PREFETCH_MAX = 25;
 const WALLET_PREFETCH_CONCURRENCY = 3;
+
+type SearchStatus = {
+  schema_ready: boolean;
+  backfill_done: boolean;
+  total_signals: number;
+  indexed_rows: number;
+  cursor_detected_at?: string | null;
+  cursor_id?: string | null;
+  timestamp: string;
+};
+
+type SearchBanner = { tone: 'info' | 'warning' | 'error'; message: string };
 
 interface SignalFeedProps {
   signals: Signal[];
@@ -41,10 +56,122 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
     whaleOnly: false,
   });
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const [searchMode, setSearchMode] = useState<'server' | 'local'>('server');
+  const [searchStatus, setSearchStatus] = useState<SearchStatus | null>(null);
+  const [searchNotice, setSearchNotice] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<Signal[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchComplete, setSearchComplete] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const searchRequestIdRef = useRef(0);
+  const serverSearchFailuresRef = useRef(0);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const searchStatusAbortRef = useRef<AbortController | null>(null);
+
   // Use stats.total_signals if available, otherwise show current signals length
   const totalSignals = stats?.total_signals ?? signals.length;
 
   const hasActiveFilters = filters.hideUpDown || filters.whaleOnly || filters.minConfidence > 0;
+
+  const trimmedSearchQuery = searchQuery.trim();
+  const deferredTrimmedSearchQuery = deferredSearchQuery.trim();
+  const isSearchActive = trimmedSearchQuery.length > 0;
+
+  const isServerSearchActive = isSearchActive && searchMode === 'server';
+  const isLocalSearchActive = isSearchActive && searchMode === 'local';
+
+  const localSearchResults = useMemo(() => {
+    if (!isLocalSearchActive) return [];
+    if (!deferredTrimmedSearchQuery) return [];
+
+    const terms = deferredTrimmedSearchQuery
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (!terms.length) return [];
+
+    const getHaystack = (s: Signal) => {
+      const st: any = s.signal_type as any;
+      const walletAddr =
+        s.signal_type.type === 'TrackedWalletEntry'
+          ? st.wallet_address
+          : s.signal_type.type === 'WhaleFollowing'
+            ? st.whale_address
+            : s.signal_type.type === 'EliteWallet'
+              ? st.wallet_address
+              : s.signal_type.type === 'InsiderWallet'
+                ? st.wallet_address
+                : '';
+
+      return [
+        s.market_slug,
+        s.details?.market_title,
+        (s.details as any)?.market_question,
+        s.source,
+        s.signal_type?.type,
+        walletAddr,
+        s.context?.order?.title,
+        s.context?.order?.market_slug,
+        s.context?.order?.user,
+        s.context?.order?.token_label,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+    };
+
+    return signals.filter((s) => {
+      const hay = getHaystack(s);
+      return terms.every((t) => hay.includes(t));
+    });
+  }, [deferredTrimmedSearchQuery, isLocalSearchActive, signals]);
+
+  const activeSignals = useMemo(() => {
+    if (!isSearchActive) return signals;
+    return searchMode === 'server' ? searchResults : localSearchResults;
+  }, [isSearchActive, localSearchResults, searchMode, searchResults, signals]);
+
+  const searchBanner: SearchBanner | null = useMemo(() => {
+    if (!isSearchActive) return null;
+
+    if (isLocalSearchActive) {
+      return {
+        tone: 'warning',
+        message:
+          searchNotice ||
+          'Local search is limited to the loaded feed (up to 24h). Restart backend to enable full-history search.',
+      };
+    }
+
+    if (searchError) {
+      return { tone: 'error', message: searchError };
+    }
+
+    if (searchNotice) {
+      return { tone: 'warning', message: searchNotice };
+    }
+
+    if (searchStatus) {
+      if (!searchStatus.schema_ready) {
+        return {
+          tone: 'warning',
+          message: 'Server search index not ready yet (schema missing). Restart the backend to apply DB schema.',
+        };
+      }
+
+      if (!searchStatus.backfill_done && searchStatus.total_signals > 0) {
+        return {
+          tone: 'info',
+          message: `Indexing full history: ${searchStatus.indexed_rows.toLocaleString()}/${searchStatus.total_signals.toLocaleString()} indexed (results may be partial).`,
+        };
+      }
+    }
+
+    return null;
+  }, [isLocalSearchActive, isSearchActive, searchError, searchNotice, searchStatus]);
 
   const isUpDownMarket = useCallback((signal: Signal) => {
     const matches = (raw: unknown) => {
@@ -64,9 +191,9 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
     return false;
   }, []);
 
-  // Apply filters to signals
+  // Apply filters to active signals
   const filteredSignals = useMemo(() => {
-    return signals.filter((signal) => {
+    return activeSignals.filter((signal) => {
       // Filter by confidence (convert to percentage)
       const confidencePct = signal.confidence * 100;
       if (confidencePct < filters.minConfidence) {
@@ -92,7 +219,234 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
 
       return true;
     });
-  }, [signals, filters, isUpDownMarket]);
+  }, [activeSignals, filters, isUpDownMarket]);
+
+  // Search: reset state immediately when the user edits the query.
+  useEffect(() => {
+    searchRequestIdRef.current += 1;
+    serverSearchFailuresRef.current = 0;
+
+    searchAbortRef.current?.abort();
+    searchStatusAbortRef.current?.abort();
+    setSearchError(null);
+    setSearchNotice(null);
+    setSearchComplete(false);
+    if (!trimmedSearchQuery) {
+      setSearchResults([]);
+      setIsSearching(false);
+      setSearchMode('server');
+      setSearchStatus(null);
+      return;
+    }
+    setSearchResults([]);
+  }, [trimmedSearchQuery]);
+
+  // Search: fetch results via backend FTS endpoint (debounced + deferred typing).
+  useEffect(() => {
+    if (!isServerSearchActive) return;
+    if (!trimmedSearchQuery) return;
+    if (!deferredTrimmedSearchQuery) return;
+
+    const reqId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = reqId;
+    let controller: AbortController | null = null;
+
+    const timer = window.setTimeout(() => {
+      controller = new AbortController();
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = controller;
+      const signal = controller.signal;
+
+      (async () => {
+        setIsSearching(true);
+        setSearchError(null);
+        setSearchNotice(null);
+        try {
+          const resp = await api.searchSignals(
+            {
+              q: deferredTrimmedSearchQuery,
+              limit: SEARCH_PAGE_SIZE,
+              exclude_updown: filters.hideUpDown || undefined,
+              min_confidence: filters.minConfidence > 0 ? filters.minConfidence / 100 : undefined,
+            },
+            { signal }
+          );
+
+          if (reqId !== searchRequestIdRef.current) return;
+
+          serverSearchFailuresRef.current = 0;
+          const batch = resp.signals || [];
+          setSearchResults(batch);
+          setSearchComplete(batch.length < SEARCH_PAGE_SIZE);
+        } catch (e: any) {
+          if (e?.aborted) return;
+          if (reqId !== searchRequestIdRef.current) return;
+
+          const status = e?.status;
+          const message = e?.message ?? 'Search failed';
+
+          if (status === 404 || status === 501) {
+            setSearchMode('local');
+            setIsSearching(false);
+            setSearchResults([]);
+            setSearchComplete(true);
+            setSearchError(null);
+            setSearchNotice(
+              'Server search unavailable. Falling back to local search (loaded feed only).'
+            );
+            return;
+          }
+
+          if (typeof status === 'number' && status >= 500) {
+            const failures = serverSearchFailuresRef.current + 1;
+            serverSearchFailuresRef.current = failures;
+            if (failures >= 2) {
+              setSearchMode('local');
+              setIsSearching(false);
+              setSearchResults([]);
+              setSearchComplete(true);
+              setSearchError(null);
+              setSearchNotice(
+                `Server search unstable (${status}). Falling back to local search (loaded feed only).`
+              );
+              return;
+            }
+          }
+
+          setSearchResults([]);
+          setSearchComplete(true);
+          setSearchError(message);
+        } finally {
+          if (reqId === searchRequestIdRef.current) {
+            setIsSearching(false);
+          }
+        }
+      })();
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller?.abort();
+    };
+  }, [deferredTrimmedSearchQuery, filters.hideUpDown, filters.minConfidence, isServerSearchActive, trimmedSearchQuery]);
+
+  const loadMoreSearchResults = useCallback(async () => {
+    if (!isSearchActive) return;
+    if (searchMode !== 'server') return;
+    if (!deferredTrimmedSearchQuery) return;
+    if (isSearching || searchComplete) return;
+
+    const reqId = searchRequestIdRef.current;
+
+    const last = searchResults[searchResults.length - 1];
+    if (!last) return;
+
+    setIsSearching(true);
+    try {
+      const resp = await api.searchSignals({
+        q: deferredTrimmedSearchQuery,
+        limit: SEARCH_PAGE_SIZE,
+        before: last.detected_at,
+        before_id: last.id,
+        exclude_updown: filters.hideUpDown || undefined,
+        min_confidence: filters.minConfidence > 0 ? filters.minConfidence / 100 : undefined,
+      });
+
+      if (reqId !== searchRequestIdRef.current) return;
+
+      const batch = resp.signals || [];
+      if (batch.length === 0) {
+        setSearchComplete(true);
+        return;
+      }
+
+      setSearchResults((prev) => {
+        const seen = new Set(prev.map((s) => s.id));
+        const next = [...prev];
+        for (const s of batch) {
+          if (!seen.has(s.id)) next.push(s);
+        }
+        return next;
+      });
+
+      if (batch.length < SEARCH_PAGE_SIZE) {
+        setSearchComplete(true);
+      }
+    } catch (e: any) {
+      if (reqId !== searchRequestIdRef.current) return;
+      const status = e?.status;
+      if (status === 404 || status === 501) {
+        setSearchMode('local');
+        setSearchNotice('Server search unavailable. Falling back to local search (loaded feed only).');
+        setSearchError(null);
+        return;
+      }
+      setSearchError(e?.message ?? 'Search failed');
+      setSearchComplete(true);
+    } finally {
+      if (reqId === searchRequestIdRef.current) {
+        setIsSearching(false);
+      }
+    }
+  }, [deferredTrimmedSearchQuery, filters.hideUpDown, filters.minConfidence, isSearchActive, isSearching, searchComplete, searchMode, searchResults]);
+
+  // Search: poll backend status (indexing/backfill progress) and auto-heal back to server search.
+  useEffect(() => {
+    if (!isSearchActive) return;
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const tick = async () => {
+      if (cancelled) return;
+
+      const controller = new AbortController();
+      searchStatusAbortRef.current?.abort();
+      searchStatusAbortRef.current = controller;
+
+      try {
+        const status = await api.searchSignalsStatus({ signal: controller.signal });
+        if (cancelled) return;
+        setSearchStatus(status);
+
+        if (searchMode === 'local' && status.schema_ready) {
+          setSearchMode('server');
+          setSearchNotice(null);
+          setSearchError(null);
+        }
+
+        const nextMs =
+          searchMode === 'server'
+            ? status.backfill_done
+              ? 10_000
+              : 2_000
+            : 5_000;
+        timeoutId = window.setTimeout(tick, nextMs);
+      } catch (e: any) {
+        if (e?.aborted) return;
+        if (cancelled) return;
+
+        const code = e?.status;
+        if (searchMode === 'server' && (code === 404 || code === 501)) {
+          setSearchMode('local');
+          setSearchNotice(
+            'Server search unavailable. Falling back to local search (loaded feed only).'
+          );
+          setSearchError(null);
+        }
+
+        timeoutId = window.setTimeout(tick, searchMode === 'local' ? 7_000 : 5_000);
+      }
+    };
+
+    tick();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) window.clearTimeout(timeoutId);
+      searchStatusAbortRef.current?.abort();
+    };
+  }, [isSearchActive, searchMode]);
 
   // Warm wallet analytics cache for the most visible wallets so PERFORMANCE opens instantly.
   useEffect(() => {
@@ -227,6 +581,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
   // Minimum threshold: keep paging until we have at least 10 matching signals
   const MIN_FILTERED_SIGNALS = 10;
   useEffect(() => {
+    if (isSearchActive) return;
     if (!hasActiveFilters) return;
     if (!signals.length) return;
     if (filteredSignals.length >= MIN_FILTERED_SIGNALS) return;
@@ -240,9 +595,28 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
     isLoadingHistory,
     loadOlderSignals,
     signals.length,
+    isSearchActive,
+  ]);
+
+  // Local-search safety net: if we have no matches, keep paging back through the last-24h window.
+  useEffect(() => {
+    if (!isLocalSearchActive) return;
+    if (!signals.length) return;
+    if (filteredSignals.length > 0) return;
+    if (historyComplete || isLoadingHistory) return;
+
+    loadOlderSignals();
+  }, [
+    filteredSignals.length,
+    historyComplete,
+    isLoadingHistory,
+    isLocalSearchActive,
+    loadOlderSignals,
+    signals.length,
   ]);
 
   useEffect(() => {
+    if (isSearchActive) return;
     if (autoScroll && feedRef.current && signals.length > previousSignalCount.current) {
       const isAtTop = feedRef.current.scrollTop <= 5;
       if (isAtTop) {
@@ -250,12 +624,12 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
       }
     }
     previousSignalCount.current = signals.length;
-  }, [signals.length, autoScroll]);
+  }, [signals.length, autoScroll, isSearchActive]);
 
   const inspectorSignal = useMemo(() => {
     if (!inspectorSignalId) return null;
-    return signals.find((s) => s.id === inspectorSignalId) || null;
-  }, [signals, inspectorSignalId]);
+    return activeSignals.find((s) => s.id === inspectorSignalId) || null;
+  }, [activeSignals, inspectorSignalId]);
 
   useEffect(() => {
     if (inspectorSignalId && !inspectorSignal) {
@@ -272,13 +646,17 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
   return (
     <div className="relative h-full bg-void flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="border-b border-grey/20 px-4 py-4 flex justify-between items-center">
+      <div className="border-b border-grey/20 bg-surface px-4 md:px-6 py-5 flex justify-between items-center">
         <div className="flex items-center gap-4">
-          <h2 className="text-[14px] font-mono text-white font-semibold">
+          <h2 className="text-[16px] font-mono text-white font-semibold">
             SIGNAL FEED
           </h2>
           <div className="text-better-blue-lavender font-mono text-[13px]">
-            LIVE ({totalSignals.toLocaleString()} TOTAL)
+            {isSearchActive
+              ? searchMode === 'local'
+                ? 'SEARCH (LOCAL)'
+                : 'SEARCH'
+              : `LIVE (${totalSignals.toLocaleString()} TOTAL)`}
           </div>
           {(filters.hideUpDown || filters.whaleOnly || filters.minConfidence > 0) && (
             <div className="text-grey/80 font-mono text-[13px]">
@@ -287,15 +665,27 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
           )}
         </div>
 
-        <button
-          onClick={() => setAutoScroll(!autoScroll)}
-          className={`border border-grey/30 px-3 py-1 text-[11px] font-mono transition-colors duration-150 ${
-            autoScroll ? 'bg-white text-black' : 'text-grey/80 hover:text-white'
-          }`}
-        >
-          AUTO-SCROLL: {autoScroll ? 'ON' : 'OFF'}
-        </button>
+        {!isSearchActive && (
+          <button
+            onClick={() => setAutoScroll(!autoScroll)}
+            className={`border border-grey/30 px-3 py-1 text-[11px] font-mono transition-colors duration-150 ${
+              autoScroll ? 'bg-white text-black' : 'text-grey/80 hover:text-white'
+            }`}
+          >
+            AUTO-SCROLL: {autoScroll ? 'ON' : 'OFF'}
+          </button>
+        )}
       </div>
+
+      {/* Search (always visible) */}
+      <SignalSearch
+        value={searchQuery}
+        onChange={setSearchQuery}
+        resultsCount={filteredSignals.length}
+        isSearching={isSearching}
+        mode={searchMode}
+        banner={searchBanner}
+      />
 
       {/* Filters */}
       <SignalFilters filters={filters} onFiltersChange={setFilters} />
@@ -310,7 +700,15 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
             const el = e.currentTarget;
             const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 300;
             if (nearBottom) {
-              loadOlderSignals();
+              if (isSearchActive) {
+                if (searchMode === 'server') {
+                  loadMoreSearchResults();
+                } else {
+                  loadOlderSignals();
+                }
+              } else {
+                loadOlderSignals();
+              }
             }
           }}
         >
@@ -323,42 +721,72 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
                   onOpenInspector={(tab) => openInspector(signal.id, tab)}
                 />
               ))}
-              <div className="px-4 py-3 text-center text-[11px] font-mono text-grey/60">
-                {historyComplete
-                  ? historyStalled
-                    ? 'HISTORY UNAVAILABLE'
-                    : 'END (24H)'
-                  : isLoadingHistory
-                    ? 'LOADING 24H HISTORY...'
-                    : 'SCROLL FOR 24H HISTORY'}
+              <div className="px-4 md:px-6 py-3 text-center text-[11px] font-mono text-grey/60">
+                {isSearchActive
+                  ? searchMode === 'server'
+                    ? searchComplete
+                      ? 'END (SEARCH)'
+                      : isSearching
+                        ? 'SEARCHING...'
+                        : 'SCROLL FOR MORE'
+                    : historyComplete
+                      ? historyStalled
+                        ? 'HISTORY UNAVAILABLE'
+                        : 'END (LOCAL 24H)'
+                      : isLoadingHistory
+                        ? 'LOADING 24H HISTORY...'
+                        : 'SCROLL FOR MORE (24H)'
+                  : historyComplete
+                    ? historyStalled
+                      ? 'HISTORY UNAVAILABLE'
+                      : 'END (24H)'
+                    : isLoadingHistory
+                      ? 'LOADING 24H HISTORY...'
+                      : 'SCROLL FOR 24H HISTORY'}
               </div>
             </>
           ) : (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
                 <div className="text-xl font-mono text-grey/80 mb-2">
-                  {signals.length > 0
-                    ? hasActiveFilters && !historyComplete
-                      ? 'SEARCHING 24H HISTORY...'
-                      : historyComplete
-                        ? 'NO MATCHING SIGNALS (24H)'
-                        : 'NO MATCHING SIGNALS'
-                    : error
-                      ? 'ERROR'
-                      : 'SCANNING...'}
+                  {isSearchActive
+                    ? searchMode === 'server' && isSearching
+                      ? 'SEARCHING...'
+                      : searchError
+                        ? 'ERROR'
+                        : searchMode === 'local'
+                          ? 'NO MATCHING SIGNALS (LOCAL)'
+                          : 'NO MATCHING SIGNALS'
+                    : signals.length > 0
+                      ? hasActiveFilters && !historyComplete
+                        ? 'SEARCHING 24H HISTORY...'
+                        : historyComplete
+                          ? 'NO MATCHING SIGNALS (24H)'
+                          : 'NO MATCHING SIGNALS'
+                      : error
+                        ? 'ERROR'
+                        : 'SCANNING...'}
                 </div>
                 <div className="text-xs font-mono text-grey/60 max-w-md whitespace-pre-wrap">
-                  {signals.length > 0 ? (
-                    hasActiveFilters && !historyComplete
-                      ? 'No matches in the currently loaded window. Fetching older signals (up to 24h)...'
-                      : historyComplete
-                        ? 'No signals match the selected filters in the last 24 hours.'
-                        : filters.hideUpDown
-                          ? 'Most recent signals are Up/Down markets. Disable filter to see them.'
-                          : filters.whaleOnly
-                            ? 'No $1,000+ trades in recent signals. Disable filter to see smaller trades.'
-                            : 'Adjust filters to see more'
-                  ) : error ? error : 'Waiting for signals'}
+                  {isSearchActive
+                    ? searchError
+                      ? searchError
+                      : searchMode === 'local'
+                        ? 'Searching within the loaded feed (up to 24h). If you expect older matches, restart the backend to enable full-history search.'
+                        : 'Try different keywords, quotes for phrases, or clear search.'
+                    : signals.length > 0
+                      ? hasActiveFilters && !historyComplete
+                        ? 'No matches in the currently loaded window. Fetching older signals (up to 24h)...'
+                        : historyComplete
+                          ? 'No signals match the selected filters in the last 24 hours.'
+                          : filters.hideUpDown
+                            ? 'Most recent signals are Up/Down markets. Disable filter to see them.'
+                            : filters.whaleOnly
+                              ? 'No $1,000+ trades in recent signals. Disable filter to see smaller trades.'
+                              : 'Adjust filters to see more'
+                      : error
+                        ? error
+                        : 'Waiting for signals'}
                 </div>
               </div>
             </div>

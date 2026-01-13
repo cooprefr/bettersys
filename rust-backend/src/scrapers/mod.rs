@@ -1,3 +1,4 @@
+pub mod binance_price_feed; // Binance spot L1 mid-price feed (barter-data)
 pub mod dome;
 pub mod dome_realtime; // Real-time REST polling (reliable fallback)
 pub mod dome_rest; // REST client for enrichment and analytics
@@ -8,4 +9,5 @@ pub mod hashdive;
 pub mod hashdive_api;
 pub mod polymarket;
 pub mod polymarket_api;
+pub mod polymarket_gamma;
 pub mod polymarket_ws;

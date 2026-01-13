@@ -201,7 +201,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
 
   return (
     <div className="border-b border-grey/10 bg-surface hover:bg-white/5 transition-colors">
-      <div className="px-4 py-4">
+      <div className="px-4 md:px-6 py-4">
         {/* Row 1 */}
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">

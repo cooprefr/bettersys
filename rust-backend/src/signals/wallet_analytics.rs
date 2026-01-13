@@ -327,10 +327,8 @@ pub async fn compute_wallet_analytics(
     );
 
     let friction_pct = params.friction_mode.total_friction_pct() / 100.0;
-    let (daily_friction_costs, total_friction_usd) = trade_notional_to_friction_costs(
-        &daily_trade_notional,
-        friction_pct,
-    );
+    let (daily_friction_costs, total_friction_usd) =
+        trade_notional_to_friction_costs(&daily_trade_notional, friction_pct);
 
     // Fast model: scaled wallet curve net of execution costs.
     let scaled_wallet_curve: Vec<EquityPoint> = wallet_realized_curve
@@ -342,7 +340,8 @@ pub async fn compute_wallet_analytics(
         .collect();
     let scaled_copy_curve = apply_daily_costs_to_curve(&scaled_wallet_curve, &daily_friction_costs);
 
-    let mtm_fallback_needed = params.copy_model == CopyCurveModel::Mtm || scaled_copy_curve.len() < 2;
+    let mtm_fallback_needed =
+        params.copy_model == CopyCurveModel::Mtm || scaled_copy_curve.len() < 2;
     let mtm_result = if mtm_fallback_needed {
         compute_copy_trade_curve_mtm(
             storage,
@@ -362,7 +361,12 @@ pub async fn compute_wallet_analytics(
 
     // Select copy curve model.
     let scaled_ok = scaled_copy_curve.len() >= 2;
-    let scaled_bundle = (scaled_copy_curve, total_friction_usd, trade_count, buy_count);
+    let scaled_bundle = (
+        scaled_copy_curve,
+        total_friction_usd,
+        trade_count,
+        buy_count,
+    );
     let (mut copy_curve, copy_total_friction_usd, copy_trade_count, copy_buy_count) =
         match params.copy_model {
             CopyCurveModel::Scaled => {
@@ -375,7 +379,9 @@ pub async fn compute_wallet_analytics(
                 }
             }
             CopyCurveModel::Mtm => match mtm_result {
-                Some(r) if r.curve.len() >= 2 => (r.curve, r.total_friction_usd, r.trade_count, r.buy_count),
+                Some(r) if r.curve.len() >= 2 => {
+                    (r.curve, r.total_friction_usd, r.trade_count, r.buy_count)
+                }
                 _ => scaled_bundle,
             },
         };
@@ -917,7 +923,11 @@ fn normalize_curve_to_zero(curve: &mut Vec<EquityPoint>) {
     }
 }
 
-fn compute_copy_scale_factor(orders: &[DomeOrder], start_time: i64, fixed_buy_notional_usd: f64) -> f64 {
+fn compute_copy_scale_factor(
+    orders: &[DomeOrder],
+    start_time: i64,
+    fixed_buy_notional_usd: f64,
+) -> f64 {
     if !fixed_buy_notional_usd.is_finite() || fixed_buy_notional_usd <= 0.0 {
         return 1.0;
     }
@@ -1386,10 +1396,12 @@ async fn compute_copy_trade_curve_mtm(
                         .entry(token_id.clone())
                         .or_insert(condition_id.clone());
 
-                    let p = pos_by_token.entry(token_id.clone()).or_insert_with(|| TokenPosition {
-                        condition_id,
-                        ..Default::default()
-                    });
+                    let p = pos_by_token
+                        .entry(token_id.clone())
+                        .or_insert_with(|| TokenPosition {
+                            condition_id,
+                            ..Default::default()
+                        });
                     p.last_price = price;
 
                     if side == "BUY" {

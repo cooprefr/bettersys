@@ -1,0 +1,1517 @@
+{
+  "domeapi_endpoints": [
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/markets",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+      "description": "Get Markets",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+      "request_parameters": [
+        {
+          "name": "market\\_slug",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "string\\[\\]",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "Filter markets by market slug(s). Can provide multiple values.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "event\\_slug",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "string\\[\\]",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "Filter markets by event slug(s). Can provide multiple values.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "condition\\_id",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "string\\[\\]",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "Filter markets by condition ID(s). Can provide multiple values.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "tags",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "string\\[\\]",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "Filter markets by tag(s). Can provide multiple values.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "status",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "enum<string>",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "Filter markets by status (whether they're open or closed) Available options:",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "min\\_volume",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "number",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "Filter markets with total trading volume greater than or equal to this amount (USD)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "limit",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "default:10 Number of markets to return (1-100). Default: 10 for search, 10 for regular queries. Required range: `1 <= x <= 100`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "offset",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "default:0 Number of markets to skip for pagination Required range: `x >= 0`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "start\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "Filter markets from this Unix timestamp in seconds (inclusive)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "name": "end\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+          "description": "Filter markets until this Unix timestamp in seconds (inclusive)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "markets": {
+            "type": "object\\[\\]",
+            "description": "Showchild attributes"
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Showchild attributes [Suggest edits](https://github.com/kurushdubash/dome-api-docs/edit/main/api-reference/endpoint/get-markets.mdx) [Raise issue](https://github.com/kurushdubash/dome-api-docs/issues/new?title=Issue%20on%20docs&body=Path:%20/api-reference/endpoint/get-markets) [Previous](https://docs.domeapi.io/) [Trade HistoryFetches historical trade data with optional filtering by market, condition, token, time range, and user's wallet address.\\\\ \\\\ Next](https://docs.domeapi.io/api-reference/endpoint/get-trade-history) Ctrl+I Get Markets cURL Copy"
+          }
+        }
+      },
+      "real_time_performance_considerations": "Market metadata endpoint. Markets themselves update infrequently; refresh periodically or when needed.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+      "use_case_details": "Search and discover prediction markets with various filters including status, volume, and categories. Foundation for market discovery and selection.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/candlesticks/{condition_id}?interval=1",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+      "description": "Get Candlesticks",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+      "request_parameters": [
+        {
+          "name": "condition\\_id",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "description": null,
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick"
+        },
+        {
+          "name": "start\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "description": "Unix timestamp (in seconds) for start of time range",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick"
+        },
+        {
+          "name": "end\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "description": "Unix timestamp (in seconds) for end of time range",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick"
+        },
+        {
+          "name": "interval",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "type": "enum<integer>",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+          "description": "default:1 Interval length: 1 = 1m, 60 = 1h, 1440 = 1d. Defaults to 1m. ⚠️ Note: There are range limits for `interval` — specifically: - `1` (1m): max range 1 week - `60` (1h): max range 1 month - `1440` (1d): max range 1 year Available options:",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "candlesticks": {
+            "type": "((object\\[\\] \\| object)\\[\\])\\[\\]",
+            "description": "Array of market candlestick data, where each element is a tuple containing candlestick data array and token metadata Tuple of \\[candlestick\\_data\\_array, token\\_metadata\\] Required array length: `2` elements - object\\[\\] - object"
+          }
+        }
+      },
+      "real_time_performance_considerations": "Historical data endpoint with configurable intervals. For real-time price updates, combine with WebSocket market price streams.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+      "use_case_details": "Fetch historical price data in candlestick format for charting and technical analysis. Supports multiple time intervals for detailed market analysis.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/wallet",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "description": "Get Wallet",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "request_parameters": [
+        {
+          "name": "eoa",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "description": "EOA (Externally Owned Account) wallet address. Either `eoa` or `proxy` must be provided, but not both.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        },
+        {
+          "name": "proxy",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "description": "Proxy wallet address. Either `eoa` or `proxy` must be provided, but not both.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        },
+        {
+          "name": "with\\_metrics",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "type": "enum<string>",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "description": "Whether to include wallet trading metrics (total volume, trades, and markets). Pass `true` to include metrics. Metrics are computed only when explicitly requested for performance reasons. Available options:",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        },
+        {
+          "name": "start\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "description": "Optional start date for metrics calculation (Unix timestamp in seconds). Only used when `with_metrics=true`.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        },
+        {
+          "name": "end\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+          "description": "Optional end date for metrics calculation (Unix timestamp in seconds). Only used when `with_metrics=true`.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "eoa": {
+            "type": "string",
+            "description": "The EOA (Externally Owned Account) wallet address"
+          },
+          "proxy": {
+            "type": "string",
+            "description": "The proxy wallet address"
+          },
+          "wallet\\_type": {
+            "type": "string",
+            "description": "The type of wallet"
+          },
+          "wallet\\_metrics": {
+            "type": "object",
+            "description": "Trading metrics for this wallet (only present when with\\_metrics=true) Showchild attributes [Suggest edits](https://github.com/kurushdubash/dome-api-docs/edit/main/api-reference/endpoint/get-wallet.mdx) [Raise issue](https://github.com/kurushdubash/dome-api-docs/issues/new?title=Issue%20on%20docs&body=Path:%20/api-reference/endpoint/get-wallet) [Previous](https://docs.domeapi.io/api-reference/endpoint/get-candlestick) [Wallet Profit-and-LossFetches the \\*\\*realized\\*\\* profit and loss (PnL) for a specific wallet address over a specified time range and granularity. \\*\\*Note:\\*\\* This will differ to what you see on Polymarket's dashboard since Polymarket showcases historical unrealized PnL. This API tracks realized gains only - from either confirmed sells or redeems. We do not realize a gain/loss until a finished market is redeemed.\\\\ \\\\ Next](https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl) Ctrl+I Get Wallet cURL Copy"
+          }
+        }
+      },
+      "real_time_performance_considerations": "On-demand wallet data retrieval. Poll periodically for balance updates or use in combination with WebSocket order feeds.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "use_case_details": "Monitor wallet balances, positions, and profit/loss metrics. Key for portfolio management and performance tracking.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/activity?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "description": "Get Activity",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "request_parameters": [
+        {
+          "name": "user",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "description": "User wallet address to fetch activity for",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        },
+        {
+          "name": "start\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "description": "Filter activity from this Unix timestamp in seconds (inclusive)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        },
+        {
+          "name": "end\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "description": "Filter activity until this Unix timestamp in seconds (inclusive)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        },
+        {
+          "name": "market\\_slug",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "description": "Filter activity by market slug",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        },
+        {
+          "name": "condition\\_id",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "description": "Filter activity by condition ID",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        },
+        {
+          "name": "limit",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "description": "default:100 Number of activities to return (1-1000) Required range: `1 <= x <= 1000`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        },
+        {
+          "name": "offset",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+          "description": "default:0 Number of activities to skip for pagination Required range: `x >= 0`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "activities": {
+            "type": "object\\[\\]",
+            "description": "Showchild attributes"
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Showchild attributes [Suggest edits](https://github.com/kurushdubash/dome-api-docs/edit/main/api-reference/endpoint/get-activity.mdx) [Raise issue](https://github.com/kurushdubash/dome-api-docs/issues/new?title=Issue%20on%20docs&body=Path:%20/api-reference/endpoint/get-activity) [Previous](https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history) [Market PriceFetches the current market price for a market by token\\_id. Allows historical lookups via the at\\_time query parameter.\\\\ \\\\ Next](https://docs.domeapi.io/api-reference/endpoint/get-market-price) Ctrl+I Get Activity cURL Copy"
+          }
+        }
+      },
+      "real_time_performance_considerations": "REST endpoint provides on-demand data retrieval. Rate limits apply based on subscription tier.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "use_case_details": "Track user activity including merges, splits, and trades. Useful for user behavior analysis and activity monitoring.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+      "endpoint_url": "https://api.domeapi.io/v1/kalshi/trades?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+      "description": "Get Kalshi Trades",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+      "request_parameters": [
+        {
+          "name": "ticker",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "description": "The Kalshi market ticker to filter trades",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+        },
+        {
+          "name": "start\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "description": "Start time in Unix timestamp (seconds)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+        },
+        {
+          "name": "end\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "description": "End time in Unix timestamp (seconds)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+        },
+        {
+          "name": "limit",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "description": "default:100 Maximum number of trades to return (default: 100)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+        },
+        {
+          "name": "offset",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+          "description": "default:0 Number of trades to skip for pagination Required range: `x >= 0`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "trades": {
+            "type": "object\\[\\]",
+            "description": "Array of executed trades Showchild attributes"
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Showchild attributes [Suggest edits](https://github.com/kurushdubash/dome-api-docs/edit/main/api-reference/endpoint/get-kalshi-trades.mdx) [Raise issue](https://github.com/kurushdubash/dome-api-docs/issues/new?title=Issue%20on%20docs&body=Path:%20/api-reference/endpoint/get-kalshi-trades) [Previous](https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets) [Orderbook HistoryFetches historical orderbook snapshots for a specific Kalshi market (\\*\\*ticker\\*\\*) over a specified time range. Returns snapshots of the order book including yes/no bids and asks with prices in both cents and dollars. All timestamps are in \\*\\*milliseconds\\*\\*. Orderbook data has history starting from \\*\\*October 29th, 2025\\*\\*.\\\\ \\\\ Next](https://docs.domeapi.io/api-reference/endpoint/get-kalshi-orderbook-history) Ctrl+I Get Kalshi Trades cURL Copy"
+          }
+        }
+      },
+      "real_time_performance_considerations": "REST endpoint provides historical snapshots. For real-time trade notifications, use WebSocket order subscriptions.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+      "use_case_details": "Access historical trade data with filtering by market, time range, and user address. Critical for trade history displays and transaction reconciliation.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/wallet/pnl/{wallet_address}",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "description": "Get Wallet PnL",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "request_parameters": [
+        {
+          "name": "wallet\\_address",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "description": null,
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        },
+        {
+          "name": "granularity",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "type": "enum<string>",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "description": "Available options:",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        },
+        {
+          "name": "start\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "description": "Defaults to first day of first trade if not provided.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        },
+        {
+          "name": "end\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+          "description": "Defaults to the current date if not provided.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "granularity": {
+            "type": "string",
+            "description": null
+          },
+          "start\\_time": {
+            "type": "integer",
+            "description": null
+          },
+          "end\\_time": {
+            "type": "integer",
+            "description": null
+          },
+          "wallet\\_address": {
+            "type": "string",
+            "description": null
+          },
+          "pnl\\_over\\_time": {
+            "type": "object\\[\\]",
+            "description": "Showchild attributes [Suggest edits](https://github.com/kurushdubash/dome-api-docs/edit/main/api-reference/endpoint/get-wallet-pnl.mdx) [Raise issue](https://github.com/kurushdubash/dome-api-docs/issues/new?title=Issue%20on%20docs&body=Path:%20/api-reference/endpoint/get-wallet-pnl) [Previous](https://docs.domeapi.io/api-reference/endpoint/get-wallet) [MarketsFind markets on Kalshi using various filters including market ticker, event ticker, status, and volume\\\\ \\\\ Next](https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets) Ctrl+I Get Wallet PnL cURL Copy"
+          }
+        }
+      },
+      "real_time_performance_considerations": "On-demand wallet data retrieval. Poll periodically for balance updates or use in combination with WebSocket order feeds.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "use_case_details": "Monitor wallet balances, positions, and profit/loss metrics. Key for portfolio management and performance tracking.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/orderbooks?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "description": "Get Orderbook History",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "request_parameters": [
+        {
+          "name": "token\\_id",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "description": "The token id (asset) for the Polymarket market",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        },
+        {
+          "name": "start\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "description": "Start time in Unix timestamp (milliseconds)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        },
+        {
+          "name": "end\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "description": "End time in Unix timestamp (milliseconds)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        },
+        {
+          "name": "limit",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "description": "default:100 Maximum number of snapshots to return (default: 100, max: 200) Required range: `x <= 200`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        },
+        {
+          "name": "pagination\\_key",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+          "description": "pagination key to get the next chunk of data",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "snapshots": {
+            "type": "object\\[\\]",
+            "description": "Array of orderbook snapshots at different points in time Showchild attributes"
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Showchild attributes [Suggest edits](https://github.com/kurushdubash/dome-api-docs/edit/main/api-reference/endpoint/get-orderbook-history.mdx) [Raise issue](https://github.com/kurushdubash/dome-api-docs/issues/new?title=Issue%20on%20docs&body=Path:%20/api-reference/endpoint/get-orderbook-history) [Previous](https://docs.domeapi.io/api-reference/endpoint/get-trade-history) [ActivityFetches activity data for a specific user with optional filtering by market, condition, and time range. Returns trading activity including \\`MERGES\\`, \\`SPLITS\\`, and \\`REDEEMS\\`.\\\\ \\\\ Next](https://docs.domeapi.io/api-reference/endpoint/get-activity) Ctrl+I Get Orderbook History cURL Copy"
+          }
+        }
+      },
+      "real_time_performance_considerations": "Snapshot-based orderbook data. For real-time orderbook synchronization with minimal latency, use WebSocket subscriptions.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "use_case_details": "Retrieve current orderbook state or historical snapshots. Essential for displaying market depth and analyzing liquidity.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+      "endpoint_url": "https://api.domeapi.io/v1/kalshi/markets?limit=10",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+      "description": "Get Kalshi Markets",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+      "request_parameters": [
+        {
+          "name": "market\\_ticker",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "type": "string\\[\\]",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "description": "Filter markets by market ticker(s). Can provide multiple values.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+        },
+        {
+          "name": "event\\_ticker",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "type": "string\\[\\]",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "description": "Filter markets by event ticker(s). Can provide multiple values.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+        },
+        {
+          "name": "status",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "type": "enum<string>",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "description": "Filter markets by status (whether they're open or closed) Available options:",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+        },
+        {
+          "name": "min\\_volume",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "type": "number",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "description": "Filter markets with total trading volume greater than or equal to this amount (in dollars)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+        },
+        {
+          "name": "limit",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "description": "default:10 Number of markets to return (1-100). Default: 10. Required range: `1 <= x <= 100`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+        },
+        {
+          "name": "offset",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+          "description": "default:0 Number of markets to skip for pagination Required range: `x >= 0`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "markets": {
+            "type": "object\\[\\]",
+            "description": "Showchild attributes"
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Showchild attributes [Suggest edits](https://github.com/kurushdubash/dome-api-docs/edit/main/api-reference/endpoint/get-kalshi-markets.mdx) [Raise issue](https://github.com/kurushdubash/dome-api-docs/issues/new?title=Issue%20on%20docs&body=Path:%20/api-reference/endpoint/get-kalshi-markets) [Previous](https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl) [Trade HistoryFetches historical trade data for Kalshi markets with optional filtering by \\*\\*ticker\\*\\* and time range. Returns executed trades with pricing, volume, and taker side information. All timestamps are in \\*\\*seconds\\*\\*.\\\\ \\\\ Next](https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades) Ctrl+I Get Kalshi Markets cURL Copy"
+          }
+        }
+      },
+      "real_time_performance_considerations": "Market metadata endpoint. Markets themselves update infrequently; refresh periodically or when needed.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+      "use_case_details": "Search and discover prediction markets with various filters including status, volume, and categories. Foundation for market discovery and selection.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/market-price/{token_id}",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+      "description": "Get Market Price",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+      "request_parameters": [
+        {
+          "name": "token\\_id",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+          "description": "The token ID for the Polymarket market",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price"
+        },
+        {
+          "name": "at\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+          "description": "Optional Unix timestamp (in seconds) to fetch a historical market price. If not provided, returns the most real-time price available.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "price": {
+            "type": "number",
+            "description": "The market price (between 0 and 1)"
+          },
+          "at\\_time": {
+            "type": "integer",
+            "description": "The timestamp for which the price was fetched (Unix timestamp in seconds)"
+          }
+        }
+      },
+      "real_time_performance_considerations": "Returns most recent available price. For continuous real-time updates, consider using WebSocket subscriptions.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+      "use_case_details": "Retrieve current or historical market prices for prediction markets. Essential for displaying market prices in trading terminals and calculating position values.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/orders?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "description": "Get Orders",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "request_parameters": [
+        {
+          "name": "market\\_slug",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "description": "Filter orders by market slug",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "name": "condition\\_id",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "description": "Filter orders by condition ID",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "name": "token\\_id",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "description": "Filter orders by token ID",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "name": "start\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "description": "Filter orders from this Unix timestamp in seconds (inclusive)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "name": "end\\_time",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "description": "Filter orders until this Unix timestamp in seconds (inclusive)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "name": "limit",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "description": "default:100 Number of orders to return (1-1000) Required range: `1 <= x <= 1000`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "name": "offset",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "type": "integer",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "description": "default:0 Number of orders to skip for pagination Required range: `x >= 0`",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "name": "user",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+          "description": "Filter orders by user (wallet address)",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "orders": {
+            "type": "object\\[\\]",
+            "description": "Showchild attributes"
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Showchild attributes [Suggest edits](https://github.com/kurushdubash/dome-api-docs/edit/main/api-reference/endpoint/get-trade-history.mdx) [Raise issue](https://github.com/kurushdubash/dome-api-docs/issues/new?title=Issue%20on%20docs&body=Path:%20/api-reference/endpoint/get-trade-history) [Previous](https://docs.domeapi.io/api-reference/endpoint/get-markets) [Orderbook HistoryFetches historical orderbook snapshots for a specific asset (\\*\\*token ID\\*\\*) over a specified time range. Returns snapshots of the order book including bids, asks, and market metadata in order. All timestamps are in \\*\\*milliseconds\\*\\*. Orderbook data has history starting from \\*\\*October 14th, 2025\\*\\*.\\\\ \\\\ Next](https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history) Ctrl+I Get Orders cURL Copy"
+          }
+        }
+      },
+      "real_time_performance_considerations": "REST endpoint provides historical snapshots. For real-time trade notifications, use WebSocket order subscriptions.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "use_case_details": "Access historical trade data with filtering by market, time range, and user address. Critical for trade history displays and transaction reconciliation.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+      "endpoint_url": "https://api.domeapi.io/v1/matching-markets/sports",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+      "description": "Get Matching Markets for Sports",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+      "method": "GET",
+      "method_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+      "request_parameters": [
+        {
+          "name": "polymarket\\_market\\_slug",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+          "type": "string\\[\\]",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+          "description": "The Polymarket market slug(s) to find matching markets for. To get multiple markets at once, provide the query param multiple times with different slugs. Can not be combined with kalshi\\_event\\_ticker.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports"
+        },
+        {
+          "name": "kalshi\\_event\\_ticker",
+          "name_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+          "type": "string\\[\\]",
+          "type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+          "required": false,
+          "required_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+          "description": "The Kalshi event ticker(s) to find matching markets for. To get multiple markets at once, provide the query param multiple times with different tickers. Can not be combined with polymarket\\_market\\_slug.",
+          "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports"
+        }
+      ],
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "markets": {
+            "type": "object",
+            "description": "Showchild attributes"
+          }
+        }
+      },
+      "real_time_performance_considerations": "Market metadata endpoint. Markets themselves update infrequently; refresh periodically or when needed.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+      "use_case_details": "Search and discover prediction markets with various filters including status, volume, and categories. Foundation for market discovery and selection.",
+      "use_case_details_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports"
+    },
+    {
+      "endpoint_type": "WebSocket",
+      "endpoint_type_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "endpoint_url": "wss://ws.domeapi.io/{API_KEY}",
+      "endpoint_url_citation": "https://docs.domeapi.io/websockets",
+      "description": "WebSocket Subscribe - Real-time order updates with filtering by users, condition IDs, or market slugs",
+      "description_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "method": "subscribe",
+      "method_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "request_parameters": [
+        {
+          "name": "action",
+          "name_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "description": "Must be `\"subscribe\"`",
+          "description_citation": "https://docs.domeapi.io/websockets/subscribe"
+        },
+        {
+          "name": "platform",
+          "name_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "description": "Must be `\"polymarket\"`",
+          "description_citation": "https://docs.domeapi.io/websockets/subscribe"
+        },
+        {
+          "name": "version",
+          "name_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "description": "Currently `1`",
+          "description_citation": "https://docs.domeapi.io/websockets/subscribe"
+        },
+        {
+          "name": "type",
+          "name_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "description": "Must be `\"orders\"`",
+          "description_citation": "https://docs.domeapi.io/websockets/subscribe"
+        },
+        {
+          "name": "filters",
+          "name_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "type": "object",
+          "type_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/subscribe",
+          "description": "Object containing filter criteria (see filter types below)",
+          "description_citation": "https://docs.domeapi.io/websockets/subscribe"
+        }
+      ],
+      "response_schema": {},
+      "real_time_performance_considerations": "WebSocket connection provides push-based updates with minimal latency (<100ms typical). Subscription limits vary by tier: Free (2 subscriptions, 5 wallets), Dev (500 subscriptions, 500 wallets), Enterprise (custom). Use filtered subscriptions to reduce bandwidth and processing overhead. Maintain connection health with ping/pong frames.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/websockets",
+      "use_case_details": "Subscribe to receive real-time order updates with flexible filtering. Supports three filter types: 1) User addresses - track specific wallets or use wildcard for all trades (Dev tier), 2) Condition IDs - monitor specific market outcomes, 3) Market slugs - track all activity in specific markets. Essential for building live order flow displays, execution monitoring, and market activity tracking in trading terminals.",
+      "use_case_details_citation": "https://docs.domeapi.io/websockets"
+    },
+    {
+      "endpoint_type": "WebSocket",
+      "endpoint_type_citation": "https://docs.domeapi.io/websockets/update",
+      "endpoint_url": "wss://ws.domeapi.io/{API_KEY}",
+      "endpoint_url_citation": "https://docs.domeapi.io/websockets",
+      "description": "The update action allows you to modify the filters of an existing subscription without creating a new one. This is more efficient than unsubscribing and re-subscribing, as it maintains the same subscription ID.",
+      "description_citation": "https://docs.domeapi.io/websockets/update",
+      "method": "update",
+      "method_citation": "https://docs.domeapi.io/websockets/update",
+      "request_parameters": [
+        {
+          "name": "action",
+          "name_citation": "https://docs.domeapi.io/websockets/update",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/update",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/update",
+          "description": "Must be `\"update\"`",
+          "description_citation": "https://docs.domeapi.io/websockets/update"
+        },
+        {
+          "name": "subscription_id",
+          "name_citation": "https://docs.domeapi.io/websockets/update",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/update",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/update",
+          "description": "The ID of the subscription you want to update",
+          "description_citation": "https://docs.domeapi.io/websockets/update"
+        },
+        {
+          "name": "platform",
+          "name_citation": "https://docs.domeapi.io/websockets/update",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/update",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/update",
+          "description": "Must be `\"polymarket\"`",
+          "description_citation": "https://docs.domeapi.io/websockets/update"
+        },
+        {
+          "name": "version",
+          "name_citation": "https://docs.domeapi.io/websockets/update",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/update",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/update",
+          "description": "Currently `1`",
+          "description_citation": "https://docs.domeapi.io/websockets/update"
+        },
+        {
+          "name": "type",
+          "name_citation": "https://docs.domeapi.io/websockets/update",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/update",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/update",
+          "description": "Must be `\"orders\"`",
+          "description_citation": "https://docs.domeapi.io/websockets/update"
+        },
+        {
+          "name": "filters",
+          "name_citation": "https://docs.domeapi.io/websockets/update",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/update",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/update",
+          "description": "New filter configuration (same format as subscribe)",
+          "description_citation": "https://docs.domeapi.io/websockets/update"
+        }
+      ],
+      "response_schema": {},
+      "real_time_performance_considerations": "WebSocket provides push-based real-time updates with minimal latency. Ideal for live trading terminals requiring immediate order and execution notifications.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/websockets",
+      "use_case_details": "Real-time streaming for order and trade updates. Action: update. Enables low-latency order flow monitoring and execution tracking.",
+      "use_case_details_citation": "https://docs.domeapi.io/websockets"
+    },
+    {
+      "endpoint_type": "WebSocket",
+      "endpoint_type_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+      "endpoint_url": "wss://ws.domeapi.io/{API_KEY}",
+      "endpoint_url_citation": "https://docs.domeapi.io/websockets",
+      "description": "The unsubscribe action allows you to stop receiving updates for a specific subscription without disconnecting from the WebSocket entirely. This is useful when you want to manage multiple subscriptions independently.",
+      "description_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+      "method": "unsubscribe",
+      "method_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+      "request_parameters": [
+        {
+          "name": "action",
+          "name_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "description": "Must be `\"unsubscribe\"`",
+          "description_citation": "https://docs.domeapi.io/websockets/unsubscribe"
+        },
+        {
+          "name": "version",
+          "name_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "description": "Currently `1`",
+          "description_citation": "https://docs.domeapi.io/websockets/unsubscribe"
+        },
+        {
+          "name": "subscription_id",
+          "name_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "type": "string",
+          "type_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "required": true,
+          "required_citation": "https://docs.domeapi.io/websockets/unsubscribe",
+          "description": "The subscription ID you received when you subscribed (e.g., `\"sub_wjhhq8dny2\"`)",
+          "description_citation": "https://docs.domeapi.io/websockets/unsubscribe"
+        }
+      ],
+      "response_schema": {},
+      "real_time_performance_considerations": "WebSocket provides push-based real-time updates with minimal latency. Ideal for live trading terminals requiring immediate order and execution notifications.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/websockets",
+      "use_case_details": "Real-time streaming for order and trade updates. Action: unsubscribe. Enables low-latency order flow monitoring and execution tracking.",
+      "use_case_details_citation": "https://docs.domeapi.io/websockets"
+    }
+  ],
+  "market_data_endpoints": [
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/markets",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+      "description": "Get Markets",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets",
+      "data_fields": [
+        {
+          "value": "markets",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-markets"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/candlesticks/{condition_id}?interval=1",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+      "description": "Get Candlesticks",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick",
+      "data_fields": [
+        {
+          "value": "candlesticks",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-candlestick"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/wallet",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "description": "Get Wallet",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "data_fields": [
+        {
+          "value": "eoa",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        },
+        {
+          "value": "proxy",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        },
+        {
+          "value": "wallet_type",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        },
+        {
+          "value": "wallet_metrics",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/activity?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "description": "Get Activity",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "data_fields": [
+        {
+          "value": "activities",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/wallet/pnl/{wallet_address}",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "description": "Get Wallet PnL",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "data_fields": [
+        {
+          "value": "granularity",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        },
+        {
+          "value": "start_time",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        },
+        {
+          "value": "end_time",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        },
+        {
+          "value": "wallet_address",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        },
+        {
+          "value": "pnl_over_time",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/orderbooks?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "description": "Get Orderbook History",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "data_fields": [
+        {
+          "value": "snapshots",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+      "endpoint_url": "https://api.domeapi.io/v1/kalshi/markets?limit=10",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+      "description": "Get Kalshi Markets",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets",
+      "data_fields": [
+        {
+          "value": "markets",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-markets"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/market-price/{token_id}",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+      "description": "Get Market Price",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price",
+      "data_fields": [
+        {
+          "value": "price",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price"
+        },
+        {
+          "value": "at_time",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-market-price"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/orders?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "description": "Get Orders",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "data_fields": [
+        {
+          "value": "orders",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+      "endpoint_url": "https://api.domeapi.io/v1/matching-markets/sports",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+      "description": "Get Matching Markets for Sports",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports",
+      "data_fields": [
+        {
+          "value": "markets",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports"
+        }
+      ],
+      "real_time_updates": false,
+      "real_time_updates_citation": "https://docs.domeapi.io/api-reference/endpoint/get-matching-markets-sports"
+    },
+    {
+      "endpoint_type": "WebSocket",
+      "endpoint_type_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "endpoint_url": "wss://ws.domeapi.io/{API_KEY}",
+      "endpoint_url_citation": "https://docs.domeapi.io/websockets",
+      "description": "The subscribe action allows you to receive real-time order updates from Polymarket. You can filter orders by different criteria to receive only the data you need.",
+      "description_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "data_fields": [],
+      "real_time_updates": true,
+      "real_time_updates_citation": "https://docs.domeapi.io/websockets"
+    }
+  ],
+  "trade_history_endpoints": [
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/activity?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "description": "Get Activity",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity",
+      "trade_fields": [
+        {
+          "value": "activities",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+        }
+      ],
+      "pagination_support": true,
+      "pagination_support_citation": "https://docs.domeapi.io/api-reference/endpoint/get-activity"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+      "endpoint_url": "https://api.domeapi.io/v1/kalshi/trades?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+      "description": "Get Kalshi Trades",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades",
+      "trade_fields": [
+        {
+          "value": "trades",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+        }
+      ],
+      "pagination_support": true,
+      "pagination_support_citation": "https://docs.domeapi.io/api-reference/endpoint/get-kalshi-trades"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/orderbooks?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "description": "Get Orderbook History",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "trade_fields": [
+        {
+          "value": "snapshots",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+        }
+      ],
+      "pagination_support": true,
+      "pagination_support_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/orders?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "description": "Get Orders",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history",
+      "trade_fields": [
+        {
+          "value": "orders",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        },
+        {
+          "value": "pagination",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+        }
+      ],
+      "pagination_support": true,
+      "pagination_support_citation": "https://docs.domeapi.io/api-reference/endpoint/get-trade-history"
+    },
+    {
+      "endpoint_type": "WebSocket",
+      "endpoint_type_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "endpoint_url": "wss://ws.domeapi.io/{API_KEY}",
+      "endpoint_url_citation": "https://docs.domeapi.io/websockets",
+      "description": "The subscribe action allows you to receive real-time order updates from Polymarket. You can filter orders by different criteria to receive only the data you need.",
+      "description_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "trade_fields": [
+        {
+          "value": "order_id",
+          "value_citation": "https://docs.domeapi.io/websockets"
+        },
+        {
+          "value": "price",
+          "value_citation": "https://docs.domeapi.io/websockets"
+        },
+        {
+          "value": "volume",
+          "value_citation": "https://docs.domeapi.io/websockets"
+        },
+        {
+          "value": "side",
+          "value_citation": "https://docs.domeapi.io/websockets"
+        },
+        {
+          "value": "timestamp",
+          "value_citation": "https://docs.domeapi.io/websockets"
+        },
+        {
+          "value": "status",
+          "value_citation": "https://docs.domeapi.io/websockets"
+        }
+      ],
+      "pagination_support": false,
+      "pagination_support_citation": "https://docs.domeapi.io/websockets"
+    }
+  ],
+  "wallet_management_endpoints": [
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/wallet",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "description": "Get Wallet",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet",
+      "functions": [
+        {
+          "value": "wallet information retrieval",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        },
+        {
+          "value": "address resolution (EOA/proxy)",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+        }
+      ],
+      "security_considerations": "Requires API key authentication. Wallet addresses should be validated. Rate limits apply per tier.",
+      "security_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet"
+    },
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/wallet/pnl/{wallet_address}",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "description": "Get Wallet PnL",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl",
+      "functions": [
+        {
+          "value": "profit-and-loss calculation",
+          "value_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+        }
+      ],
+      "security_considerations": "Requires API key authentication. Wallet addresses should be validated. Rate limits apply per tier.",
+      "security_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-wallet-pnl"
+    }
+  ],
+  "orderbook_synchronization_endpoints": [
+    {
+      "endpoint_type": "REST",
+      "endpoint_type_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "endpoint_url": "https://api.domeapi.io/v1/polymarket/orderbooks?limit=100",
+      "endpoint_url_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "description": "Get Orderbook History",
+      "description_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "update_frequency": "On-demand historical snapshots",
+      "update_frequency_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "data_format": "JSON via REST API",
+      "data_format_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history",
+      "real_time_performance_considerations": "Provides historical orderbook snapshots. Use for backtesting and analysis rather than live trading synchronization.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/api-reference/endpoint/get-orderbook-history"
+    },
+    {
+      "endpoint_type": "WebSocket",
+      "endpoint_type_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "endpoint_url": "wss://ws.domeapi.io/{API_KEY}",
+      "endpoint_url_citation": "https://docs.domeapi.io/websockets",
+      "description": "The subscribe action allows you to receive real-time order updates from Polymarket. You can filter orders by different criteria to receive only the data you need.",
+      "description_citation": "https://docs.domeapi.io/websockets/subscribe",
+      "update_frequency": "Real-time push updates on order changes",
+      "update_frequency_citation": "https://docs.domeapi.io/websockets",
+      "data_format": "JSON streaming over WebSocket",
+      "data_format_citation": "https://docs.domeapi.io/websockets",
+      "real_time_performance_considerations": "WebSocket provides immediate order update notifications. Maintain local orderbook state and apply incremental updates for optimal performance. Supports filtering by users, condition IDs, or market slugs.",
+      "real_time_performance_considerations_citation": "https://docs.domeapi.io/websockets"
+    }
+  ]
+}

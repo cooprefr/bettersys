@@ -26,7 +26,7 @@ export const SignalFilters: React.FC<SignalFiltersProps> = ({ filters, onFilters
       {/* Filter Toggle Button */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-4 py-3 flex justify-between items-center text-[13px] font-mono text-grey/80 hover:text-white transition-colors"
+        className="w-full px-4 md:px-6 py-3 flex justify-between items-center text-[13px] font-mono text-grey/80 hover:text-white transition-colors"
       >
         <span>FILTERS</span>
         <span className={`transform transition-transform ${isExpanded ? 'rotate-180' : ''}`}>
@@ -36,7 +36,7 @@ export const SignalFilters: React.FC<SignalFiltersProps> = ({ filters, onFilters
 
       {/* Expanded Filters */}
       {isExpanded && (
-        <div className="px-4 pb-4 space-y-4">
+        <div className="px-4 md:px-6 pb-4 space-y-4">
           {/* Up/Down Markets Toggle */}
           <div className="flex items-center justify-between">
             <span className="text-[13px] font-mono text-grey/80">HIDE UP/DOWN MARKETS</span>
