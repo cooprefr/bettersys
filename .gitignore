@@ -43,3 +43,15 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Cache and build artifacts
+.cache/
+.remotion/
+backtest-app/
+frontend/out/
+rust-backend/bench_output/
+rust-backend/results/
+docs-1/
+
+# Large data files
+*.zip

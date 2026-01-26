@@ -16,6 +16,10 @@ export interface VaultOverviewResponse {
   wallet_address?: string;
   user_shares?: number;
   user_value_usdc?: number;
+  // Real Polymarket account data (only in live mode)
+  polymarket_balance?: number;
+  polymarket_positions_value?: number;
+  polymarket_total_value?: number;
 }
 
 export interface VaultNavPoint {
@@ -208,4 +212,117 @@ export interface VaultWithdrawResponse {
   nav_per_share: number;
   total_shares: number;
   nav_usdc: number;
+}
+
+// Backtest types
+export interface BacktestPnlPoint {
+  ts: number;
+  equity: number;
+  pnl_cumulative: number;
+  drawdown: number;
+}
+
+export interface BacktestTradeRecord {
+  ts: number;
+  market_slug: string;
+  outcome: string;
+  side: string;
+  entry_price: number;
+  exit_price: number;
+  shares: number;
+  pnl: number;
+  edge: number;
+}
+
+export interface BacktestResults {
+  fetched_at: number;
+  asset: string;
+  date_range: { start: string; end: string };
+  config: {
+    bankroll: number;
+    min_edge: number;
+    kelly_fraction: number;
+    max_position_pct: number;
+    fee_rate: number;
+  };
+  summary: {
+    total_orders: number;
+    opportunities: number;
+    trades_taken: number;
+    total_volume: number;
+    total_fees: number;
+    realized_pnl: number;
+    gross_profit: number;
+    gross_loss: number;
+    wins: number;
+    losses: number;
+    win_rate: number;
+    profit_factor: number;
+    max_drawdown: number;
+    avg_edge: number;
+    roi_pct: number;
+    avg_pnl_per_trade: number;
+    avg_trade_size: number;
+  };
+  pnl_curve: BacktestPnlPoint[];
+  recent_trades: BacktestTradeRecord[];
+}
+
+// Paper Trading types
+export interface PaperTradingSummary {
+  signals_seen: number;
+  opportunities: number;
+  trades_taken: number;
+  total_volume: number;
+  total_fees: number;
+  realized_pnl: number;
+  gross_profit: number;
+  gross_loss: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  profit_factor: number;
+  max_drawdown: number;
+  avg_edge: number;
+  roi_pct: number;
+  avg_pnl_per_trade: number;
+  avg_trade_size: number;
+}
+
+export interface PaperTradeRecord {
+  ts: number;
+  market_slug: string;
+  outcome: string;
+  side: string;
+  entry_price: number;
+  exit_price: number;
+  shares: number;
+  pnl: number;
+  edge: number;
+}
+
+export interface PaperTradingState {
+  fetched_at: number;
+  is_running: boolean;
+  started_at: number | null;
+  uptime_secs: number;
+  asset: string;
+  config: {
+    bankroll: number;
+    min_edge: number;
+    kelly_fraction: number;
+    max_position_pct: number;
+    fee_rate: number;
+  };
+  summary: PaperTradingSummary;
+  pnl_curve: BacktestPnlPoint[];
+  recent_trades: PaperTradeRecord[];
+}
+
+export interface PaperTradingStartRequest {
+  asset: string;
+  bankroll: number;
+  min_edge: number;
+  kelly_fraction: number;
+  max_position_pct: number;
 }

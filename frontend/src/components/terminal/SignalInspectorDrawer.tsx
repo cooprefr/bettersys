@@ -84,8 +84,8 @@ function tabButtonClass(active: boolean): string {
   return [
     'px-2.5 py-1.5 text-[11px] font-mono border transition-colors',
     active
-      ? 'border-white bg-white text-black'
-      : 'border-grey/30 text-grey/80 hover:text-white hover:border-grey/50',
+      ? 'border-fg bg-fg text-void'
+      : 'border-grey/30 text-fg/90 hover:text-fg hover:border-grey/50',
   ].join(' ');
 }
 
@@ -489,12 +489,12 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
       {/* Header */}
       <div className="border-b border-grey/20 px-4 py-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[11px] font-mono text-grey/80">
+          <div className="text-[11px] font-mono text-fg/90">
             {formatTimestamp(signal.detected_at)} • {formatConfidence(signal.confidence)}
           </div>
-          <div className="mt-1 text-[14px] font-mono text-white truncate">{marketTitle}</div>
+          <div className="mt-1 text-[14px] font-mono text-fg truncate">{marketTitle}</div>
           {walletAddress && (
-            <div className="mt-1 text-[11px] font-mono text-grey/80 truncate">
+            <div className="mt-1 text-[11px] font-mono text-fg/90 truncate">
               wallet: {walletAddress}
             </div>
           )}
@@ -502,7 +502,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="border border-grey/30 px-2 py-1 text-[11px] font-mono text-grey/80 hover:text-white hover:border-grey/50"
+          className="border border-grey/30 px-2 py-1 text-[11px] font-mono text-fg/90 hover:text-fg hover:border-grey/50"
         >
           [CLOSE]
         </button>
@@ -527,12 +527,12 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
         {activeTab === 'DETAILS' && (
           <div className="space-y-3">
             {isUpDown15m && (
-              <div className="bg-white/5 rounded p-3 space-y-2">
+              <div className="bg-fg/5 rounded p-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="text-[11px] font-mono text-grey/80">15m live (Binance + CLOB)</div>
+                  <div className="text-[11px] font-mono text-fg/90">15m live (Binance + CLOB)</div>
                   <button
                     type="button"
-                    className="text-[11px] font-mono border border-grey/20 px-2 py-1 text-grey/80 hover:text-white hover:border-grey/40"
+                    className="text-[11px] font-mono border border-grey/20 px-2 py-1 text-fg/90 hover:text-fg hover:border-grey/40"
                     disabled={enrich15mLoading}
                     onClick={() => fetchUpDown15mEnrich(true)}
                   >
@@ -541,36 +541,36 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                 </div>
 
                 {enrich15mError && <div className="text-[11px] text-danger font-mono">{enrich15mError}</div>}
-                {enrich15mLoading && <div className="text-[11px] text-grey/80 font-mono">Loading…</div>}
+                {enrich15mLoading && <div className="text-[11px] text-fg/90 font-mono">Loading…</div>}
 
                 {enrich15m && (
                   <div className="space-y-2">
                     <div className="grid grid-cols-4 gap-2">
-                      <div className="bg-black/40 rounded p-2">
+                      <div className="bg-void/40 rounded p-2">
                         <div className="text-[9px] text-better-blue-light/90">Binance</div>
-                        <div className="text-[12px] font-mono text-white tabular-nums">
+                        <div className="text-[12px] font-mono text-fg tabular-nums">
                           {typeof enrich15m.binance?.mid === 'number' ? formatPrice(enrich15m.binance.mid) : '---'}
                         </div>
                       </div>
-                      <div className="bg-black/40 rounded p-2">
+                      <div className="bg-void/40 rounded p-2">
                         <div className="text-[9px] text-better-blue-light/90">σ/√s</div>
-                        <div className="text-[12px] font-mono text-white tabular-nums">
+                        <div className="text-[12px] font-mono text-fg tabular-nums">
                           {typeof enrich15m.binance?.sigma_per_sqrt_s === 'number'
                             ? enrich15m.binance.sigma_per_sqrt_s.toExponential(2)
                             : '---'}
                         </div>
                       </div>
-                      <div className="bg-black/40 rounded p-2">
+                      <div className="bg-void/40 rounded p-2">
                         <div className="text-[9px] text-better-blue-light/90">p(up)</div>
-                        <div className="text-[12px] font-mono text-white tabular-nums">
+                        <div className="text-[12px] font-mono text-fg tabular-nums">
                           {typeof enrich15m.binance?.p_up_shrunk === 'number'
                             ? `${(enrich15m.binance.p_up_shrunk * 100).toFixed(1)}%`
                             : '---'}
                         </div>
                       </div>
-                      <div className="bg-black/40 rounded p-2">
+                      <div className="bg-void/40 rounded p-2">
                         <div className="text-[9px] text-better-blue-light/90">t_rem</div>
-                        <div className="text-[12px] font-mono text-white tabular-nums">
+                        <div className="text-[12px] font-mono text-fg tabular-nums">
                           {typeof enrich15m.binance?.t_rem_sec === 'number' ? `${Math.round(enrich15m.binance.t_rem_sec)}s` : '---'}
                         </div>
                       </div>
@@ -598,7 +598,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
 
                         return (
                           <>
-                            <div className="bg-black/40 rounded p-2">
+                            <div className="bg-void/40 rounded p-2">
                               <div className="flex items-center justify-between">
                                 <div className="text-[9px] text-better-blue-light/90">UP</div>
                                 <div className={`text-[9px] font-mono tabular-nums ${metricColorClass(edgeUp)}`}>
@@ -607,13 +607,13 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                               </div>
                               <div className="mt-1 grid grid-cols-2 gap-2">
                                 <div>
-                                  <div className="text-[9px] text-grey/70">Bid</div>
+                                  <div className="text-[9px] text-fg/80">Bid</div>
                                   <div className="text-[12px] font-mono text-success tabular-nums">
                                     {typeof enrich15m.up?.best_bid === 'number' ? formatPrice(enrich15m.up.best_bid) : '---'}
                                   </div>
                                 </div>
                                 <div>
-                                  <div className="text-[9px] text-grey/70">Ask</div>
+                                  <div className="text-[9px] text-fg/80">Ask</div>
                                   <div className="text-[12px] font-mono text-danger tabular-nums">
                                     {typeof enrich15m.up?.best_ask === 'number' ? formatPrice(enrich15m.up.best_ask) : '---'}
                                   </div>
@@ -621,7 +621,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                               </div>
                             </div>
 
-                            <div className="bg-black/40 rounded p-2">
+                            <div className="bg-void/40 rounded p-2">
                               <div className="flex items-center justify-between">
                                 <div className="text-[9px] text-better-blue-light/90">DOWN</div>
                                 <div className={`text-[9px] font-mono tabular-nums ${metricColorClass(edgeDown)}`}>
@@ -630,13 +630,13 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                               </div>
                               <div className="mt-1 grid grid-cols-2 gap-2">
                                 <div>
-                                  <div className="text-[9px] text-grey/70">Bid</div>
+                                  <div className="text-[9px] text-fg/80">Bid</div>
                                   <div className="text-[12px] font-mono text-success tabular-nums">
                                     {typeof enrich15m.down?.best_bid === 'number' ? formatPrice(enrich15m.down.best_bid) : '---'}
                                   </div>
                                 </div>
                                 <div>
-                                  <div className="text-[9px] text-grey/70">Ask</div>
+                                  <div className="text-[9px] text-fg/80">Ask</div>
                                   <div className="text-[12px] font-mono text-danger tabular-nums">
                                     {typeof enrich15m.down?.best_ask === 'number' ? formatPrice(enrich15m.down.best_ask) : '---'}
                                   </div>
@@ -653,7 +653,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
             )}
 
             <div className="grid grid-cols-3 gap-2">
-              <div className="bg-white/5 rounded p-2">
+              <div className="bg-fg/5 rounded p-2">
                 <div className="text-[10px] text-better-blue-light/90 uppercase">Δ</div>
                 <div
                   className={`text-[13px] font-mono tabular-nums ${metricColorClass(
@@ -667,48 +667,48 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                   {formatDelta(derived?.price_delta_bps, derived?.price_delta_abs)}
                 </div>
               </div>
-              <div className="bg-white/5 rounded p-2">
+              <div className="bg-fg/5 rounded p-2">
                 <div className="text-[10px] text-better-blue-light/90 uppercase">Spread</div>
-                <div className="text-[13px] font-mono text-white tabular-nums">
+                <div className="text-[13px] font-mono text-fg tabular-nums">
                   {typeof derived?.spread_at_entry === 'number' ? formatPrice(derived.spread_at_entry) : '---'}
                 </div>
               </div>
-              <div className="bg-white/5 rounded p-2">
+              <div className="bg-fg/5 rounded p-2">
                 <div className="text-[10px] text-better-blue-light/90 uppercase">Now</div>
-                <div className="text-[13px] font-mono text-white tabular-nums">
+                <div className="text-[13px] font-mono text-fg tabular-nums">
                   {typeof ctx?.price?.latest?.price === 'number' ? formatPrice(ctx.price.latest.price) : '---'}
                 </div>
               </div>
             </div>
 
             <div className="grid grid-cols-4 gap-2">
-              <div className="bg-white/5 rounded p-2">
+              <div className="bg-fg/5 rounded p-2">
                 <div className="text-[10px] text-better-blue-light/90">PnL 7D</div>
                 <div className={`text-[13px] font-mono tabular-nums ${metricColorClass(derived?.pnl_7d)}`}>
                   {typeof derived?.pnl_7d === 'number' ? formatPnL(derived.pnl_7d) : '---'}
                 </div>
               </div>
-              <div className="bg-white/5 rounded p-2">
+              <div className="bg-fg/5 rounded p-2">
                 <div className="text-[10px] text-better-blue-light/90">PnL 30D</div>
                 <div className={`text-[13px] font-mono tabular-nums ${metricColorClass(derived?.pnl_30d)}`}>
                   {typeof derived?.pnl_30d === 'number' ? formatPnL(derived.pnl_30d) : '---'}
                 </div>
               </div>
-              <div className="bg-white/5 rounded p-2">
+              <div className="bg-fg/5 rounded p-2">
                 <div className="text-[10px] text-better-blue-light/90">Sh 30D</div>
                 <div className={`text-[13px] font-mono tabular-nums ${metricColorClass(derived?.sharpe_30d)}`}>
                   {typeof derived?.sharpe_30d === 'number' ? derived.sharpe_30d.toFixed(2) : '---'}
                 </div>
               </div>
-              <div className="bg-white/5 rounded p-2">
+              <div className="bg-fg/5 rounded p-2">
                 <div className="text-[10px] text-better-blue-light/90">Trades 24h</div>
-                <div className="text-[13px] font-mono text-white tabular-nums">
+                <div className="text-[13px] font-mono text-fg tabular-nums">
                   {typeof derived?.trade_count_24h === 'number' ? derived.trade_count_24h : '---'}
                 </div>
               </div>
             </div>
 
-            <div className="text-[11px] font-mono text-grey/80">
+            <div className="text-[11px] font-mono text-fg/90">
               context: {signal.context_status ?? '---'}
               {signal.context_enriched_at ? ` • enriched_at=${signal.context_enriched_at}` : ''}
             </div>
@@ -723,7 +723,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
         {activeTab === 'TRADE' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-[11px] font-mono text-grey/80">One-click trade (Polymarket, Polygon)</div>
+              <div className="text-[11px] font-mono text-fg/90">One-click trade (Polymarket, Polygon)</div>
               <div className={`text-[10px] font-mono ${tradingEnabled ? 'text-success' : 'text-warning'}`}>
                 {tradingEnabled ? 'ENABLED' : 'DISABLED'}
               </div>
@@ -731,34 +731,34 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
 
             {!tradingEnabled && (
               <div className="text-[11px] font-mono text-warning">
-                Trading is feature-flagged off. Set <span className="text-white">VITE_ENABLE_TRADING=true</span> to enable.
+                Trading is feature-flagged off. Set <span className="text-fg">VITE_ENABLE_TRADING=true</span> to enable.
               </div>
             )}
 
             {canFetchBook && (
               <div className="grid grid-cols-3 gap-2">
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="text-[10px] text-better-blue-light/90 uppercase">Bid</div>
                   <div className="text-[13px] font-mono text-success tabular-nums">
                     {typeof bookData?.best_bid === 'number' ? formatPrice(bookData.best_bid) : '---'}
                   </div>
                 </div>
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="text-[10px] text-better-blue-light/90 uppercase">Ask</div>
                   <div className="text-[13px] font-mono text-danger tabular-nums">
                     {typeof bookData?.best_ask === 'number' ? formatPrice(bookData.best_ask) : '---'}
                   </div>
                 </div>
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="text-[10px] text-better-blue-light/90 uppercase">Spr</div>
-                  <div className="text-[13px] font-mono text-white tabular-nums">
+                  <div className="text-[13px] font-mono text-fg tabular-nums">
                     {typeof bookData?.spread === 'number' ? formatPrice(bookData.spread) : '---'}
                   </div>
                 </div>
               </div>
             )}
 
-            <div className="bg-white/5 rounded p-3 space-y-3">
+            <div className="bg-fg/5 rounded p-3 space-y-3">
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <div className="text-[10px] text-better-blue-light/90 uppercase">Side</div>
@@ -809,7 +809,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                   <input
                     value={String(tradeNotionalUsd)}
                     onChange={(e) => setTradeNotionalUsd(Number(e.target.value) || 0)}
-                    className="ml-auto w-[120px] bg-black/50 border border-grey/20 px-2 py-1 text-[12px] font-mono text-white tabular-nums"
+                    className="ml-auto w-[120px] bg-void/50 border border-grey/20 px-2 py-1 text-[12px] font-mono text-fg tabular-nums"
                     inputMode="decimal"
                   />
                 </div>
@@ -838,14 +838,14 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                     onChange={(e) => setTradeCustomPrice(e.target.value)}
                     disabled={tradePriceMode !== 'CUSTOM'}
                     placeholder="$0.50"
-                    className="mt-1 w-full bg-black/50 border border-grey/20 px-2 py-1 text-[12px] font-mono text-white tabular-nums disabled:opacity-40"
+                    className="mt-1 w-full bg-void/50 border border-grey/20 px-2 py-1 text-[12px] font-mono text-fg tabular-nums disabled:opacity-40"
                   />
                 </div>
               </div>
             </div>
 
             <div className="flex items-center justify-between">
-              <div className="text-[10px] font-mono text-grey/80 truncate">
+              <div className="text-[10px] font-mono text-fg/90 truncate">
                 {marketSlugForBook ? `market=${marketSlugForBook}` : ''}
                 {outcomeForBook ? ` • outcome=${outcomeForBook}` : ''}
               </div>
@@ -891,14 +891,14 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                       setTradeStatus(e?.message ?? 'Trade request failed');
                     }
                   }}
-                  className="border border-grey/20 px-3 py-1 text-[11px] font-mono text-grey/80 hover:text-white hover:border-grey/40 disabled:opacity-40"
+                  className="border border-grey/20 px-3 py-1 text-[11px] font-mono text-fg/90 hover:text-fg hover:border-grey/40 disabled:opacity-40"
                 >
                   [SUBMIT]
                 </button>
               </div>
             </div>
 
-            {tradeStatus && <div className="text-[11px] font-mono text-grey/80">{tradeStatus}</div>}
+            {tradeStatus && <div className="text-[11px] font-mono text-fg/90">{tradeStatus}</div>}
           </div>
         )}
 
@@ -906,9 +906,9 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="min-w-0">
-                <div className="text-[11px] font-mono text-grey/80">Equity curves (realized PnL-to-date, USD)</div>
+                <div className="text-[11px] font-mono text-fg/90">Equity curves (realized PnL-to-date, USD)</div>
                 {walletAnalytics && (
-                  <div className="mt-1 text-[10px] font-mono text-grey/80">
+                  <div className="mt-1 text-[10px] font-mono text-fg/90">
                     updated {analyticsAgeMs !== null ? `${Math.max(0, Math.round(analyticsAgeMs / 1000))}s` : '—'} ago
                     {analyticsSource ? ` • ${analyticsSource}` : ''}
                     {analyticsIsStale ? ' • stale' : ''}
@@ -918,7 +918,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
               </div>
               <button
                 type="button"
-                className="text-[11px] font-mono border border-grey/20 px-2 py-1 text-grey/80 hover:text-white hover:border-grey/40"
+                className="text-[11px] font-mono border border-grey/20 px-2 py-1 text-fg/90 hover:text-fg hover:border-grey/40"
                 disabled={!canFetchAnalytics || analyticsLoading}
                 onClick={() => fetchWalletAnalytics(true)}
               >
@@ -928,7 +928,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
 
             {/* Friction mode selector */}
             <div className="flex items-center gap-2">
-              <div className="text-[10px] font-mono text-grey/80">FRICTION:</div>
+              <div className="text-[10px] font-mono text-fg/90">FRICTION:</div>
               {(['optimistic', 'base', 'pessimistic'] as const).map((mode) => (
                 <button
                   key={mode}
@@ -936,8 +936,8 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                   onClick={() => setFrictionMode(mode)}
                   className={`px-2 py-0.5 text-[10px] font-mono transition-colors ${
                     frictionMode === mode
-                      ? 'bg-white text-black'
-                      : 'text-grey/80 hover:text-white'
+                      ? 'bg-fg text-void'
+                      : 'text-fg/90 hover:text-fg'
                   }`}
                 >
                   {mode.toUpperCase()}
@@ -947,7 +947,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
 
             {/* Copy curve model selector */}
             <div className="flex items-center gap-2">
-              <div className="text-[10px] font-mono text-grey/80">COPY CURVE:</div>
+              <div className="text-[10px] font-mono text-fg/90">COPY CURVE:</div>
               {(['scaled', 'mtm'] as const).map((mode) => (
                 <button
                   key={mode}
@@ -955,24 +955,24 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                   onClick={() => setCopyModel(mode)}
                   className={`px-2 py-0.5 text-[10px] font-mono transition-colors ${
                     copyModel === mode
-                      ? 'bg-white text-black'
-                      : 'text-grey/80 hover:text-white'
+                      ? 'bg-fg text-void'
+                      : 'text-fg/90 hover:text-fg'
                   }`}
                 >
                   {mode.toUpperCase()}
                 </button>
               ))}
               {copyModel === 'mtm' && (
-                <div className="text-[10px] font-mono text-grey/60">(slower)</div>
+                <div className="text-[10px] font-mono text-fg/70">(slower)</div>
               )}
             </div>
 
-            {!canFetchAnalytics && <div className="text-[11px] text-grey/80 font-mono">No wallet address</div>}
+            {!canFetchAnalytics && <div className="text-[11px] text-fg/90 font-mono">No wallet address</div>}
             {analyticsError && (
               <div
                 className={`text-[11px] font-mono ${
                   analyticsError.toLowerCase().includes('still computing')
-                    ? 'text-grey/80'
+                    ? 'text-fg/90'
                     : 'text-danger'
                 }`}
               >
@@ -983,42 +983,42 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
             {/* Never blank: show a fixed skeleton container while loading/no-data */}
             {!walletAnalytics && (
               <div className="space-y-2">
-                <div className="bg-white/5 rounded p-2">
-                  <div className="h-[10px] w-24 bg-white/10 rounded animate-pulse" />
-                  <div className="mt-2 h-[36px] w-[210px] bg-white/10 rounded animate-pulse" />
-                  <div className="mt-2 h-[10px] w-full bg-white/10 rounded animate-pulse" />
+                <div className="bg-fg/5 rounded p-2">
+                  <div className="h-[10px] w-24 bg-fg/10 rounded animate-pulse" />
+                  <div className="mt-2 h-[36px] w-[210px] bg-fg/10 rounded animate-pulse" />
+                  <div className="mt-2 h-[10px] w-full bg-fg/10 rounded animate-pulse" />
                 </div>
-                <div className="bg-white/5 rounded p-2">
-                  <div className="h-[10px] w-40 bg-white/10 rounded animate-pulse" />
-                  <div className="mt-2 h-[36px] w-[210px] bg-white/10 rounded animate-pulse" />
-                  <div className="mt-2 h-[10px] w-full bg-white/10 rounded animate-pulse" />
+                <div className="bg-fg/5 rounded p-2">
+                  <div className="h-[10px] w-40 bg-fg/10 rounded animate-pulse" />
+                  <div className="mt-2 h-[36px] w-[210px] bg-fg/10 rounded animate-pulse" />
+                  <div className="mt-2 h-[10px] w-full bg-fg/10 rounded animate-pulse" />
                 </div>
-                {analyticsLoading && <div className="text-[11px] text-grey/80 font-mono">Loading…</div>}
+                {analyticsLoading && <div className="text-[11px] text-fg/90 font-mono">Loading…</div>}
               </div>
             )}
 
             {walletAnalytics && (
               <div className="space-y-2">
                 {/* Wallet curve */}
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="flex items-center justify-between">
                     <div className="text-[9px] text-better-blue-light/90 uppercase">Wallet</div>
-                    <div className="text-[9px] font-mono text-grey/80">{walletAnalytics.lookback_days}D</div>
+                    <div className="text-[9px] font-mono text-fg/90">{walletAnalytics.lookback_days}D</div>
                   </div>
                   <div className="mt-1 flex items-center gap-2">
-                    <div className="w-[54px] text-right text-[9px] font-mono text-grey/80">
+                    <div className="w-[54px] text-right text-[9px] font-mono text-fg/90">
                       {typeof walletMM.min === 'number' ? formatPnL(walletMM.min) : ''}
                     </div>
                     {walletSeries.length >= 2 ? (
                       <Sparkline values={walletSeries} />
                     ) : (
-                      <div className="h-[36px] w-[210px] bg-white/10 rounded" />
+                      <div className="h-[36px] w-[210px] bg-fg/10 rounded" />
                     )}
-                    <div className="w-[54px] text-left text-[9px] font-mono text-grey/80">
+                    <div className="w-[54px] text-left text-[9px] font-mono text-fg/90">
                       {typeof walletMM.max === 'number' ? formatPnL(walletMM.max) : ''}
                     </div>
                   </div>
-                  <div className="mt-1 flex items-center justify-between text-[9px] font-mono text-grey/80">
+                  <div className="mt-1 flex items-center justify-between text-[9px] font-mono text-fg/90">
                     <span>{formatDayLabel(walletCurvePoints[0]?.timestamp)}</span>
                     <span>{formatDayLabel(walletCurvePoints[walletCurvePoints.length - 1]?.timestamp)}</span>
                   </div>
@@ -1033,37 +1033,37 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                     </div>
                     <div>
                       <div className="text-[9px] text-better-blue-light/90">WR</div>
-                      <div className="text-[11px] font-mono text-white tabular-nums">{formatWinRate(walletAnalytics.wallet_win_rate)}</div>
+                      <div className="text-[11px] font-mono text-fg tabular-nums">{formatWinRate(walletAnalytics.wallet_win_rate)}</div>
                     </div>
                     <div>
                       <div className="text-[9px] text-better-blue-light/90">Profit Factor</div>
-                      <div className="text-[11px] font-mono text-white tabular-nums">{formatProfitFactor(walletAnalytics.wallet_profit_factor)}</div>
+                      <div className="text-[11px] font-mono text-fg tabular-nums">{formatProfitFactor(walletAnalytics.wallet_profit_factor)}</div>
                     </div>
                   </div>
                 </div>
 
                 {/* Copy curve */}
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="flex items-center justify-between">
                     <div className="text-[9px] text-better-blue-light/90 uppercase">
                       Copy {copyModel.toUpperCase()} (${walletAnalytics.fixed_buy_notional_usd}/order)
                     </div>
-                    <div className="text-[9px] font-mono text-grey/80">{walletAnalytics.lookback_days}D</div>
+                    <div className="text-[9px] font-mono text-fg/90">{walletAnalytics.lookback_days}D</div>
                   </div>
                   <div className="mt-1 flex items-center gap-2">
-                    <div className="w-[54px] text-right text-[9px] font-mono text-grey/80">
+                    <div className="w-[54px] text-right text-[9px] font-mono text-fg/90">
                       {typeof copyMM.min === 'number' ? formatPnL(copyMM.min) : ''}
                     </div>
                     {copySeries.length >= 2 ? (
                       <Sparkline values={copySeries} />
                     ) : (
-                      <div className="h-[36px] w-[210px] bg-white/10 rounded" />
+                      <div className="h-[36px] w-[210px] bg-fg/10 rounded" />
                     )}
-                    <div className="w-[54px] text-left text-[9px] font-mono text-grey/80">
+                    <div className="w-[54px] text-left text-[9px] font-mono text-fg/90">
                       {typeof copyMM.max === 'number' ? formatPnL(copyMM.max) : ''}
                     </div>
                   </div>
-                  <div className="mt-1 flex items-center justify-between text-[9px] font-mono text-grey/80">
+                  <div className="mt-1 flex items-center justify-between text-[9px] font-mono text-fg/90">
                     <span>{formatDayLabel(copyCurvePoints[0]?.timestamp)}</span>
                     <span>{formatDayLabel(copyCurvePoints[copyCurvePoints.length - 1]?.timestamp)}</span>
                   </div>
@@ -1076,22 +1076,22 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                     </div>
                     <div>
                       <div className="text-[9px] text-better-blue-light/90">WR</div>
-                      <div className="text-[11px] font-mono text-white tabular-nums">{formatWinRate(walletAnalytics.copy_win_rate)}</div>
+                      <div className="text-[11px] font-mono text-fg tabular-nums">{formatWinRate(walletAnalytics.copy_win_rate)}</div>
                     </div>
                     <div>
                       <div className="text-[9px] text-better-blue-light/90">Profit Factor</div>
-                      <div className="text-[11px] font-mono text-white tabular-nums">{formatProfitFactor(walletAnalytics.copy_profit_factor)}</div>
+                      <div className="text-[11px] font-mono text-fg tabular-nums">{formatProfitFactor(walletAnalytics.copy_profit_factor)}</div>
                     </div>
                   </div>
                 </div>
 
                 {/* Friction stats */}
-                <div className="bg-white/5 rounded p-2 mt-2">
+                <div className="bg-fg/5 rounded p-2 mt-2">
                   <div className="flex items-center justify-between">
                     <div className="text-[9px] text-better-blue-light/90 uppercase">
                       Execution Costs (assumed)
                     </div>
-                    <div className="text-[9px] font-mono text-grey/80">
+                    <div className="text-[9px] font-mono text-fg/90">
                       {(walletAnalytics.copy_friction_mode?.toUpperCase() || 'BASE') + ' • '}
                       {walletAnalytics.copy_friction_pct_per_trade?.toFixed(2) || '1.00'}% per fill
                     </div>
@@ -1107,17 +1107,17 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                     </div>
                     <div>
                       <div className="text-[9px] text-better-blue-light/90">Fills</div>
-                      <div className="text-[11px] font-mono text-white tabular-nums">
+                      <div className="text-[11px] font-mono text-fg tabular-nums">
                         {walletAnalytics.copy_trade_count ?? '---'}
                       </div>
                     </div>
                   </div>
-                  <div className="mt-1 text-[9px] font-mono text-grey/70">
+                  <div className="mt-1 text-[9px] font-mono text-fg/80">
                     Net copy curve includes these costs.
                   </div>
                 </div>
 
-                <div className="text-[9px] font-mono text-grey/80">
+                <div className="text-[9px] font-mono text-fg/90">
                   ROE denom ≈ {walletAnalytics.copy_roe_denom_usd ? formatVolumeCompact(walletAnalytics.copy_roe_denom_usd) : '---'} gross buys
                 </div>
               </div>
@@ -1128,10 +1128,10 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
         {activeTab === 'BOOK' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-[11px] font-mono text-grey/80">Orderbook snapshot (now)</div>
+              <div className="text-[11px] font-mono text-fg/90">Orderbook snapshot (now)</div>
               <button
                 type="button"
-                className="text-[11px] font-mono border border-grey/20 px-2 py-1 text-grey/80 hover:text-white hover:border-grey/40"
+                className="text-[11px] font-mono border border-grey/20 px-2 py-1 text-fg/90 hover:text-fg hover:border-grey/40"
                 disabled={!canFetchBook || bookLoading}
                 onClick={() => fetchBook(true)}
               >
@@ -1140,42 +1140,42 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
             </div>
 
             {!canFetchBook && (
-              <div className="text-[11px] text-grey/80 font-mono">Missing token_id or (market_slug, outcome)</div>
+              <div className="text-[11px] text-fg/90 font-mono">Missing token_id or (market_slug, outcome)</div>
             )}
             {bookError && <div className="text-[11px] text-danger font-mono">{bookError}</div>}
-            {bookLoading && <div className="text-[11px] text-grey/80 font-mono">Loading…</div>}
+            {bookLoading && <div className="text-[11px] text-fg/90 font-mono">Loading…</div>}
 
             {bookData && (
               <div className="space-y-2">
                 <div className="grid grid-cols-4 gap-2">
-                  <div className="bg-white/5 rounded p-2">
+                  <div className="bg-fg/5 rounded p-2">
                     <div className="text-[9px] text-better-blue-light/90">Bid</div>
                     <div className="text-[13px] font-mono text-success tabular-nums">
                       {typeof bookData.best_bid === 'number' ? formatPrice(bookData.best_bid) : '---'}
                     </div>
                   </div>
-                  <div className="bg-white/5 rounded p-2">
+                  <div className="bg-fg/5 rounded p-2">
                     <div className="text-[9px] text-better-blue-light/90">Ask</div>
                     <div className="text-[13px] font-mono text-danger tabular-nums">
                       {typeof bookData.best_ask === 'number' ? formatPrice(bookData.best_ask) : '---'}
                     </div>
                   </div>
-                  <div className="bg-white/5 rounded p-2">
+                  <div className="bg-fg/5 rounded p-2">
                     <div className="text-[9px] text-better-blue-light/90">Spr</div>
-                    <div className="text-[13px] font-mono text-white tabular-nums">
+                    <div className="text-[13px] font-mono text-fg tabular-nums">
                       {typeof bookData.spread === 'number' ? formatPrice(bookData.spread) : '---'}
                     </div>
                   </div>
-                  <div className="bg-white/5 rounded p-2">
+                  <div className="bg-fg/5 rounded p-2">
                     <div className="text-[9px] text-better-blue-light/90">Imb</div>
-                    <div className="text-[13px] font-mono text-white tabular-nums">
+                    <div className="text-[13px] font-mono text-fg tabular-nums">
                       {typeof bookData.imbalance_10bps === 'number' ? bookData.imbalance_10bps.toFixed(2) : '---'}
                     </div>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="bg-white/5 rounded p-2">
+                  <div className="bg-fg/5 rounded p-2">
                     <div className="text-[9px] text-better-blue-light/90 uppercase mb-1">Top bids</div>
                     <div className="space-y-1">
                       {(bookDepth?.bids ?? bookData.bids.slice(0, 12).map((b) => ({ ...b, cum: b.size }))).map((b, idx) => {
@@ -1187,13 +1187,13 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                           >
                             <div className="absolute inset-y-0 left-0 bg-success/10" style={{ width: `${pct}%` }} />
                             <span className="relative z-10 text-success">{formatPrice(b.price)}</span>
-                            <span className="relative z-10 text-grey/80">{formatVolumeCompact(b.size)}</span>
+                            <span className="relative z-10 text-fg/90">{formatVolumeCompact(b.size)}</span>
                           </div>
                         );
                       })}
                     </div>
                   </div>
-                  <div className="bg-white/5 rounded p-2">
+                  <div className="bg-fg/5 rounded p-2">
                     <div className="text-[9px] text-better-blue-light/90 uppercase mb-1">Top asks</div>
                     <div className="space-y-1">
                       {(bookDepth?.asks ?? bookData.asks.slice(0, 12).map((a) => ({ ...a, cum: a.size }))).map((a, idx) => {
@@ -1205,7 +1205,7 @@ export const SignalInspectorDrawer: React.FC<SignalInspectorDrawerProps> = ({
                           >
                             <div className="absolute inset-y-0 right-0 bg-danger/10" style={{ width: `${pct}%` }} />
                             <span className="relative z-10 text-danger">{formatPrice(a.price)}</span>
-                            <span className="relative z-10 text-grey/80">{formatVolumeCompact(a.size)}</span>
+                            <span className="relative z-10 text-fg/90">{formatVolumeCompact(a.size)}</span>
                           </div>
                         );
                       })}

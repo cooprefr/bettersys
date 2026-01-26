@@ -92,10 +92,10 @@ export function formatVolumeCompact(volume: number): string {
 }
 
 export function metricColorClass(value: number | null | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 'text-white';
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'text-fg';
   if (value > 0) return 'text-success';
   if (value < 0) return 'text-danger';
-  return 'text-grey/80';
+  return 'text-fg/90';
 }
 
 function formatSignedNumber(value: number, digits: number): string {

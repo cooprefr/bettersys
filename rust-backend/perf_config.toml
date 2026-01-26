@@ -1,0 +1,91 @@
+# BetterBot Performance Monitor Configuration
+# Place in rust-backend/ or set PERF_CONFIG_PATH env var
+
+# Refresh rate in Hz (5-60, default 10)
+refresh_hz = 10
+
+# Enable low-frequency mode (1 Hz) to reduce overhead
+low_freq_mode = false
+
+[thresholds]
+# Tick-to-trade P99.9 threshold (μs) - triggers tail alarm
+t2t_p999_us = 10000
+
+# Tick-to-trade P99 warning threshold (μs)
+t2t_p99_warn_us = 5000
+
+# Tick receive P99 threshold (μs)
+tick_recv_p99_us = 1000
+
+# Signal generation P99 threshold (μs)
+signal_gen_p99_us = 500
+
+# Order execution P99 threshold (μs)
+order_exec_p99_us = 2000
+
+# Venue ack latency P99 threshold (μs)
+venue_ack_p99_us = 50000
+
+# Jitter threshold (ns) - triggers spike alert
+jitter_threshold_ns = 1000000
+
+[alerts]
+# Enable tail alarm when P99.9 exceeds threshold
+tail_alarm_enabled = true
+
+# Enable jitter spike alerts
+jitter_alert_enabled = true
+
+# Consecutive violations before alerting
+consecutive_violations = 3
+
+# Cooldown between alerts (seconds)
+alert_cooldown_secs = 60
+
+[windows]
+# Time windows for percentile calculations (seconds)
+short_secs = 1
+medium_secs = 10
+long_secs = 60
+
+[queues]
+# Enable queue depth monitoring
+enabled = true
+
+# Queue depth warning threshold
+depth_warn_threshold = 100
+
+# Queue depth critical threshold
+depth_critical_threshold = 1000
+
+# Queue wait time P99 threshold (μs)
+wait_time_p99_us = 1000
+
+[network]
+# Enable network stats collection
+enabled = true
+
+# Interfaces to monitor (empty = all)
+interfaces = []
+
+# Drop rate warning threshold (%)
+drop_rate_warn_pct = 0.01
+
+# Retransmit rate warning threshold (%)
+retrans_rate_warn_pct = 0.1
+
+[features]
+# Enable histogram collection
+histograms = true
+
+# Enable time series for dashboard
+time_series = true
+
+# Enable detailed span tracing (higher overhead)
+span_tracing = false
+
+# Enable FPGA metrics (requires hardware)
+fpga_metrics = false
+
+# Enable kernel bypass metrics (DPDK/io_uring)
+kernel_bypass_metrics = false

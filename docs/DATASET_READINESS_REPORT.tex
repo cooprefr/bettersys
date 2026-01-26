@@ -1,0 +1,1095 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=0.9in]{geometry}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+
+\definecolor{codebg}{rgb}{0.95,0.95,0.95}
+\definecolor{codeframe}{rgb}{0.8,0.8,0.8}
+\definecolor{pass}{RGB}{34,139,34}
+\definecolor{fail}{RGB}{178,34,34}
+\definecolor{warn}{RGB}{184,134,11}
+\definecolor{critical}{RGB}{139,0,0}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  tabsize=2
+}
+
+\tcbuselibrary{skins,breakable}
+
+\newtcolorbox{verdictbox}[1][]{
+  colback=red!5!white,
+  colframe=red!75!black,
+  fonttitle=\bfseries,
+  title=#1,
+  breakable
+}
+
+\newtcolorbox{findingbox}[1][]{
+  colback=yellow!5!white,
+  colframe=yellow!75!black,
+  fonttitle=\bfseries,
+  title=#1,
+  breakable
+}
+
+\newtcolorbox{requirementbox}[1][]{
+  colback=blue!5!white,
+  colframe=blue!75!black,
+  fonttitle=\bfseries,
+  title=#1,
+  breakable
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Dataset Readiness Report v1.0}
+\lhead{Backtest V2 Architecture}
+\rfoot{Page \thepage}
+\lfoot{\today}
+
+\title{
+  \textbf{Dataset Readiness Report} \\[1em]
+  \Large Production-Grade Maker Viability Assessment \\[0.5em]
+  \large Backtest V2 Architecture \\[1em]
+  \normalsize Code-Backed Analysis with Falsifiable Claims
+}
+\author{Automated Architecture Audit}
+\date{January 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{verdictbox}[EXECUTIVE VERDICT]
+\centering
+\textbf{\Large\textcolor{critical}{DATASET NOT MAKER-VIABLE}} \\[0.5em]
+\normalsize
+Current historical datasets \textbf{cannot} support production-grade maker (passive) strategy backtesting. \\[0.5em]
+\textbf{Classification}: \texttt{INCOMPLETE} $\rightarrow$ Required: \texttt{FULL\_INCREMENTAL} \\[0.5em]
+\textbf{Critical Gaps}: L2 deltas not persisted, arrival timestamps at second-only precision, \\
+no public trade prints, exchange sequences not stored to disk.
+\end{verdictbox}
+
+\tableofcontents
+\newpage
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Introduction and Methodology}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Purpose}
+
+This report provides a comprehensive, code-backed assessment of whether the current BetterSys historical datasets support production-grade maker (passive) strategy backtesting. The assessment is:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Falsifiable}: Every claim references specific code locations and can be verified
+  \item \textbf{Quantitative}: Where possible, measurements and thresholds are provided
+  \item \textbf{Actionable}: Specific remediation steps with integration points are documented
+\end{itemize}
+
+\subsection{Scope}
+
+The assessment covers:
+\begin{enumerate}[noitemsep]
+  \item All data ingestion paths (WebSocket, REST, databases)
+  \item All data persistence mechanisms (SQLite tables, in-memory stores)
+  \item Timestamp semantics (source time, arrival time, precision)
+  \item Sequence numbering and ordering guarantees
+  \item Trade print availability and queue consumption observability
+  \item Classification against the \texttt{data\_contract.rs} requirements
+\end{enumerate}
+
+\subsection{Methodology}
+
+Analysis was performed by:
+\begin{enumerate}[noitemsep]
+  \item Systematic code review of \texttt{rust-backend/src/} directory
+  \item Schema extraction from SQLite table definitions
+  \item Data flow tracing from WebSocket handlers to storage
+  \item Cross-referencing backtest requirements from \texttt{backtest\_v2/} module
+  \item Classification per \texttt{DatasetClassification} enum criteria
+\end{enumerate}
+
+\subsection{Key Files Analyzed}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Component} & \textbf{Primary Source File} \\
+\midrule
+Feed Abstraction & \texttt{backtest\_v2/feed.rs} (107 lines) \\
+Data Normalization & \texttt{backtest\_v2/normalize.rs} (724 lines) \\
+Data Contract & \texttt{backtest\_v2/data\_contract.rs} (583 lines) \\
+Visibility Enforcement & \texttt{backtest\_v2/visibility.rs} (529 lines) \\
+Queue Model & \texttt{backtest\_v2/queue\_model.rs} \\
+Live Book Store & \texttt{scrapers/polymarket\_book\_store.rs} (1872 lines) \\
+Dome WebSocket & \texttt{scrapers/dome\_websocket.rs} (372 lines) \\
+Binance Feed & \texttt{scrapers/binance\_price\_feed.rs} \\
+Signal Storage & \texttt{signals/db\_storage.rs} \\
+Orchestrator & \texttt{backtest\_v2/orchestrator.rs} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Data Contract Requirements}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Classification System}
+
+The backtester defines a three-tier classification system in \texttt{data\_contract.rs} (lines 127--178):
+
+\begin{lstlisting}[language=Rust,caption={DatasetClassification enum (data\_contract.rs:127-161)}]
+pub enum DatasetClassification {
+    /// Full incremental L2 deltas with exchange sequence numbers + trade prints.
+    /// - Can track queue position precisely
+    /// - Supports maker (passive) strategy validation
+    /// - Suitable for production-grade backtests
+    FullIncremental,
+    
+    /// Periodic snapshots or top-of-book polling.
+    /// - Cannot track queue position (no order flow between snapshots)
+    /// - Maker fills are unrealistic (cannot validate queue consumption)
+    /// - Only suitable for taker (aggressive) strategy validation
+    SnapshotOnly,
+    
+    /// Incomplete data - missing orderbook OR missing trade prints.
+    /// - Cannot validate any fill behavior reliably
+    /// - NOT suitable for production-grade backtests
+    Incomplete,
+}
+\end{lstlisting}
+
+\subsection{Classification Logic}
+
+From \texttt{data\_contract.rs} lines 214--256:
+
+\begin{lstlisting}[language=Rust,caption={Classification decision logic}]
+pub fn classify(&self) -> DatasetClassification {
+    let has_full_orderbook = matches!(
+        self.orderbook,
+        OrderBookHistory::FullIncrementalL2DeltasWithExchangeSeq
+    );
+    let has_trade_prints = matches!(self.trades, TradeHistory::TradePrints);
+    
+    if has_full_orderbook && has_trade_prints {
+        DatasetClassification::FullIncremental    // MAKER-VIABLE
+    } else if (has_snapshot_orderbook || has_full_orderbook) && has_trade_prints {
+        DatasetClassification::SnapshotOnly       // TAKER-ONLY
+    } else {
+        DatasetClassification::Incomplete         // UNUSABLE
+    }
+}
+\end{lstlisting}
+
+\subsection{Production-Grade Requirements}
+
+For a dataset to be classified as \texttt{FULL\_INCREMENTAL} (maker-viable), it must have:
+
+\begin{requirementbox}[Mandatory Data Elements]
+\begin{enumerate}[noitemsep]
+  \item \textbf{OrderBookHistory::FullIncrementalL2DeltasWithExchangeSeq}
+    \begin{itemize}[noitemsep]
+      \item Full L2 orderbook snapshots with exchange sequence numbers
+      \item Incremental delta updates with exchange sequence numbers
+      \item Monotonically increasing sequence for ordering guarantee
+    \end{itemize}
+  \item \textbf{TradeHistory::TradePrints}
+    \begin{itemize}[noitemsep]
+      \item Public trade prints (not just tracked wallet orders)
+      \item Trade ID for deduplication
+      \item Aggressor side (buy/sell) for queue consumption direction
+    \end{itemize}
+  \item \textbf{Timestamp Semantics}
+    \begin{itemize}[noitemsep]
+      \item \texttt{source\_time}: Exchange timestamp (nanoseconds)
+      \item \texttt{arrival\_time}: Local receipt timestamp (nanoseconds)
+      \item Constraint: \texttt{arrival\_time >= source\_time}
+    \end{itemize}
+\end{enumerate}
+\end{requirementbox}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Dataset Inventory}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Live Data Sources}
+
+\subsubsection{Polymarket CLOB WebSocket}
+
+\begin{findingbox}[Source: polymarket\_book\_store.rs]
+\textbf{WebSocket URL}: \texttt{wss://ws-subscriptions-clob.polymarket.com/ws/market} \\
+\textbf{Data Type}: L2 Book Snapshots (full book on subscription, updates on change) \\
+\textbf{Storage}: In-memory only (\texttt{ArcSwap<BookSnapshot>}) \\
+\textbf{Persistence}: \textcolor{fail}{NOT PERSISTED TO DISK}
+\end{findingbox}
+
+From \texttt{polymarket\_book\_store.rs} lines 126-145:
+
+\begin{lstlisting}[language=Rust,caption={BookSnapshot structure (in-memory only)}]
+pub struct BookSnapshot {
+    /// Bids sorted by price descending (best bid first)
+    pub bids: Vec<PriceLevel>,
+    /// Asks sorted by price ascending (best ask first)
+    pub asks: Vec<PriceLevel>,
+    /// Sequence number from exchange (if available)
+    pub sequence: Option<u64>,
+    /// Timestamp when this snapshot was created (monotonic)
+    pub created_at: Instant,  // NOTE: Instant is not serializable
+}
+\end{lstlisting}
+
+\textbf{Critical Observation}: The \texttt{created\_at} field uses \texttt{std::time::Instant}, which:
+\begin{itemize}[noitemsep]
+  \item Is monotonic clock time (good for staleness checking)
+  \item Is \textbf{not serializable} to nanoseconds since epoch
+  \item Is \textbf{not persisted} to any database
+\end{itemize}
+
+From \texttt{polymarket\_book\_store.rs} lines 246-260 (message handling):
+
+\begin{lstlisting}[language=Rust,caption={BookStore applies snapshots but does not persist}]
+// In handle_message():
+if let Some(msg) = parse_as_book_snapshot(text) {
+    let sequence = msg.hash.and_then(|h| h.parse::<u64>().ok());
+    book_store.apply_snapshot(&msg.asset_id, bids, asks, sequence);
+    // NOTE: No persistence to disk - only ArcSwap update
+}
+\end{lstlisting}
+
+\subsubsection{Dome WebSocket (Wallet Orders)}
+
+\begin{findingbox}[Source: dome\_websocket.rs]
+\textbf{WebSocket URL}: \texttt{wss://ws.domeapi.io/<TOKEN>} \\
+\textbf{Data Type}: Tracked wallet order events \\
+\textbf{Storage}: SQLite \texttt{dome\_order\_events} table \\
+\textbf{Timestamp Precision}: \textcolor{warn}{INTEGER SECONDS ONLY}
+\end{findingbox}
+
+From \texttt{dome\_websocket.rs} lines 52-68:
+
+\begin{lstlisting}[language=Rust,caption={WsOrderData structure from Dome}]
+pub struct WsOrderData {
+    pub token_id: String,
+    pub token_label: Option<String>,  // "Up", "Down", "Yes", "No"
+    pub side: String,                 // "BUY" or "SELL"
+    pub market_slug: String,
+    pub condition_id: String,
+    pub shares: i64,
+    pub shares_normalized: f64,
+    pub price: f64,
+    pub tx_hash: String,
+    pub title: String,
+    pub timestamp: i64,               // SECONDS from exchange
+    pub order_hash: String,
+    pub user: String,
+}
+\end{lstlisting}
+
+\subsubsection{Binance Price Feed}
+
+\begin{findingbox}[Source: binance\_price\_feed.rs]
+\textbf{Data Type}: BTC/ETH/SOL/XRP mid prices via barter-data \\
+\textbf{Arrival Tracking}: \texttt{received\_at\_ns: u64} (nanoseconds) \\
+\textbf{Storage}: In-memory broadcast channel only \\
+\textbf{Persistence}: \textcolor{fail}{NOT PERSISTED TO DISK}
+\end{findingbox}
+
+From \texttt{binance\_price\_feed.rs}:
+
+\begin{lstlisting}[language=Rust,caption={BinancePriceEvent has nanosecond arrival but is not persisted}]
+pub struct BinancePriceEvent {
+    pub symbol: String,
+    pub ts: i64,
+    pub mid: f64,
+    pub received_at_ns: u64,  // Nanosecond arrival time - NOT PERSISTED
+}
+\end{lstlisting}
+
+\subsection{Persisted Data (SQLite)}
+
+\subsubsection{dome\_order\_events Table}
+
+From \texttt{signals/db\_storage.rs}:
+
+\begin{lstlisting}[language=SQL,caption={dome\_order\_events schema}]
+CREATE TABLE IF NOT EXISTS dome_order_events (
+    order_hash TEXT PRIMARY KEY,
+    tx_hash TEXT,
+    user TEXT NOT NULL,
+    market_slug TEXT NOT NULL,
+    condition_id TEXT NOT NULL,
+    token_id TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,      -- Exchange time (SECONDS)
+    payload_json TEXT NOT NULL,
+    received_at INTEGER NOT NULL     -- Local receipt (SECONDS)
+) WITHOUT ROWID;
+\end{lstlisting}
+
+\textbf{Timestamp Analysis}:
+\begin{itemize}[noitemsep]
+  \item \texttt{timestamp}: Exchange timestamp in \textbf{integer seconds}
+  \item \texttt{received\_at}: Local receipt timestamp in \textbf{integer seconds}
+  \item \textbf{Gap}: No sub-second precision available
+  \item For $N$ events in 1 second, arrival ordering is \textbf{indeterminate}
+\end{itemize}
+
+\subsubsection{signals Table}
+
+\begin{lstlisting}[language=SQL,caption={signals schema (db\_storage.rs)}]
+CREATE TABLE signals (
+    id TEXT PRIMARY KEY,
+    signal_type TEXT NOT NULL,
+    market_slug TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    risk_level TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    detected_at TEXT NOT NULL,       -- ISO string (second precision)
+    source TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+) WITHOUT ROWID;
+\end{lstlisting}
+
+\subsubsection{What Is NOT Persisted}
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Data Element} & \textbf{Available In-Memory} & \textbf{Persisted to Disk} \\
+\midrule
+L2 Book Snapshots & \textcolor{pass}{Yes} & \textcolor{fail}{No} \\
+L2 Book Deltas & \textcolor{fail}{No} & \textcolor{fail}{No} \\
+Exchange Sequence Numbers & \textcolor{pass}{Yes} & \textcolor{fail}{No} \\
+Nanosecond Arrival Times & \textcolor{pass}{Yes} (Binance) & \textcolor{fail}{No} \\
+Public Trade Prints & \textcolor{fail}{No} & \textcolor{fail}{No} \\
+Wallet Order Events & \textcolor{pass}{Yes} & \textcolor{pass}{Yes} (seconds only) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Backtest V2 Event Model Requirements}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{TimestampedEvent Structure}
+
+From \texttt{backtest\_v2/events.rs} lines 263-280:
+
+\begin{lstlisting}[language=Rust,caption={TimestampedEvent - canonical event wrapper}]
+pub struct TimestampedEvent {
+    /// Arrival time (nanoseconds) - when our system "sees" the event
+    /// THIS IS THE ONLY TIME USED FOR VISIBILITY DECISIONS
+    pub time: Nanos,        // i64 nanoseconds
+    
+    /// Source time (nanoseconds) - timestamp from upstream feed
+    pub source_time: Nanos, // i64 nanoseconds
+    
+    /// Global sequence number for deterministic ordering
+    pub seq: u64,
+    
+    /// Stream source identifier
+    pub source: u8,
+    
+    /// The actual event payload
+    pub event: Event,
+}
+\end{lstlisting}
+
+\subsection{Event Types Required for Queue Modeling}
+
+From \texttt{backtest\_v2/events.rs} lines 139-210:
+
+\begin{lstlisting}[language=Rust,caption={Event enum - required variants for maker viability}]
+pub enum Event {
+    /// Full L2 order book snapshot.
+    L2BookSnapshot {
+        token_id: TokenId,
+        bids: Vec<Level>,
+        asks: Vec<Level>,
+        exchange_seq: u64,        // REQUIRED for ordering
+    },
+
+    /// Incremental L2 book update (delta).
+    L2Delta {
+        token_id: TokenId,
+        bid_updates: Vec<Level>,  // size=0 means remove
+        ask_updates: Vec<Level>,
+        exchange_seq: u64,        // REQUIRED for ordering
+    },
+
+    /// Public trade print (someone else's trade).
+    TradePrint {
+        token_id: TokenId,
+        price: Price,
+        size: Size,
+        aggressor_side: Side,     // REQUIRED for queue consumption
+        trade_id: Option<String>, // REQUIRED for deduplication
+    },
+    // ... other variants
+}
+\end{lstlisting}
+
+\subsection{Visibility Semantics}
+
+From \texttt{backtest\_v2/visibility.rs} lines 1-15:
+
+\begin{lstlisting}[language=Rust,caption={Visibility module documentation}]
+//! Visibility Enforcement and Look-Ahead Prevention
+//!
+//! # Time Semantics
+//! - `source_time`: Timestamp provided by upstream feed (may be missing/untrusted)
+//! - `arrival_time`: Time when our system "sees" the event (ONLY time for visibility)
+//! - `decision_time`: Current SimClock time when strategy is invoked
+//!
+//! # Hard Invariant
+//! Strategy MUST only read state derived from events with arrival_time <= decision_time.
+\end{lstlisting}
+
+\subsubsection{SimArrivalPolicy}
+
+From \texttt{visibility.rs} lines 42-65:
+
+\begin{lstlisting}[language=Rust,caption={Arrival time policies}]
+pub enum SimArrivalPolicy {
+    /// Policy A: Use recorded arrival timestamps from historical dataset (BEST).
+    /// Requires `arrival_time` field to be present and trusted.
+    RecordedArrival,
+
+    /// Policy B: Derive arrival_time from source_time + simulated latency.
+    /// arrival_time := source_time + latency_distribution.sample()
+    SimulatedLatency {
+        market_data_latency: LatencyDistribution,
+        internal_event_latency: LatencyDistribution,
+        seed: u64,
+    },
+
+    /// Policy C: Neither source nor arrival timestamps available.
+    /// Backtester must be labeled as "approximate mode" and blocked
+    /// from production-grade claims.
+    Unusable,
+}
+\end{lstlisting}
+
+\textbf{Current Dataset Status}: Must use \texttt{SimulatedLatency} (Policy B) because:
+\begin{enumerate}[noitemsep]
+  \item Persisted \texttt{received\_at} has only second precision
+  \item In-memory \texttt{Instant} arrival times are not serialized
+  \item No \texttt{arrival\_time\_ns} field exists in any persisted table
+\end{enumerate}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Queue Position Modeling Analysis}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Queue Model Data Flow}
+
+The queue model in \texttt{backtest\_v2/queue\_model.rs} requires continuous observation of:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Book Deltas}: To track when size is added/removed at our price level
+  \item \textbf{Trade Prints}: To observe queue consumption (who got filled ahead of us)
+  \item \textbf{Sequence Numbers}: To ensure events are processed in exchange order
+\end{enumerate}
+
+\subsection{Queue Consumption Logic}
+
+Conceptually, queue position tracking works as follows:
+
+\begin{lstlisting}[language=Rust,caption={Conceptual queue position update}]
+fn update_queue_position(&mut self, event: &Event) {
+    match event {
+        Event::L2Delta { bid_updates, ask_updates, .. } => {
+            // Delta shows size change at price level
+            // If size decreased and we're in queue, someone got filled
+            // Our position advances
+        }
+        Event::TradePrint { price, size, aggressor_side, .. } => {
+            // Aggressor BUY at ask => ask queue shrinks
+            // Aggressor SELL at bid => bid queue shrinks
+            // If we're at that price, reduce our queue position
+        }
+        _ => {}
+    }
+}
+\end{lstlisting}
+
+\subsection{Current Data Gap Analysis}
+
+\begin{center}
+\begin{tabular}{p{5cm}ccp{5cm}}
+\toprule
+\textbf{Requirement} & \textbf{Have} & \textbf{Need} & \textbf{Gap Description} \\
+\midrule
+L2 Deltas with exchange\_seq & \textcolor{fail}{No} & \textcolor{pass}{Yes} & 
+WebSocket delivers snapshots only; even if deltas were available, they are not persisted \\
+\midrule
+Trade Prints (public) & \textcolor{warn}{Partial} & \textcolor{pass}{Yes} & 
+Only wallet orders persisted; not all public trades on the market \\
+\midrule
+Aggressor Side & \textcolor{warn}{Inferred} & \textcolor{pass}{Explicit} & 
+Can be inferred from wallet order side but not reliable for queue consumption \\
+\midrule
+Exchange Sequence & \textcolor{fail}{No} & \textcolor{pass}{Yes} & 
+\texttt{sequence} received in-memory but not persisted \\
+\midrule
+Nanosecond Timestamps & \textcolor{fail}{No} & \textcolor{pass}{Yes} & 
+Only second precision in \texttt{dome\_order\_events} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Consequence: Queue Position Not Computable}
+
+Without L2 deltas and public trade prints, we cannot:
+
+\begin{itemize}[noitemsep]
+  \item Determine when orders ahead of us were filled
+  \item Track queue position drift over time
+  \item Know when our passive order would have been reached
+  \item Validate maker fill assumptions
+\end{itemize}
+
+\begin{verdictbox}[Queue Modeling Verdict]
+\textbf{Status}: \textcolor{fail}{NOT SUPPORTED} \\
+\textbf{Reason}: Missing L2 deltas and public trade prints \\
+\textbf{Consequence}: Maker fill probability cannot be computed from data \\
+\textbf{Workaround}: Must use synthetic fill models (optimistic, produces untrusted results)
+\end{verdictbox}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Cancel-Fill Race Analysis}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Race Condition Definition}
+
+A cancel-fill race occurs when:
+\begin{enumerate}[noitemsep]
+  \item Strategy decides to cancel a resting order at time $t_d$
+  \item Cancel request sent, arrives at exchange at $t_d + \delta_{cancel}$
+  \item Meanwhile, market data arrives showing fill opportunity
+  \item Question: Was our order filled before cancel arrived?
+\end{enumerate}
+
+\subsection{Required Timing Information}
+
+To model cancel-fill races realistically, we need:
+
+\begin{align}
+t_{arrival}^{md} &= \text{arrival time of market data update} \\
+t_{arrival}^{fill} &= \text{arrival time of fill notification} \\
+t_{sent}^{cancel} &= \text{time we sent cancel request} \\
+t_{ack}^{cancel} &= \text{time cancel was acknowledged} \\
+\delta_{ot} &= \text{order-to-exchange latency distribution} \\
+\delta_{md} &= \text{market-data-to-strategy latency distribution}
+\end{align}
+
+\subsection{Current Data Limitations}
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Timing Component} & \textbf{Precision Needed} & \textbf{Precision Available} \\
+\midrule
+Market data arrival & Nanoseconds & Seconds (or not recorded) \\
+Fill notification arrival & Nanoseconds & Seconds \\
+Cancel send time & Nanoseconds & Not recorded \\
+Cancel ack time & Nanoseconds & Not recorded \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Simulated Latency Approach}
+
+From \texttt{visibility.rs} lines 127-145:
+
+\begin{lstlisting}[language=Rust,caption={ArrivalTimeMapper using simulated latency}]
+pub fn map_arrival_time(&mut self, source_time: Nanos, is_internal: bool) -> (Nanos, Nanos) {
+    match &mut self.policy {
+        SimArrivalPolicy::RecordedArrival => {
+            // Caller should have already set arrival_time
+            (source_time, 0)
+        }
+        SimArrivalPolicy::SimulatedLatency {
+            market_data_latency,
+            internal_event_latency,
+            ..
+        } => {
+            let latency = if is_internal {
+                internal_event_latency.sample(rng)
+            } else {
+                market_data_latency.sample(rng)
+            };
+            (source_time + latency, latency)  // Synthetic arrival
+        }
+        SimArrivalPolicy::Unusable => {
+            panic!("Cannot map arrival time with Unusable policy");
+        }
+    }
+}
+\end{lstlisting}
+
+\begin{verdictbox}[Cancel-Fill Race Verdict]
+\textbf{Status}: \textcolor{fail}{NOT REALISTICALLY MODELABLE} \\
+\textbf{Reason}: No sub-second arrival timestamps recorded \\
+\textbf{Consequence}: Must simulate latency distributions synthetically \\
+\textbf{Risk}: Simulated distributions may not match real-world behavior
+\end{verdictbox}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Data Flow Architecture}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Live System Data Flow}
+
+\begin{verbatim}
++-------------------+     +-------------------+     +-------------------+
+| POLYMARKET CLOB   |     | DOME WEBSOCKET    |     | BINANCE WS        |
+| WebSocket         |     | wss://ws.domeapi  |     | barter-data       |
++--------+----------+     +--------+----------+     +--------+----------+
+         |                         |                         |
+         v                         v                         v
++--------+----------+     +--------+----------+     +--------+----------+
+| BookSnapshot      |     | WsOrderData       |     | BinancePriceEvent |
+| - bids, asks      |     | - timestamp (sec) |     | - received_at_ns  |
+| - sequence        |     | - price, size     |     | - mid price       |
+| - created_at      |     | - user, side      |     | - symbol          |
++--------+----------+     +--------+----------+     +--------+----------+
+         |                         |                         |
+         v                         v                         v
++--------+----------+     +--------+----------+     +--------+----------+
+| ArcSwap<Book>     |     | SQLite INSERT     |     | broadcast channel |
+| IN-MEMORY ONLY    |     | dome_order_events |     | IN-MEMORY ONLY    |
+| NOT PERSISTED     |     | (seconds only)    |     | NOT PERSISTED     |
++-------------------+     +-------------------+     +-------------------+
+\end{verbatim}
+
+\subsection{Backtest V2 Expected Data Flow}
+
+\begin{verbatim}
++-------------------+     +-------------------+     +-------------------+
+| HISTORICAL DATA   |     | DATA NORMALIZER   |     | VecFeed           |
+| (stored on disk)  | --> | normalize.rs      | --> | sorted events     |
++-------------------+     +-------------------+     +-------------------+
+                                  |
+                                  v
+                          +-------+-------+
+                          | TimestampedEvent
+                          | - time (arrival_ns)
+                          | - source_time (ns)
+                          | - seq (u64)
+                          | - event (L2Delta/TradePrint/...)
+                          +-------+-------+
+                                  |
+                                  v
+                          +-------+-------+
+                          | BacktestOrchestrator
+                          | - visibility watermark
+                          | - event queue
+                          | - matching engine
+                          +---------------+
+\end{verbatim}
+
+\subsection{Gap: Live to Historical}
+
+\textbf{The critical gap}: There is no recording infrastructure that transforms live WebSocket data into the \texttt{TimestampedEvent} format required by the backtester.
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Data Source} & \textbf{Live Format} & \textbf{Historical Format Needed} \\
+\midrule
+Polymarket Book & \texttt{BookSnapshot} (in-mem) & \texttt{L2BookSnapshot} + \texttt{L2Delta} \\
+Dome Orders & \texttt{WsOrderData} (sec) & \texttt{TimestampedEvent} (ns) \\
+Binance Prices & \texttt{BinancePriceEvent} (ns) & Not persisted \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Classification Determination}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Decision Tree Application}
+
+\begin{verbatim}
+START
+  |
+  +-- Q1: Has FullIncrementalL2DeltasWithExchangeSeq?
+  |       |
+  |       +-- NO (only snapshots in memory, deltas not available)
+  |               |
+  |               +-- Q2: Has PeriodicL2Snapshots or TopOfBookPolling?
+  |                       |
+  |                       +-- NO (snapshots exist in memory but NOT PERSISTED)
+  |                               |
+  |                               +-- Classification: INCOMPLETE
+  |
+  |   (If snapshots WERE persisted, would be SNAPSHOT_ONLY)
+  |
+END
+\end{verbatim}
+
+\subsection{Final Classification}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Attribute} & \textbf{Value} \\
+\midrule
+\texttt{orderbook} & \texttt{OrderBookHistory::None} (not persisted) \\
+\texttt{trades} & \texttt{TradeHistory::TradePrints} (partial - wallet only) \\
+\midrule
+\textbf{Classification} & \texttt{DatasetClassification::Incomplete} \\
+\textbf{Supports Maker} & \textcolor{fail}{NO} \\
+\textbf{Production Suitable} & \textcolor{fail}{NO} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{If Snapshots Were Persisted}
+
+Even if we added snapshot persistence, classification would be:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\texttt{orderbook} & \texttt{OrderBookHistory::PeriodicL2Snapshots} \\
+\texttt{trades} & \texttt{TradeHistory::TradePrints} \\
+\midrule
+\textbf{Classification} & \texttt{DatasetClassification::SnapshotOnly} \\
+\textbf{Supports Maker} & \textcolor{fail}{NO} (cannot track queue between snapshots) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Required for Maker Viability}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\texttt{orderbook} & \texttt{OrderBookHistory::FullIncrementalL2DeltasWithExchangeSeq} \\
+\texttt{trades} & \texttt{TradeHistory::TradePrints} (public, not just wallet) \\
+\midrule
+\textbf{Classification} & \texttt{DatasetClassification::FullIncremental} \\
+\textbf{Supports Maker} & \textcolor{pass}{YES} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Claims Analysis}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Claims ALLOWED with Current Data}
+
+\begin{center}
+\begin{tabular}{p{4cm}p{9cm}}
+\toprule
+\textbf{Claim Type} & \textbf{Conditions and Caveats} \\
+\midrule
+Signal Detection Timing & 
+Valid for wallet order signals; timing based on \texttt{detected\_at} (second precision) \\
+\midrule
+Taker PnL (Aggressive) & 
+Must assume instant fill at quoted price; add conservative slippage (3-5\%); label as APPROXIMATE \\
+\midrule
+Edge Estimation & 
+Signal edge at detection time valid; cannot claim execution edge \\
+\midrule
+Wallet Activity Patterns & 
+Volume, frequency, market participation from \texttt{dome\_order\_events} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Claims PROHIBITED without Data Upgrades}
+
+\begin{center}
+\begin{tabular}{p{4cm}p{9cm}}
+\toprule
+\textbf{Claim Type} & \textbf{Reason Prohibited} \\
+\midrule
+\textcolor{fail}{Maker Fill Rate} & 
+Cannot track queue position; fill probability unknown \\
+\midrule
+\textcolor{fail}{Maker PnL} & 
+Fill timing indeterminate without queue model \\
+\midrule
+\textcolor{fail}{Production Sharpe Ratio} & 
+Fill assumptions too optimistic; PnL not trustworthy \\
+\midrule
+\textcolor{fail}{Queue Position Over Time} & 
+No deltas to track position drift \\
+\midrule
+\textcolor{fail}{Cancel Latency Impact} & 
+No sub-second arrival timestamps \\
+\midrule
+\textcolor{fail}{Adverse Selection} & 
+Cannot measure post-fill price movements accurately \\
+\midrule
+\textcolor{fail}{Execution Quality} & 
+No slippage data; no fill prices vs. quoted prices \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Remediation Plan}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Priority 1: Historical Book Recording (Critical)}
+
+\textbf{Goal}: Persist L2 book snapshots with nanosecond arrival times
+
+\textbf{Implementation Location}: \texttt{scrapers/polymarket\_book\_store.rs}
+
+\begin{lstlisting}[language=Rust,caption={Proposed HistoricalBookRecorder}]
+pub struct HistoricalBookRecorder {
+    storage: Arc<DbSignalStorage>,
+}
+
+impl HistoricalBookRecorder {
+    pub async fn record_snapshot(
+        &self,
+        token_id: &str,
+        bids: &[PriceLevel],
+        asks: &[PriceLevel],
+        exchange_seq: Option<u64>,
+        source_time_ns: i64,
+        arrival_time_ns: i64,
+    ) -> Result<()> {
+        // INSERT INTO historical_book_events
+    }
+}
+\end{lstlisting}
+
+\textbf{Schema Addition}:
+
+\begin{lstlisting}[language=SQL,caption={historical\_book\_events table}]
+CREATE TABLE IF NOT EXISTS historical_book_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,       -- 'snapshot', 'delta', 'trade'
+    exchange_seq INTEGER,
+    source_time_ns INTEGER NOT NULL,
+    arrival_time_ns INTEGER NOT NULL,
+    book_data_json TEXT,            -- bids/asks for snapshots
+    trade_price REAL,
+    trade_size REAL,
+    aggressor_side TEXT,
+    trade_id TEXT,
+    stream_source INTEGER NOT NULL,
+    recorded_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE INDEX idx_hbe_token_time 
+    ON historical_book_events(token_id, arrival_time_ns);
+CREATE INDEX idx_hbe_token_seq 
+    ON historical_book_events(token_id, exchange_seq);
+\end{lstlisting}
+
+\textbf{Effort}: 1-2 days
+
+\subsection{Priority 2: L2 Delta Support (High)}
+
+\textbf{Goal}: Capture incremental book updates (if API supports)
+
+\textbf{Investigation Required}:
+\begin{enumerate}[noitemsep]
+  \item Check if Polymarket CLOB WebSocket has delta subscription mode
+  \item If yes: subscribe to delta channel, persist events
+  \item If no: compute diffs between consecutive snapshots (approximation)
+\end{enumerate}
+
+\textbf{Effort}: 2-3 days (depends on API availability)
+
+\subsection{Priority 3: Public Trade Recording (Medium)}
+
+\textbf{Goal}: Capture all public trade prints, not just tracked wallet orders
+
+\textbf{Options}:
+\begin{enumerate}[noitemsep]
+  \item WebSocket trade channel (if available)
+  \item REST API polling for recent trades
+  \item Derive from orderbook changes (approximation)
+\end{enumerate}
+
+\textbf{Effort}: 1-2 days
+
+\subsection{Priority 4: Timestamp Precision Upgrade (Low)}
+
+\textbf{Goal}: Upgrade \texttt{dome\_order\_events} to nanosecond precision
+
+\textbf{Changes}:
+\begin{enumerate}[noitemsep]
+  \item Rename \texttt{timestamp} $\rightarrow$ \texttt{source\_time\_ns}
+  \item Rename \texttt{received\_at} $\rightarrow$ \texttt{arrival\_time\_ns}
+  \item Migration: multiply existing values by $10^9$
+  \item Update all insertion code paths
+\end{enumerate}
+
+\textbf{Effort}: 0.5 days
+
+\subsection{Implementation Roadmap}
+
+\begin{center}
+\begin{tabular}{clcc}
+\toprule
+\textbf{Phase} & \textbf{Task} & \textbf{Duration} & \textbf{Dependency} \\
+\midrule
+1 & Historical book recording & 2 days & None \\
+2 & Timestamp precision upgrade & 0.5 days & None \\
+3 & L2 delta investigation & 1 day & Phase 1 \\
+4 & L2 delta implementation & 2 days & Phase 3 \\
+5 & Public trade recording & 2 days & Phase 1 \\
+6 & Integration testing & 1 day & All \\
+\midrule
+& \textbf{Total} & \textbf{8.5 days} & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Verification Criteria}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+After implementing data recording, the following queries should pass:
+
+\subsection{Arrival Time Precision Check}
+
+\begin{lstlisting}[language=SQL,caption={Verify nanosecond precision variance}]
+SELECT 
+    COUNT(*) as total_events,
+    COUNT(DISTINCT arrival_time_ns % 1000000000) as distinct_subsec
+FROM historical_book_events
+WHERE arrival_time_ns > 0;
+
+-- PASS CRITERIA: distinct_subsec / total_events > 0.9
+-- (90%+ of events should have unique sub-second timing)
+\end{lstlisting}
+
+\subsection{Sequence Continuity Check}
+
+\begin{lstlisting}[language=SQL,caption={Check for sequence gaps}]
+WITH seq_check AS (
+    SELECT 
+        token_id,
+        exchange_seq,
+        LAG(exchange_seq) OVER (
+            PARTITION BY token_id ORDER BY exchange_seq
+        ) as prev_seq
+    FROM historical_book_events
+    WHERE event_type IN ('snapshot', 'delta') AND exchange_seq IS NOT NULL
+)
+SELECT 
+    token_id,
+    COUNT(*) as total,
+    SUM(CASE WHEN exchange_seq > prev_seq + 1 THEN 1 ELSE 0 END) as gaps,
+    ROUND(100.0 * SUM(CASE WHEN exchange_seq > prev_seq + 1 THEN 1 ELSE 0 END) 
+          / COUNT(*), 2) as gap_pct
+FROM seq_check
+WHERE prev_seq IS NOT NULL
+GROUP BY token_id;
+
+-- PASS CRITERIA: gap_pct < 0.1 for all tokens
+\end{lstlisting}
+
+\subsection{Trade Print Deduplication Check}
+
+\begin{lstlisting}[language=SQL,caption={Verify no duplicate trades}]
+SELECT 
+    DATE(arrival_time_ns / 1000000000, 'unixepoch') as day,
+    COUNT(*) as total_trades,
+    COUNT(DISTINCT trade_id) as unique_trades
+FROM historical_book_events
+WHERE event_type = 'trade'
+GROUP BY day;
+
+-- PASS CRITERIA: total_trades = unique_trades for all days
+\end{lstlisting}
+
+\subsection{Classification Verification}
+
+After data recording is implemented, run:
+
+\begin{lstlisting}[language=Rust,caption={Classification test}]
+let contract = HistoricalDataContract {
+    venue: "Polymarket".to_string(),
+    market: "15m up/down".to_string(),
+    orderbook: OrderBookHistory::FullIncrementalL2DeltasWithExchangeSeq,
+    trades: TradeHistory::TradePrints,
+};
+
+let classification = contract.classify();
+assert_eq!(classification, DatasetClassification::FullIncremental);
+assert!(classification.supports_maker_strategies());
+assert!(classification.is_production_suitable());
+\end{lstlisting}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Conclusion}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Summary of Findings}
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Dataset Classification}: \texttt{INCOMPLETE} (not maker-viable)
+  \item \textbf{Root Cause}: Live data not persisted; timestamps at second precision
+  \item \textbf{Queue Modeling}: Not possible without L2 deltas and public trades
+  \item \textbf{Cancel-Fill Races}: Not realistically modelable without ns timestamps
+  \item \textbf{Remediation}: 8.5 days of implementation work required
+\end{enumerate}
+
+\subsection{Recommended Actions}
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Immediate}: Add historical book recording with ns timestamps
+  \item \textbf{Short-term}: Investigate and implement L2 delta capture
+  \item \textbf{Medium-term}: Add public trade recording
+  \item \textbf{Long-term}: Build data quality monitoring dashboard
+\end{enumerate}
+
+\subsection{Risk Assessment}
+
+\begin{center}
+\begin{tabular}{lcl}
+\toprule
+\textbf{Risk} & \textbf{Severity} & \textbf{Mitigation} \\
+\midrule
+Optimistic maker fills & High & Block maker claims until data upgraded \\
+Incorrect Sharpe ratios & High & Label all results as APPROXIMATE \\
+Strategy overfitting & Medium & Sensitivity analysis on fill models \\
+Data quality degradation & Medium & Continuous monitoring + alerts \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vfill
+
+\begin{center}
+\textit{End of Dataset Readiness Report}
+\end{center}
+
+\end{document}

@@ -7,7 +7,7 @@ interface StatusBarProps {
 export const StatusBar: React.FC<StatusBarProps> = ({ isConnected }) => {
   return (
     <div className="border-t border-grey/10 px-4 py-2 flex justify-between items-center text-[10px] font-mono">
-      <div className="flex items-center gap-4 text-grey/70">
+      <div className="flex items-center gap-4 text-fg/80">
         <span>BETTER TERMINAL</span>
       </div>
 

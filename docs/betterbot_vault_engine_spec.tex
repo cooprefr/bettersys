@@ -1,0 +1,611 @@
+% (a) crate::vault::VaultEngine::run_updown15m, crate::vault::VaultEngine::evaluate_updown15m, crate::vault::VaultEngine::run_long_engine, crate::vault::VaultEngine::long_evaluate_market, crate::vault::VaultEngine::long_manage_exits, crate::vault::fast15m_reactive::ReactiveFast15mEngine::on_price_update, crate::vault::hft_paper_strategy::HftPaperStrategy::on_price_update, crate::vault::orderflow_paper::OrderflowPaperEngine::handle_update, crate::vault::Unified15mStrategy::on_order, crate::vault::Unified15mStrategy::on_settlement, crate::vault::latency_arb::LatencyArbEngine::evaluate_market, crate::api::simple::post_trade_order.
+% (b) Files traversed were rust-backend/src/main.rs, rust-backend/src/api/simple.rs, rust-backend/src/scrapers/chainlink_feed.rs, rust-backend/src/scrapers/binance_price_feed.rs, rust-backend/src/vault/mod.rs, rust-backend/src/vault/engine.rs, rust-backend/src/vault/updown15m.rs, rust-backend/src/vault/belief_vol.rs, rust-backend/src/vault/rnjd.rs, rust-backend/src/vault/kelly.rs, rust-backend/src/vault/execution.rs, rust-backend/src/vault/paper_ledger.rs, rust-backend/src/vault/pool.rs, rust-backend/src/vault/book_access.rs, rust-backend/src/vault/fast15m_reactive.rs, rust-backend/src/vault/hft_paper_strategy.rs, rust-backend/src/vault/orderflow_paper.rs, rust-backend/src/vault/unified_15m_strategy.rs, rust-backend/src/vault/latency_arb.rs.
+% (c) Apply drawdown circuit breaker before trading, Determine window slug and per-slug cooldown, Resolve outcome token IDs from Gamma, Skip if too late in window, Read Binance start current and volatility, Perform Chainlink oracle lag divergence gate, Read Up/Down asks and market mid, Record belief observation and estimate Up probability, Shrink probabilities and select best side, Apply edge threshold with jump regime, Run vol-adjusted Kelly and bankroll gate, Build IOC buy order request.
+
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{booktabs}
+
+% Code identifier helper that works in both text and math.
+\newcommand{\code}[1]{\ifmmode\text{\texttt{#1}}\else\texttt{#1}\fi}
+
+\title{Trading Logic Specification: BetterBot Vault Engine\\(Reverse-Engineered, Code-Faithful)}
+\author{Derived from the BetterBot codebase}
+\date{2026-01-21}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\section{Scope and Goal}
+This document formalizes the \emph{implemented} decision rules for BetterBot's automated and paper trading engines, as currently expressed in the Rust backend. It is intentionally code-faithful: where code deviates from comments or implied intent, this specification follows code behavior.
+
+Primary source files include \code{rust-backend/src/vault/engine.rs} (VaultEngine FAST15M + LONG), plus supporting modules for probability estimation, execution simulation, accounting, and orderbook access.
+
+\section{Top-Level Entrypoints and Activation}
+
+\subsection{VaultEngine (Polling)}
+\begin{itemize}
+\item FAST15M loop: \code{crate::vault::VaultEngine::run\_updown15m}.
+\item FAST15M decision operator: \code{crate::vault::VaultEngine::evaluate\_updown15m}.
+\item LONG loop: \code{crate::vault::VaultEngine::run\_long\_engine}.
+\item LONG decision operator: \code{crate::vault::VaultEngine::long\_evaluate\_market}.
+\item LONG exit manager: \code{crate::vault::VaultEngine::long\_manage\_exits}.
+\end{itemize}
+
+Activation and execution mode (\code{rust-backend/src/vault/engine.rs}):
+\begin{itemize}
+\item Enabled when \code{VAULT\_ENGINE\_ENABLED} parses as truthy.
+\item Paper mode when \code{VAULT\_ENGINE\_PAPER} parses as truthy (default true).
+\item If paper mode is false, live execution requires \code{PolymarketClobAdapter::from\_env()} to succeed; otherwise it falls back to paper.
+\end{itemize}
+
+\subsection{Optional Strategies (Event-Driven / Auxiliary)}
+\begin{itemize}
+\item Reactive FAST15M: \code{crate::vault::fast15m\_reactive::ReactiveFast15mEngine::on\_price\_update} (spawned via \code{spawn\_reactive\_fast15m} in \code{main.rs}).
+\item HFT paper strategy: \code{crate::vault::hft\_paper\_strategy::HftPaperStrategy::on\_price\_update} (spawned via \code{spawn\_hft\_paper\_strategy} in \code{main.rs}).
+\item Orderflow paper engine: internal \code{OrderflowPaperEngine::handle\_update} (spawned via \code{spawn\_orderflow\_paper\_engine} in \code{main.rs}).
+\item Unified15mStrategy: \code{crate::vault::Unified15mStrategy::on\_order} and \code{crate::vault::Unified15mStrategy::on\_settlement} (initialized in \code{main.rs} when enabled).
+\item Latency arbitrage engine: \code{crate::vault::latency\_arb::LatencyArbEngine::evaluate\_market} (not spawned by default in \code{main.rs}).
+\end{itemize}
+
+\subsection{Manual Trade API (Stub)}
+Endpoint \code{POST /api/trade/order} is implemented by \code{crate::api::simple::post\_trade\_order} (\code{rust-backend/src/api/simple.rs}) and does not execute real trades; it returns a paper acceptance message when enabled, and returns \code{NOT\_IMPLEMENTED} for live mode.
+
+\section{Time and Windowing (15m Markets)}
+For the 15-minute deterministic Up/Down markets, the engine uses a rolling window based on Unix time $t$ in seconds:
+\begin{align}
+t_{\mathrm{start}} &= t - (t \bmod 900),\\
+t_{\mathrm{end}} &= t_{\mathrm{start}} + 900,\\
+t_{\mathrm{rem}} &= \max(t_{\mathrm{end}} - t,\ 0).
+\end{align}
+The FAST15M polling loop builds \code{slug = \{asset\}-updown-15m-\{t\_start\}}.
+
+\section{Shared State, Accounting, and Execution}
+
+\subsection{Paper Ledger}
+File: \code{rust-backend/src/vault/paper\_ledger.rs}.
+
+State:
+\begin{itemize}
+\item \code{cash\_usdc}
+\item \code{positions}: \code{token\_id} $\mapsto$ $\{\code{shares},\ \code{cost\_usdc},\ \code{avg\_price},\ \code{outcome}\}$
+\item execution counters: \code{total\_fees\_usdc}, \code{total\_slippage\_usdc}, \code{trade\_count}, \code{reject\_count}, \code{partial\_fill\_count}
+\end{itemize}
+
+Buy ledger update (\code{apply\_buy}):
+\begin{align}
+q &= \frac{N}{P},\\
+\code{cash} &\leftarrow \max(\code{cash} - (N + \mathrm{fees}), 0),\\
+\code{cost} &\leftarrow \code{cost} + N,\quad
+\code{shares} \leftarrow \code{shares} + q,\quad
+\code{avg\_price} \leftarrow \frac{\code{cost}}{\code{shares}}.
+\end{align}
+\emph{Cost basis excludes fees} (fees are tracked separately).
+
+Sell ledger update (\code{apply\_sell}):
+\begin{align}
+q_{\mathrm{target}} &= \frac{N}{P},\quad
+q_{\mathrm{sell}} = \min(q_{\mathrm{target}},\ q_{\mathrm{pos}}),\\
+\code{cash} &\leftarrow \code{cash} + \max(q_{\mathrm{sell}}P - \mathrm{fees}, 0),
+\end{align}
+with proportional reduction of cost basis and removal of the position when shares go to (approximately) zero.
+
+\subsection{NAV Approximation and Shares}
+File: \code{rust-backend/src/vault/pool.rs}.
+
+The vault supports share-based deposit/withdraw accounting, and defines an approximate NAV:
+\begin{equation}
+\mathrm{NAV}_{\mathrm{approx}} = \max\!\left(\code{cash\_usdc} + \sum_i \code{shares}_i \cdot \code{avg\_price}_i,\ 0\right).
+\end{equation}
+This is cost-basis-marked unless additional marking is performed elsewhere.
+
+\subsection{Periodic Marked NAV Snapshots}
+File: \code{rust-backend/src/vault/engine.rs} (\code{run\_nav\_snapshot\_loop}).
+
+VaultEngine spawns a periodic NAV snapshot loop (default cadence from \code{VAULT\_NAV\_SNAPSHOT\_SECS}, clamped to $[10, 3600]$ seconds). For each token position, it attempts to mark using a bid/ask-derived mid (WS cache preferred; REST fallback), and stores a NAV snapshot to the vault DB.
+
+\subsection{Execution Adapters}
+File: \code{rust-backend/src/vault/execution.rs}.
+
+Orders use:
+\begin{itemize}
+\item \code{OrderRequest}: token id, side, limit price (0..1), notional in USDC, TIF.
+\item \code{ExecutionAdapter::place\_order}: returns \code{OrderAck} with filled notional, filled price, fees, simulated slippage, and latency.
+\end{itemize}
+
+\subsubsection{PaperExecutionAdapter (Simulation)}
+Paper fills apply:
+\begin{itemize}
+\item Latency: $L = L_0 + U(0,J)$.
+\item Rejection: Bernoulli with probability \code{reject\_prob}.
+\item Slippage in bps: \code{base\_slippage\_bps} $+$ \code{slippage\_bps\_per\_1k}$\cdot(N/1000)$.
+\item BUY fill price: $P_f = \min(P(1+s), 0.99)$, SELL fill price: $P_f = \max(P(1-s), 0.01)$, $s=\mathrm{bps}/10{,}000$.
+\item Partial fill: Bernoulli with probability \code{partial\_fill\_prob}; if partial, fill ratio $\rho\sim U(\code{min\_fill\_ratio},1)$.
+\item Fees: $\mathrm{fees} = N_f\cdot \code{fee\_rate}$.
+\end{itemize}
+
+\section{Market Data Inputs}
+
+\subsection{Binance Mid-Price and Volatility}
+File: \code{rust-backend/src/scrapers/binance\_price\_feed.rs}.
+
+The Binance feed maintains:
+\begin{itemize}
+\item \code{latest\_mid(symbol)}: current mid.
+\item \code{mid\_near(symbol, target\_ts, max\_skew\_sec)}: mid near a target timestamp.
+\item \code{sigma\_per\_sqrt\_s(symbol)}: volatility estimate.
+\end{itemize}
+
+Volatility estimator:
+\begin{itemize}
+\item Per-second log return (normalized by observed $\Delta t$):
+\[
+r = \frac{\ln(\mathrm{mid}_t / \mathrm{mid}_{t-\Delta t})}{\Delta t}.
+\]
+\item EWMA variance update:
+\[
+v \leftarrow \lambda v + (1-\lambda)r^2.
+\]
+\item Reported $\sigma_{\sqrt{s}} = \sqrt{v}$, i.e., ``per-$\sqrt{\mathrm{second}}$'' units.
+\end{itemize}
+
+\subsection{Orderbook Access and Staleness}
+Primary strategy-specific cache-only semantics are defined in \code{rust-backend/src/vault/book\_access.rs}. The key contract is:
+\begin{quote}
+Book reads in hot paths do not perform REST calls; \code{None} means ``skip this tick.''
+\end{quote}
+
+VaultEngine FAST15M uses a hybrid helper \code{best\_ask} (\code{rust-backend/src/vault/engine.rs}) that prefers WS cache but falls back to REST \code{/book} when cache miss occurs; comments mark this as deprecated for HFT usage.
+
+\subsection{Chainlink Oracle Feed and Lag Gate}
+File: \code{rust-backend/src/scrapers/chainlink\_feed.rs}.
+
+If configured (via \code{POLYGON\_RPC\_URL} or \code{CHAINLINK\_RPC\_URL}), the Chainlink feed provides oracle settlement price tracking and an oracle lag analysis:
+\begin{align}
+\mathrm{divergence\_bps} &= \frac{S_{\mathrm{binance}} - S_{\mathrm{chainlink}}}{S_{\mathrm{chainlink}}}\cdot 10{,}000,\\
+\mathrm{chainlink\_age\_ms} &= \mathrm{now\_ms} - \mathrm{chainlink\_timestamp\_ms}.
+\end{align}
+Trading is skipped (via \code{OracleLagAnalysis::should\_skip\_trade}) if any holds:
+\begin{itemize}
+\item Chainlink is stale: $\mathrm{chainlink\_age\_ms} > 5000$.
+\item Absolute divergence is large: $|\mathrm{divergence\_bps}| > 50$.
+\item ``Dangerous regime'': $|\mathrm{divergence\_bps}| > 20$ and $\mathrm{chainlink\_age\_ms} > 2000$.
+\end{itemize}
+
+\section{Belief Volatility and Jump Detection}
+File: \code{rust-backend/src/vault/belief\_vol.rs}.
+
+\subsection{Logit and Sigmoid}
+Utilities:
+\begin{align}
+\operatorname{logit}(p) &= \ln\!\left(\frac{p}{1-p}\right), \quad p\ \text{clamped to}\ [10^{-4}, 1-10^{-4}],\\
+\sigma(x) &= \frac{1}{1+e^{-x}},\\
+\sigma'(p) &= p(1-p)\quad \text{(note: function expects probability input)}.
+\end{align}
+
+\subsection{Observation and Increment Construction}
+Each observation records a clamped price $p_t\in(0,1)$ for a market slug. If the time delta from the previous observation satisfies $1 \le \Delta t \le 3600$ seconds, the tracker constructs a log-odds increment and updates an EMA estimate.
+
+\subsection{EMA Belief Volatility Estimate}
+The tracker computes an EMA of annualized variance of log-odds increments and stores:
+\begin{itemize}
+\item $\sigma_b$ (annualized, log-odds space), floored at 0.01.
+\item \code{sample\_count} of valid increments.
+\item \code{confidence} based on sample count relative to \code{min\_samples}.
+\end{itemize}
+
+\subsection{Jump Detection}
+Given $\Delta x$ and $\Delta t$, the code uses a z-score:
+\[
+z = \frac{|\Delta x|}{\sigma_b\sqrt{\Delta t_{\mathrm{years}}}},
+\quad \Delta t_{\mathrm{years}} = \frac{\Delta t}{365.25\cdot 24\cdot 3600}.
+\]
+Recent jump counts are computed by scanning increments in a time window and counting those exceeding a threshold.
+
+\section{Probability Models}
+
+\subsection{Shrink-to-Half}
+File: \code{rust-backend/src/vault/updown15m.rs}.
+\[
+\operatorname{shrink\_to\_half}(p,s) = 0.5 + \operatorname{clip}_{[0,1]}(s)\cdot(p-0.5),
+\quad p\in[10^{-4},1-10^{-4}]\ \text{after clamp}.
+\]
+
+\subsection{Driftless Lognormal (Legacy FAST15M)}
+File: \code{rust-backend/src/vault/updown15m.rs}.
+Given underlying start/current prices $S_0,S_t$, volatility $\sigma_{\sqrt{s}}$ per-$\sqrt{\mathrm{second}}$, and remaining seconds $t_{\mathrm{rem}}$:
+\[
+x = \ln\left(\frac{S_t}{S_0}\right),\quad
+z = \frac{x}{\sigma_{\sqrt{s}}\sqrt{t_{\mathrm{rem}}}},\quad
+p_{\mathrm{up}} = \Phi(z),
+\]
+with final clamp to $[10^{-4},1-10^{-4}]$.
+
+\subsection{RN-JD (Risk-Neutral Jump-Diffusion Correction)}
+File: \code{rust-backend/src/vault/rnjd.rs}.
+
+\subsubsection{Risk-Neutral Drift in Log-Odds}
+Given market probability $p$ and belief volatility $\sigma_b$:
+\[
+\mu_x(p) = -\tfrac{1}{2}\sigma_b^2(1-2p),
+\quad p\ \text{clamped to}\ [0.001,0.999].
+\]
+A jump-compensation term exists but is effectively zero under defaults because $\mu_j = 0$.
+
+\subsubsection{\code{estimate\_p\_up\_rnjd}}
+Inputs:
+\begin{itemize}
+\item $S_0, S_t$: underlying start/current prices
+\item $p_m$: current market probability (used for drift)
+\item $\sigma_{\mathrm{price}}$: \emph{assumed annualized} price volatility (per code comments)
+\item $t_{\mathrm{rem}}$: remaining seconds
+\end{itemize}
+
+Compute:
+\[
+t_{\mathrm{years}} = \frac{t_{\mathrm{rem}}}{365.25\cdot 24\cdot 3600},\quad
+\text{std} = \sigma_{\mathrm{price}}\sqrt{t_{\mathrm{years}}},\quad
+p_{\mathrm{raw}} = \Phi\!\left(\frac{\ln(S_t/S_0)}{\text{std}}\right),
+\]
+then apply a drift correction in logit space:
+\[
+p_{\mathrm{up}} = \sigma\!\left(\operatorname{logit}(p_{\mathrm{raw}}) + \mu_x(p_m)\,t_{\mathrm{years}}\right).
+\]
+Confidence is computed as:
+\[
+c = \operatorname{clip}_{[0.1,0.95]}\!\left(e^{-t_{\mathrm{rem}}/900}\cdot 4p_m(1-p_m)\right).
+\]
+
+\subsubsection{\code{estimate\_p\_up\_enhanced}}
+The enhanced wrapper:
+\begin{itemize}
+\item Converts price volatility to belief volatility via $\sigma_{b,\mathrm{price}} \approx \sigma_{\mathrm{price}}/(p_m(1-p_m))$ (with clamps/caps in code).
+\item If the belief-vol tracker has a reliable estimate, blends tracked and price-derived $\sigma_b$ using a 70/30 weight.
+\item Detects ``jump regime'' by counting recent jumps (5-minute window, threshold 3.0, count $\ge 2$); if in jump regime, sets $\lambda = 10$ in params and multiplies confidence by 0.7.
+\end{itemize}
+
+\subsubsection{Critical Unit Mismatch (Code Behavior)}
+\code{VaultEngine::evaluate\_updown15m} and \code{HftPaperStrategy::on\_price\_update} pass $\sigma_{\sqrt{s}}$ (per-$\sqrt{\mathrm{second}}$) into RN-JD functions that interpret the input as annualized volatility. \code{Unified15mStrategy::on\_order} explicitly annualizes $\sigma$ before RN-JD.
+
+\section{Kelly Sizing}
+File: \code{rust-backend/src/vault/kelly.rs}.
+
+\subsection{Base Kelly for Binary Bets}
+Let $p$ be subjective probability and $q$ be market price (implied probability). Edge $e=p-q$; if $e\le 0$, do not trade. Define odds:
+\[
+b = \frac{1}{q}-1.
+\]
+Full Kelly fraction:
+\[
+f^* = \frac{pb-(1-p)}{b},
+\]
+clamped to $[0,1]$. Fractional Kelly applies multiplier $k$, then caps by \code{max\_position\_pct} and converts to a USD notional via bankroll.
+
+\subsection{Vol-Adjusted Kelly (\code{kelly\_with\_belief\_vol})}
+This scales the base Kelly position by a multiplier determined by an ``edge safety ratio'' computed from belief volatility:
+\[
+\Delta p_{\mathrm{exp}} \approx \sigma_b\sqrt{t_{\mathrm{years}}}\cdot q(1-q),
+\quad r = \frac{e}{\Delta p_{\mathrm{exp}} + 0.001}.
+\]
+Multiplier:
+\[
+v(r)=
+\begin{cases}
+\max(r,0.1) & r < 1\\
+0.5+0.25r & 1 \le r < 2\\
+1 & r \ge 2.
+\end{cases}
+\]
+The notional and fraction are multiplied by $v(r)$, and the minimum-notional threshold is re-checked.
+
+\section{Strategy Specifications}
+
+\subsection{VaultEngine FAST15M (Polling)}
+File: \code{rust-backend/src/vault/engine.rs}.
+
+\subsubsection{Universe}
+Assets are fixed:
+\[
+\{\mathrm{BTC},\mathrm{ETH},\mathrm{SOL},\mathrm{XRP}\},
+\]
+mapped to Binance symbols and slugs \code{\{asset\}-updown-15m-\{t\_start\}}.
+
+\subsubsection{Drawdown Circuit Breaker}
+At the start of each FAST15M tick:
+\[
+\mathrm{drawdown} = 1 - \frac{\mathrm{NAV}_{\mathrm{approx}}}{\code{initial\_bankroll}}.
+\]
+If $\mathrm{drawdown} \ge \code{max\_drawdown\_pct}$, the engine sets \code{halted=true} and skips all future trading.
+
+\subsubsection{Cooldown and Token Resolution}
+Per slug, a cooldown check uses \code{last\_trade\_ts[slug]}; if within cooldown window, the market is skipped. Token IDs are resolved via Gamma (and cached per slug) using:
+\begin{itemize}
+\item \code{polymarket\_gamma::resolve\_clob\_token\_id\_by\_slug(..., "Up")}
+\item \code{polymarket\_gamma::resolve\_clob\_token\_id\_by\_slug(..., "Down")}
+\end{itemize}
+If either token id is empty, the market is skipped.
+
+\subsubsection{Decision Operator: \code{evaluate\_updown15m}}
+Inputs:
+\begin{itemize}
+\item Window $t_{\mathrm{start}}, t_{\mathrm{end}}$ and remaining time $t_{\mathrm{rem}}$.
+\item Binance prices $S_0$ near window start (max skew 60s) and $S_t$ current mid.
+\item $\sigma_{\sqrt{s}}$ from \code{sigma\_per\_sqrt\_s}.
+\item Up and Down token ids.
+\end{itemize}
+
+Hard time gate:
+\begin{itemize}
+\item If $t_{\mathrm{rem}} < 15$ seconds, return \code{None}.
+\end{itemize}
+
+Chainlink lag gate:
+\begin{itemize}
+\item If Chainlink feed is present, evaluate lag and divergence; if \code{should\_skip\_trade} is true, return \code{None}.
+\item Always update the Chainlink tracker with the current Binance price after the check.
+\end{itemize}
+
+Orderbook and market-mid construction:
+\begin{itemize}
+\item Fetch \code{ask\_up} and \code{ask\_down} via \code{best\_ask} (WS cache preferred, REST fallback).
+\item Construct a mid-like probability:
+\[
+p_m =
+\begin{cases}
+\tfrac{1}{2}(\code{ask\_up} + (1-\code{ask\_down})) & \text{if both asks present}\\
+\code{ask\_up} & \text{if only Up ask present}\\
+1-\code{ask\_down} & \text{if only Down ask present}\\
+0.5 & \text{if neither present.}
+\end{cases}
+\]
+\end{itemize}
+
+Belief-vol recording:
+\begin{itemize}
+\item Record $p_m$ into the belief-vol tracker for \code{slug}.
+\end{itemize}
+
+Probability estimation:
+\begin{itemize}
+\item Attempt RN-JD enhanced estimation:
+\[
+\code{estimate\_p\_up\_enhanced}(S_0,S_t,p_m,\sigma_{\sqrt{s}},t_{\mathrm{rem}},\mathrm{tracker},\code{slug},t).
+\]
+\item If RN-JD returns \code{None}, fallback to driftless lognormal $p_{\mathrm{up}}$ using $\sigma_{\sqrt{s}}$, and synthesize an \code{RnjdEstimate} with \code{confidence=0.5} and \code{jump\_regime=false}.
+\end{itemize}
+
+Conservatism shrink:
+\[
+p_{\mathrm{up}} \leftarrow \operatorname{shrink\_to\_half}(p_{\mathrm{up}}, \code{updown\_shrink\_to\_half}),\quad
+p_{\mathrm{down}} = 1 - p_{\mathrm{up}}.
+\]
+
+Side selection and edge:
+\begin{itemize}
+\item If both asks present, compute edges $e_{\mathrm{up}}=p_{\mathrm{up}}-\code{ask\_up}$ and $e_{\mathrm{down}}=p_{\mathrm{down}}-\code{ask\_down}$ and select the larger.
+\item If only one ask present, select that side.
+\item If neither ask present, return \code{None}.
+\item Edge is $e = p_{\text{side}} - \code{ask}_{\text{side}}$.
+\end{itemize}
+
+Jump regime edge gating:
+\begin{itemize}
+\item If \code{est.jump\_regime} is true, the minimum edge is doubled; otherwise it is the base threshold.
+\item If $e < e_{\min}$, return \code{None}.
+\end{itemize}
+
+Sizing:
+\begin{itemize}
+\item Bankroll is \code{cash\_usdc} from the vault paper ledger; if bankroll $\le 0$, return \code{None}.
+\item Use vol-adjusted Kelly with $\sigma_b = \code{tracker.get\_sigma\_b(slug)}$ and $t_{\mathrm{years}} = t_{\mathrm{rem}}/(\text{seconds-per-year})$.
+\item If Kelly says no trade, return \code{None}.
+\end{itemize}
+
+Order construction:
+\begin{itemize}
+\item BUY, IOC, at \code{price=ask}, notional $=\code{kelly.position\_size\_usd}$.
+\end{itemize}
+
+\subsubsection{Execution and Persistence}
+If the order is placed, the engine:
+\begin{itemize}
+\item Applies the buy to the vault paper ledger.
+\item Updates vault DB state and inserts an activity record and NAV snapshot.
+\item Updates per-slug last trade timestamp.
+\end{itemize}
+
+\subsection{VaultEngine LONG (LLM-Gated)}
+File: \code{rust-backend/src/vault/engine.rs}.
+
+\subsubsection{Signal Ingestion}
+The VaultEngine signal router listens to the websocket broadcast channel and ingests only non-15m signals of type \code{TrackedWalletEntry}. It rejects ingestion if:
+\begin{itemize}
+\item Wallet label contains \code{high\_frequency} or \code{hft}.
+\item \code{position\_value\_usd} is not finite or below a configured minimum.
+\item Wallet activity over a sliding window exceeds a max event count, or shows two distinct outcomes within the window (anti-churn).
+\end{itemize}
+
+\subsubsection{Budgeting and Scheduling}
+LONG uses global daily budgets and per-market daily call budgets, enforced before issuing LLM calls. Candidates are due when:
+\begin{itemize}
+\item A pending signal exists for the market.
+\item The market is outside cooldown since last trade.
+\item The market is outside a minimum infer interval since last inference.
+\end{itemize}
+
+\subsubsection{Market Admissibility}
+For each due candidate:
+\begin{itemize}
+\item Gamma lookup must succeed.
+\item Outcomes must be binary and have two CLOB token ids.
+\item Expiry must parse; time-to-expiry must exceed 60 seconds.
+\item Time-to-expiry in days must be below a configured maximum.
+\end{itemize}
+
+\subsubsection{Scout-First LLM Gate}
+\begin{itemize}
+\item Call the scout model (first model in configured list).
+\item Parse the Decision DSL (see \code{crate::vault::parse\_decision\_dsl}).
+\item If scout action is not BUY, record a HOLD decision and stop.
+\item Extract outcome index and $p_{\mathrm{true}}$.
+\end{itemize}
+
+Orderbook admissibility and effective edge:
+\begin{itemize}
+\item Fetch bid/ask/spread/top-of-book for the scout outcome token.
+\item Enforce max spread and min top-of-book.
+\item Define slippage buffer:
+\[
+\mathrm{slippage} = \max(\code{long\_slippage\_buffer\_min},\ 0.5\cdot \mathrm{spread\_bps\_to\_price}(\mathrm{spread\_bps},\mathrm{ask})).
+\]
+\item Effective entry price:
+\[
+p_{\mathrm{eff}} = \operatorname{clip}_{[10^{-4},1-10^{-4}]}(\mathrm{ask} + \code{long\_fee\_buffer} + \mathrm{slippage}).
+\]
+\item Require $p_{\mathrm{true}} - p_{\mathrm{eff}} \ge \code{long\_min\_edge}$; otherwise record HOLD and stop.
+\end{itemize}
+
+\subsubsection{3-of-4 Consensus}
+\begin{itemize}
+\item Call the remaining three models and parse decisions.
+\item Count votes for BUY decisions by outcome index; require $\ge 3$ votes for the winning outcome.
+\item Aggregate $p_{\mathrm{true}}$ values and \code{SIZE\_MULT} values across agreeing models.
+\end{itemize}
+
+Aggregation:
+\begin{itemize}
+\item $p_{\mathrm{aggr}}$ is the mean of agreeing $p$ values (or a fallback seed).
+\item \(\mathrm{size\_mult}\) is the mean of agreeing multipliers, clamped to $[0,1]$.
+\item Dispersion penalty uses standard deviation $\sigma_p$ and a configured max dispersion $d_{\max}$:
+\[
+\mathrm{penalty} = \operatorname{clip}_{[0,1]}\!\left(1 - \operatorname{clip}_{[0,1]}(\sigma_p/d_{\max})\right).
+\]
+\end{itemize}
+
+\subsubsection{Re-check Book and Final Trade}
+\begin{itemize}
+\item Re-fetch the winning outcome ask and spread/top-of-book gates.
+\item Recompute $p_{\mathrm{eff2}}$ and edge $p_{\mathrm{aggr}} - p_{\mathrm{eff2}}$; require it to exceed the configured minimum.
+\end{itemize}
+
+Sizing:
+\begin{itemize}
+\item Use base Kelly sizing \code{calculate\_kelly\_position} with $(p_{\mathrm{aggr}}, p_{\mathrm{eff2}})$.
+\item Notional:
+\[
+N = N_{\mathrm{kelly}}\cdot \mathrm{size\_mult}\cdot \mathrm{penalty},
+\]
+then clamp by max trade and available bankroll, and enforce min trade.
+\end{itemize}
+
+Execution:
+\begin{itemize}
+\item BUY, IOC, at \code{ask2}; apply to vault ledger; persist activity, NAV snapshot, and LLM decision record.
+\end{itemize}
+
+\subsubsection{Exit Management (Bands)}
+LONG manages exits for any vault-held positions:
+\begin{itemize}
+\item If bid exceeds a configured ``90'' threshold and the token has not yet exited that band, sell a configured fraction.
+\item If bid exceeds a configured ``95'' threshold and the token has not yet exited that band, sell a configured fraction.
+\item Exit band state is tracked per token to prevent repeated sales.
+\end{itemize}
+
+\subsection{Reactive FAST15M (Event-Driven, Legacy Model)}
+File: \code{rust-backend/src/vault/fast15m\_reactive.rs}.
+
+Core properties:
+\begin{itemize}
+\item Triggered by Binance price updates.
+\item Uses driftless lognormal $p_{\mathrm{up}}$ and shrink-to-half; no RN-JD.
+\item Uses cache-only orderbook reads (no REST fallback) with a 1500ms freshness threshold.
+\item Adds reactive gating: rate-limit evaluations and require a minimum change in an ``edge estimate'' outside the first window minute.
+\item Buys IOC at best ask for the chosen side when edge exceeds the configured threshold and Kelly sizing approves.
+\end{itemize}
+
+\subsection{HFT Paper Strategy (Event-Driven, RN-JD Core)}
+File: \code{rust-backend/src/vault/hft\_paper\_strategy.rs}.
+
+Core properties:
+\begin{itemize}
+\item Triggered by Binance price updates; cache-only orderbooks; skip-tick on cache miss.
+\item Uses RN-JD enhanced estimation, belief-vol tracking, shrink-to-half, and vol-adjusted Kelly.
+\item Adds a minimum RN-JD confidence gate.
+\item Adds jump regime detection using both RN-JD's flag and belief-vol tracker counts; increases required edge in jump regime.
+\item Applies additional notional caps (absolute and percentage of bankroll).
+\end{itemize}
+
+\subsection{Orderflow Paper Engine (Orderbook Imbalance)}
+File: \code{rust-backend/src/vault/orderflow\_paper.rs}.
+
+Imbalance estimator:
+\[
+I = \frac{B-A}{B+A},
+\]
+where $B$ sums bid notional within a bps band below mid, and $A$ sums ask notional within a bps band above mid.
+
+Trading rule:
+\begin{itemize}
+\item Gate on book existence, spread bps, minimum absolute imbalance, cooldown, and top-of-book notional.
+\item If $I>0$: BUY at best ask if no position exists.
+\item If $I<0$: SELL at best bid if a position exists.
+\item Notional is capped by both a configured clip and a fraction of available cash (for buys), or by position value (for sells).
+\item Executes via \code{PaperExecutionAdapter} and updates the vault ledger and DB.
+\end{itemize}
+
+\subsection{Unified15mStrategy (Internal Position Management and Fee-Aware Exits)}
+File: \code{rust-backend/src/vault/unified\_15m\_strategy.rs}.
+
+This strategy maintains an internal bankroll and positions and reacts to incoming order signals (e.g., from Dome), rather than placing orders through the vault execution adapter.
+
+Key distinctions:
+\begin{itemize}
+\item Annualizes Binance $\sigma_{\sqrt{s}}$ before RN-JD:
+\[
+\sigma_{\mathrm{annual}} = \sigma_{\sqrt{s}}\sqrt{365.25\cdot 24\cdot 3600}.
+\]
+\item Uses \code{estimate\_p\_up\_rnjd} (not the enhanced wrapper).
+\item Applies shrink-to-half to model probability.
+\item Uses vol-adjusted Kelly sizing against its internal bankroll.
+\end{itemize}
+
+Polymarket 15m fee model implemented:
+\[
+\mathrm{fee} = 0.25 \cdot \mathrm{shares} \cdot \left(p(1-p)\right)^2.
+\]
+For exits, it computes a ``minimum profitable move'' using fee-per-share at entry and current prices, and exits if favorable, edge-reversed, or timed out. Settlement computes binary payoff against the entry price and charges only the entry fee.
+
+\subsection{Latency Arbitrage Engine (Tail-Latency-Aware Effective Edge)}
+File: \code{rust-backend/src/vault/latency\_arb.rs}.
+
+This engine models:
+\begin{itemize}
+\item Damped probability updates from multiple ``drivers''.
+\item Fill probability derived from tail latency statistics.
+\item Effective edge computed after fees, expected slippage, and fill probability.
+\item Kelly sizing scaled by fill probability and uncertainty, with exposure limits.
+\end{itemize}
+It is not started by default in \code{main.rs}.
+
+\subsection{Manual Trade Endpoint (Feature-Flagged Stub)}
+File: \code{rust-backend/src/api/simple.rs}.
+
+\begin{itemize}
+\item If \code{ENABLE\_TRADING} is false, returns \code{SERVICE\_UNAVAILABLE}.
+\item If \code{TRADING\_MODE=live}, returns \code{NOT\_IMPLEMENTED}.
+\item Otherwise returns an \code{OK} response with a message indicating paper acceptance; it does not place orders.
+\end{itemize}
+
+\section{Notable Implementation Caveats (Code-Faithful)}
+\begin{itemize}
+\item RN-JD volatility units: VaultEngine FAST15M and HFT paper pass per-$\sqrt{\mathrm{second}}$ volatility into RN-JD functions that interpret the input as annualized volatility.
+\item Belief-vol derivative mismatch: \code{sigmoid\_derivative} is documented and implemented as taking $p$, but \code{rnjd.rs} calls it with $\operatorname{logit}(p)$ in the jump-compensation term; under defaults this term is effectively zero because $\mu_j=0$.
+\item FAST15M VaultEngine and HFT paper strategies are BUY-focused and do not implement 15m settlement/exit logic; LONG has explicit exit bands, and Unified15mStrategy manages exits/settlement internally.
+\item NAV used for drawdown breaker is cost-basis marked; a separate periodic snapshot loop attempts mark-to-market using bid/ask mid.
+\end{itemize}
+
+\end{document}

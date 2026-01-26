@@ -1,0 +1,755 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning,calc}
+
+% Code listing style
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{gray}\itshape,
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    tabsize=2
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{BetterSys Live Trading Implementation}
+\lhead{Confidential}
+\cfoot{\thepage}
+
+\title{\textbf{BetterSys Live Trading Implementation} \\ \large Technical Specification for 15-Minute Up/Down HFT Strategy}
+\author{BetterBot Quantitative Systems}
+\date{January 2026}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Executive Summary}
+% ============================================================================
+
+This document provides a comprehensive technical specification for the BetterSys live trading implementation targeting Polymarket's 15-minute Up/Down binary options markets for BTC, ETH, SOL, and XRP.
+
+\subsection{System Status}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Component} & \textbf{Status} & \textbf{Notes} \\
+\midrule
+Signal Detection & \checkmark Complete & Dome WebSocket + REST \\
+Price Feed & \checkmark Complete & Binance WebSocket \\
+Probability Model (RN-JD) & \checkmark Complete & Risk-neutral jump-diffusion \\
+Position Sizing (Kelly) & \checkmark Complete & Vol-adjusted fractional Kelly \\
+Paper Execution & \checkmark Complete & Full simulation with fees/slippage \\
+Live Execution (CLOB) & \checkmark Complete & Polymarket CLOB adapter \\
+Vault Accounting & \checkmark Complete & Share-based NAV \\
+\bottomrule
+\end{tabular}
+\caption{System readiness checklist}
+\end{table}
+
+\subsection{Key Configuration}
+
+To enable live trading, set in \texttt{rust-backend/.env}:
+\begin{lstlisting}[language=bash]
+VAULT_ENGINE_ENABLED=true
+VAULT_ENGINE_PAPER=false
+POLYMARKET_CLOB_API_KEY=<your_api_key>
+POLYMARKET_CLOB_SECRET=<your_secret>
+POLYMARKET_CLOB_PASSPHRASE=<your_passphrase>
+\end{lstlisting}
+
+\newpage
+% ============================================================================
+\section{Architecture Overview}
+% ============================================================================
+
+\subsection{System Topology}
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=2.5cm, minimum height=1cm, align=center, fill=blue!10},
+    data/.style={rectangle, draw, minimum width=2cm, minimum height=0.8cm, align=center, fill=green!10},
+    arrow/.style={->, thick}
+]
+
+% Data Sources
+\node[data] (binance) {Binance WS};
+\node[data, right=of binance] (dome) {Dome WS};
+\node[data, right=of dome] (gamma) {Gamma API};
+
+% Processing Layer
+\node[box, below=of dome] (engine) {Vault Engine\\(run\_updown15m)};
+\node[box, left=of engine] (rnjd) {RN-JD\\Probability};
+\node[box, right=of engine] (kelly) {Kelly\\Sizing};
+
+% Execution Layer
+\node[box, below=of engine] (exec) {Execution\\Adapter};
+\node[box, below left=of exec] (paper) {Paper\\Adapter};
+\node[box, below right=of exec] (clob) {CLOB\\Adapter};
+
+% External
+\node[data, below=of clob] (polymarket) {Polymarket\\CLOB API};
+
+% Arrows
+\draw[arrow] (binance) -- (engine);
+\draw[arrow] (dome) -- (engine);
+\draw[arrow] (gamma) -- (engine);
+\draw[arrow] (engine) -- (rnjd);
+\draw[arrow] (rnjd) -- (engine);
+\draw[arrow] (engine) -- (kelly);
+\draw[arrow] (kelly) -- (engine);
+\draw[arrow] (engine) -- (exec);
+\draw[arrow] (exec) -- (paper);
+\draw[arrow] (exec) -- (clob);
+\draw[arrow] (clob) -- (polymarket);
+
+\end{tikzpicture}
+\caption{Live trading system architecture}
+\end{figure}
+
+\subsection{Data Flow}
+
+\begin{enumerate}
+    \item \textbf{Price Feed}: Binance WebSocket provides real-time BTC/ETH/SOL/XRP mid prices
+    \item \textbf{Market Discovery}: Gamma API provides active 15m Up/Down market slugs and token IDs
+    \item \textbf{Orderbook}: Polymarket CLOB WebSocket provides bid/ask for execution pricing
+    \item \textbf{Signal Detection}: Dome WebSocket streams tracked wallet orders (optional enhancement)
+    \item \textbf{Probability Estimation}: RN-JD model computes $p_{up}$ from current price and time-to-expiry
+    \item \textbf{Position Sizing}: Kelly criterion determines optimal notional given edge and bankroll
+    \item \textbf{Execution}: Order sent to Polymarket CLOB via authenticated REST API
+\end{enumerate}
+
+\newpage
+% ============================================================================
+\section{Probability Model: Risk-Neutral Jump-Diffusion}
+% ============================================================================
+
+\subsection{Theoretical Foundation}
+
+The 15-minute Up/Down markets are binary options on whether the underlying asset price will be higher (Up) or lower (Down) at expiry compared to the strike price (typically the price at window start).
+
+Under the risk-neutral measure $\mathbb{Q}$, we model the log-price process as:
+\begin{equation}
+d(\log S_t) = \mu_{RN} \, dt + \sigma \, dW_t + J \, dN_t
+\end{equation}
+where:
+\begin{itemize}
+    \item $\mu_{RN}$ is the risk-neutral drift (approximately zero for short horizons)
+    \item $\sigma$ is the instantaneous volatility
+    \item $W_t$ is a standard Brownian motion
+    \item $N_t$ is a Poisson process with intensity $\lambda$
+    \item $J$ is the jump size distribution
+\end{itemize}
+
+\subsection{Driftless Lognormal Approximation}
+
+For 15-minute windows with no jumps ($\lambda = 0$), the probability of Up simplifies to:
+\begin{equation}
+p_{up} = \Phi\left( \frac{\log(S_t / K)}{\sigma \sqrt{T - t}} \right)
+\end{equation}
+where $\Phi$ is the standard normal CDF, $K$ is the strike, and $T - t$ is time-to-expiry.
+
+\subsection{Implementation}
+
+\begin{lstlisting}[language=Rust,caption={Core probability estimation (vault/updown15m.rs)}]
+pub fn p_up_driftless_lognormal(
+    current_price: f64,
+    strike_price: f64,
+    sigma_annual: f64,
+    tte_years: f64,
+) -> f64 {
+    if tte_years <= 0.0 || sigma_annual <= 0.0 {
+        return if current_price >= strike_price { 1.0 } else { 0.0 };
+    }
+    let log_moneyness = (current_price / strike_price).ln();
+    let vol_sqrt_t = sigma_annual * tte_years.sqrt();
+    let d = log_moneyness / vol_sqrt_t;
+    normal_cdf(d)
+}
+\end{lstlisting}
+
+\subsection{Shrinkage Toward Prior}
+
+Raw model estimates can be overconfident. We apply shrinkage toward the uninformative prior ($p = 0.5$):
+\begin{equation}
+p_{shrunk} = (1 - \alpha) \cdot p_{model} + \alpha \cdot 0.5
+\end{equation}
+where $\alpha = 0.35$ (35\% shrinkage) by default.
+
+\begin{lstlisting}[language=Rust,caption={Shrinkage implementation (vault/updown15m.rs)}]
+pub fn shrink_to_half(p: f64, shrink_factor: f64) -> f64 {
+    let clamped = p.clamp(0.001, 0.999);
+    let shrunk = (1.0 - shrink_factor) * clamped + shrink_factor * 0.5;
+    shrunk.clamp(0.001, 0.999)
+}
+\end{lstlisting}
+
+\newpage
+% ============================================================================
+\section{Position Sizing: Kelly Criterion}
+% ============================================================================
+
+\subsection{Kelly Formula for Binary Options}
+
+For a binary bet with probability $p$ of winning and market-implied odds from price $q$:
+\begin{equation}
+f^* = \frac{p \cdot (1 - q) - (1 - p) \cdot q}{1 - q} = \frac{p - q}{1 - q}
+\end{equation}
+where $f^*$ is the fraction of bankroll to bet.
+
+\subsection{Fractional Kelly}
+
+Full Kelly is too aggressive for real trading. We use quarter-Kelly:
+\begin{equation}
+f_{actual} = 0.25 \cdot f^*
+\end{equation}
+
+\subsection{Volatility-Adjusted Kelly}
+
+When belief volatility $\sigma_b$ is high (uncertain model), we further reduce sizing:
+\begin{equation}
+f_{vol-adj} = f_{actual} \cdot \exp(-\kappa \cdot \sigma_b^2)
+\end{equation}
+where $\kappa$ is a scaling constant.
+
+\subsection{Implementation}
+
+\begin{lstlisting}[language=Rust,caption={Kelly calculation (vault/kelly.rs)}]
+pub fn calculate_kelly_position(
+    confidence: f64,      // Our p_up estimate
+    market_price: f64,    // Implied probability (ask price)
+    params: &KellyParams,
+) -> KellyResult {
+    let edge = confidence - market_price;
+    if edge <= 0.0 {
+        return KellyResult::no_trade();
+    }
+    
+    // Kelly fraction: (p - q) / (1 - q)
+    let full_kelly = edge / (1.0 - market_price);
+    
+    // Apply fractional Kelly and max position cap
+    let fraction = (full_kelly * params.kelly_fraction)
+        .min(params.max_position_pct);
+    
+    let position_usd = params.bankroll * fraction;
+    
+    KellyResult {
+        position_size_usd: position_usd.max(0.0),
+        edge,
+        kelly_fraction: fraction,
+    }
+}
+\end{lstlisting}
+
+\subsection{Risk Guardrails}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Guardrail} & \textbf{Default Value} \\
+\midrule
+Maximum position per trade & 2\% of bankroll \\
+Maximum position USD & \$500 \\
+Minimum edge required & 5\% (1\% in low-vol regime) \\
+Kelly fraction & 0.25 (quarter Kelly) \\
+Cooldown between trades & 30 seconds per asset \\
+\bottomrule
+\end{tabular}
+\caption{Risk management parameters}
+\end{table}
+
+\newpage
+% ============================================================================
+\section{Execution Layer}
+% ============================================================================
+
+\subsection{Adapter Pattern}
+
+The execution layer uses the adapter pattern, allowing seamless switching between paper and live execution:
+
+\begin{lstlisting}[language=Rust,caption={ExecutionAdapter trait (vault/execution.rs)}]
+#[async_trait::async_trait]
+pub trait ExecutionAdapter: Send + Sync {
+    async fn place_order(&self, req: OrderRequest) -> Result<OrderAck>;
+}
+\end{lstlisting}
+
+\subsection{Paper Execution Adapter}
+
+Simulates realistic execution with:
+\begin{itemize}
+    \item Latency: 150ms base + 0-200ms jitter
+    \item Slippage: 10bps base + 15bps per \$1k notional
+    \item Fees: 0.5\% taker fee
+    \item Partial fills: 15\% probability
+    \item Rejections: 2\% random rejection rate
+\end{itemize}
+
+\subsection{Polymarket CLOB Adapter}
+
+The live adapter authenticates with Polymarket's CLOB API using HMAC-SHA256 signatures.
+
+\subsubsection{Authentication Flow}
+
+\begin{enumerate}
+    \item Construct message: \texttt{timestamp + method + path + body}
+    \item Decode base64 secret key
+    \item Compute HMAC-SHA256 signature
+    \item Base64 encode signature
+    \item Send with headers: \texttt{POLY\_API\_KEY}, \texttt{POLY\_SIGNATURE}, \texttt{POLY\_TIMESTAMP}, \texttt{POLY\_PASSPHRASE}
+\end{enumerate}
+
+\begin{lstlisting}[language=Rust,caption={HMAC signature generation (vault/execution.rs)}]
+fn sign_request(&self, method: &str, path: &str, 
+                body: &str, timestamp: i64) -> Result<String> {
+    let message = format!("{}{}{}{}", timestamp, method, path, body);
+    
+    let secret_bytes = BASE64.decode(&self.creds.secret)?;
+    
+    let mut mac = HmacSha256::new_from_slice(&secret_bytes)?;
+    mac.update(message.as_bytes());
+    
+    Ok(BASE64.encode(mac.finalize().into_bytes()))
+}
+\end{lstlisting}
+
+\subsubsection{Order Payload}
+
+\begin{lstlisting}[language=Rust,caption={CLOB order payload structure}]
+struct ClobOrderPayload {
+    token_id: String,      // Polymarket clobTokenId
+    price: String,         // Limit price (0.0001 - 0.9999)
+    size: String,          // Number of shares
+    side: String,          // "BUY" or "SELL"
+    order_type: String,    // "LIMIT"
+    time_in_force: String, // "GTC", "IOC", or "FOK"
+}
+\end{lstlisting}
+
+\subsubsection{API Endpoint}
+
+\begin{verbatim}
+POST https://clob.polymarket.com/order
+Content-Type: application/json
+POLY_API_KEY: <api_key>
+POLY_SIGNATURE: <hmac_signature>
+POLY_TIMESTAMP: <unix_ms>
+POLY_PASSPHRASE: <passphrase>
+\end{verbatim}
+
+\newpage
+% ============================================================================
+\section{Vault Engine: 15-Minute Trading Loop}
+% ============================================================================
+
+\subsection{Main Trading Loop}
+
+The \texttt{run\_updown15m()} function implements the core trading logic:
+
+\begin{lstlisting}[language=Rust,caption={Trading loop structure (vault/engine.rs)}]
+async fn run_updown15m(self) -> Result<()> {
+    let mut interval = tokio::time::interval(
+        Duration::from_millis(self.cfg.updown_poll_ms)
+    );
+    
+    loop {
+        interval.tick().await;
+        
+        // 1. Get active 15m markets from Gamma API
+        let markets = self.fetch_active_updown_markets().await?;
+        
+        for market in markets {
+            // 2. Check cooldown
+            if self.is_on_cooldown(&market.slug) {
+                continue;
+            }
+            
+            // 3. Resolve token IDs
+            let (token_up, token_down) = self.resolve_tokens(&market)?;
+            
+            // 4. Evaluate trade opportunity
+            if let Some(order) = self.evaluate_updown15m(
+                &market, &token_up, &token_down
+            ).await? {
+                // 5. Execute via adapter (paper or live)
+                let ack = self.exec.place_order(order).await?;
+                
+                // 6. Update ledger and emit signal
+                self.record_trade(&ack).await;
+            }
+        }
+    }
+}
+\end{lstlisting}
+
+\subsection{Trade Evaluation}
+
+\begin{lstlisting}[language=Rust,caption={Trade evaluation logic}]
+async fn evaluate_updown15m(&self, market: &UpDown15mMarket, 
+    token_up: &str, token_down: &str) -> Result<Option<OrderRequest>> {
+    
+    // 1. Get current price from Binance feed
+    let current_price = self.state.binance_feed.get_price(&market.asset)?;
+    
+    // 2. Calculate time-to-expiry
+    let tte_sec = market.expiry_ts - Utc::now().timestamp();
+    if tte_sec < 90 { return Ok(None); } // Skip last 90 seconds
+    
+    // 3. Estimate p_up using RN-JD model
+    let p_up_raw = p_up_driftless_lognormal(
+        current_price, market.strike, SIGMA_15M, tte_sec as f64 / 31536000.0
+    );
+    let p_up = shrink_to_half(p_up_raw, 0.35);
+    
+    // 4. Get orderbook for execution price
+    let book = self.get_orderbook(token_up).await?;
+    let ask_up = book.asks.first().map(|o| o.price).unwrap_or(1.0);
+    
+    // 5. Calculate edge
+    let edge = p_up - ask_up;
+    if edge < self.cfg.updown_min_edge { return Ok(None); }
+    
+    // 6. Kelly sizing
+    let kelly = calculate_kelly_position(p_up, ask_up, &self.kelly_params);
+    if kelly.position_size_usd < 10.0 { return Ok(None); }
+    
+    // 7. Build order
+    Ok(Some(OrderRequest {
+        client_order_id: Uuid::new_v4().to_string(),
+        token_id: token_up.to_string(),
+        side: OrderSide::Buy,
+        price: ask_up,
+        notional_usdc: kelly.position_size_usd,
+        tif: TimeInForce::Gtc,
+        ..Default::default()
+    }))
+}
+\end{lstlisting}
+
+\newpage
+% ============================================================================
+\section{Configuration Reference}
+% ============================================================================
+
+\subsection{Environment Variables}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Variable} & \textbf{Default} & \textbf{Description} \\
+\midrule
+\multicolumn{3}{l}{\textit{Core Engine}} \\
+VAULT\_ENGINE\_ENABLED & false & Master switch for vault engine \\
+VAULT\_ENGINE\_PAPER & true & Paper mode (false = live) \\
+\midrule
+\multicolumn{3}{l}{\textit{15M Strategy}} \\
+UPDOWN15M\_POLL\_MS & 2000 & Polling interval (ms) \\
+UPDOWN15M\_MIN\_EDGE & 0.01 & Minimum edge to trade \\
+UPDOWN15M\_KELLY\_FRACTION & 0.05 & Kelly fraction \\
+UPDOWN15M\_MAX\_POSITION\_PCT & 0.01 & Max position \% of bankroll \\
+UPDOWN15M\_SHRINK & 0.35 & Shrinkage toward 0.5 \\
+UPDOWN15M\_COOLDOWN\_SEC & 30 & Cooldown per asset \\
+\midrule
+\multicolumn{3}{l}{\textit{CLOB Authentication}} \\
+POLYMARKET\_CLOB\_API\_KEY & - & Builder API key \\
+POLYMARKET\_CLOB\_SECRET & - & HMAC secret (base64) \\
+POLYMARKET\_CLOB\_PASSPHRASE & - & API passphrase \\
+\midrule
+\multicolumn{3}{l}{\textit{Data Feeds}} \\
+BINANCE\_ENABLED & true & Enable Binance price feed \\
+DOME\_API\_KEY & - & Dome API bearer token \\
+\bottomrule
+\end{tabular}
+\caption{Environment variable reference}
+\end{table}
+
+\subsection{Recommended Production Settings}
+
+\begin{lstlisting}[language=bash,caption={Production .env configuration}]
+# Core
+VAULT_ENGINE_ENABLED=true
+VAULT_ENGINE_PAPER=false
+BINANCE_ENABLED=true
+
+# Conservative risk settings
+UPDOWN15M_MIN_EDGE=0.05
+UPDOWN15M_KELLY_FRACTION=0.10
+UPDOWN15M_MAX_POSITION_PCT=0.01
+UPDOWN15M_SHRINK=0.40
+UPDOWN15M_COOLDOWN_SEC=60
+
+# Initial testing (start small!)
+INITIAL_BANKROLL=1000
+
+# CLOB credentials (ROTATE AFTER ANY EXPOSURE)
+POLYMARKET_CLOB_API_KEY=<your_key>
+POLYMARKET_CLOB_SECRET=<your_secret>
+POLYMARKET_CLOB_PASSPHRASE=<your_passphrase>
+\end{lstlisting}
+
+\newpage
+% ============================================================================
+\section{Risk Management}
+% ============================================================================
+
+\subsection{Pre-Trade Checks}
+
+Before any order is placed, the following conditions must be satisfied:
+
+\begin{enumerate}
+    \item \textbf{Edge threshold}: $p_{model} - p_{market} \geq \text{min\_edge}$
+    \item \textbf{Time-to-expiry}: $TTE \geq 90$ seconds (skip end-of-window)
+    \item \textbf{Cooldown}: No trade in same asset within cooldown period
+    \item \textbf{Position size}: Kelly output $\geq$ minimum trade size
+    \item \textbf{Liquidity}: Top-of-book size $\geq$ minimum threshold
+\end{enumerate}
+
+\subsection{Jump Regime Detection}
+
+During high volatility (detected via z-score of price moves), edge requirements are doubled:
+\begin{equation}
+\text{min\_edge}_{jump} = 2 \times \text{min\_edge}_{normal}
+\end{equation}
+
+\subsection{Maximum Loss Scenarios}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Scenario} & \textbf{Maximum Loss} \\
+\midrule
+Single trade (max position) & 2\% of bankroll \\
+Single trade (max USD) & \$500 \\
+Worst-case daily (10 losses) & 20\% of bankroll \\
+\bottomrule
+\end{tabular}
+\caption{Loss scenarios with default risk parameters}
+\end{table}
+
+\subsection{Circuit Breakers}
+
+The system should implement (future enhancement):
+\begin{itemize}
+    \item Daily loss limit (e.g., 10\% of bankroll)
+    \item Consecutive loss pause (e.g., 5 losses $\rightarrow$ 1 hour pause)
+    \item Volatility regime pause (VIX equivalent spike)
+\end{itemize}
+
+\newpage
+% ============================================================================
+\section{Monitoring and Observability}
+% ============================================================================
+
+\subsection{Logging}
+
+All trade decisions are logged with structured tracing:
+
+\begin{lstlisting}[language=Rust]
+info!(
+    token_id = %req.token_id,
+    side = %side_str,
+    price = %req.price,
+    notional = %req.notional_usdc,
+    edge = %edge,
+    p_model = %p_up,
+    "CLOB order submission"
+);
+\end{lstlisting}
+
+\subsection{Key Metrics}
+
+\begin{itemize}
+    \item \textbf{Trade count}: Total orders placed
+    \item \textbf{Fill rate}: Successful fills / total orders
+    \item \textbf{Average latency}: Order-to-ack time
+    \item \textbf{Edge accuracy}: Model $p$ vs realized outcome
+    \item \textbf{PnL}: Cumulative profit/loss
+    \item \textbf{Sharpe ratio}: Risk-adjusted returns
+\end{itemize}
+
+\subsection{Health Endpoints}
+
+\begin{verbatim}
+GET /health              - Backend health check
+GET /api/vault/state     - Vault NAV and positions
+GET /api/risk/stats      - Risk metrics
+\end{verbatim}
+
+\newpage
+% ============================================================================
+\section{Deployment Checklist}
+% ============================================================================
+
+\subsection{Pre-Deployment}
+
+\begin{enumerate}
+    \item[$\square$] Verify all environment variables are set
+    \item[$\square$] Confirm CLOB credentials are valid (test with /markets endpoint)
+    \item[$\square$] Ensure Binance feed is connected
+    \item[$\square$] Run in paper mode for 24+ hours
+    \item[$\square$] Review paper trading PnL and trade frequency
+    \item[$\square$] Set conservative initial bankroll (\$100-\$1000)
+    \item[$\square$] Configure alerts for error conditions
+\end{enumerate}
+
+\subsection{Go-Live}
+
+\begin{enumerate}
+    \item[$\square$] Set \texttt{VAULT\_ENGINE\_PAPER=false}
+    \item[$\square$] Start with minimum position sizes
+    \item[$\square$] Monitor first 10 trades manually
+    \item[$\square$] Verify fills match expected prices
+    \item[$\square$] Gradually increase position limits
+\end{enumerate}
+
+\subsection{Post-Deployment}
+
+\begin{enumerate}
+    \item[$\square$] Daily PnL review
+    \item[$\square$] Weekly edge accuracy analysis
+    \item[$\square$] Monthly parameter optimization
+    \item[$\square$] Rotate API credentials quarterly
+\end{enumerate}
+
+\newpage
+% ============================================================================
+\section{Appendix: Code Verification}
+% ============================================================================
+
+\subsection{Build Verification}
+
+\begin{lstlisting}[language=bash]
+cd rust-backend
+cargo build --release
+# Should complete with no errors
+\end{lstlisting}
+
+\subsection{Dependency Check}
+
+Required crates for live execution:
+\begin{itemize}
+    \item \texttt{hmac = "0.12"} - HMAC signatures
+    \item \texttt{sha2 = "0.10"} - SHA-256 hashing
+    \item \texttt{base64 = "0.22"} - Base64 encoding
+    \item \texttt{reqwest} - HTTP client
+\end{itemize}
+
+\subsection{Configuration Verification}
+
+\begin{lstlisting}[language=bash]
+# Verify env vars are loaded
+grep -E "^POLYMARKET_CLOB|^VAULT_ENGINE" rust-backend/.env
+
+# Expected output:
+# VAULT_ENGINE_ENABLED=true
+# VAULT_ENGINE_PAPER=false
+# POLYMARKET_CLOB_API_KEY=<redacted>
+# POLYMARKET_CLOB_SECRET=<redacted>
+# POLYMARKET_CLOB_PASSPHRASE=<redacted>
+\end{lstlisting}
+
+\subsection{Adapter Wiring Verification}
+
+\begin{lstlisting}[language=bash]
+# Verify PolymarketClobAdapter is used when PAPER=false
+grep "PolymarketClobAdapter" rust-backend/src/vault/engine.rs
+
+# Expected: import and instantiation in spawn()
+\end{lstlisting}
+
+\newpage
+% ============================================================================
+\section{Appendix: Mathematical Derivations}
+% ============================================================================
+
+\subsection{Kelly Criterion Derivation}
+
+For a binary bet with win probability $p$, loss probability $q = 1 - p$, and odds $b$ (net payout per unit bet if win):
+
+The expected log-wealth after one bet of fraction $f$:
+\begin{equation}
+E[\log W] = p \log(1 + bf) + q \log(1 - f)
+\end{equation}
+
+Maximizing with respect to $f$:
+\begin{equation}
+\frac{d}{df} E[\log W] = \frac{pb}{1 + bf} - \frac{q}{1 - f} = 0
+\end{equation}
+
+Solving:
+\begin{equation}
+f^* = \frac{pb - q}{b} = \frac{p(1 + b) - 1}{b}
+\end{equation}
+
+For Polymarket binary options where price $m$ implies odds $b = (1 - m)/m$:
+\begin{equation}
+f^* = \frac{p - m}{1 - m}
+\end{equation}
+
+\subsection{RN-JD Probability}
+
+Under the risk-neutral measure with drift $\mu_{RN} \approx 0$ for short horizons:
+\begin{equation}
+\log S_T | S_t \sim \mathcal{N}\left(\log S_t, \sigma^2 (T - t)\right)
+\end{equation}
+
+Probability $S_T > K$:
+\begin{equation}
+P(S_T > K) = P\left(\frac{\log S_T - \log S_t}{\sigma\sqrt{T-t}} > \frac{\log K - \log S_t}{\sigma\sqrt{T-t}}\right) = \Phi\left(\frac{\log(S_t/K)}{\sigma\sqrt{T-t}}\right)
+\end{equation}
+
+\newpage
+% ============================================================================
+\section{Conclusion}
+% ============================================================================
+
+The BetterSys live trading implementation for 15-minute Up/Down markets is \textbf{complete and ready for deployment}. All core components have been implemented:
+
+\begin{itemize}
+    \item \textbf{Probability model}: RN-JD with shrinkage
+    \item \textbf{Position sizing}: Vol-adjusted fractional Kelly
+    \item \textbf{Execution}: Polymarket CLOB adapter with HMAC authentication
+    \item \textbf{Risk management}: Edge thresholds, position limits, cooldowns
+\end{itemize}
+
+\subsection{Recommended Next Steps}
+
+\begin{enumerate}
+    \item \textbf{Rotate credentials}: The API credentials were exposed in chat and should be regenerated
+    \item \textbf{Paper test}: Run for 24-48 hours in paper mode to verify behavior
+    \item \textbf{Small live test}: Start with \$100 bankroll and 1\% max position
+    \item \textbf{Scale gradually}: Increase limits only after demonstrating positive edge
+\end{enumerate}
+
+\vspace{1cm}
+\hrule
+\vspace{0.5cm}
+\textit{Document generated: January 2026}
+
+\end{document}

@@ -1,0 +1,845 @@
+\documentclass[11pt,a4paper]{article}
+
+% =============================================================================
+% BETTER Protocol Whitepaper
+% A Formal Technical and Economic Specification
+% Version 1.0 — January 2026
+% =============================================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{geometry}
+\geometry{margin=1.1in}
+
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue!70!black,
+  citecolor=black,
+  pdftitle={BETTER Protocol Whitepaper},
+  pdfauthor={BETTER Protocol Foundation}
+}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{setspace}
+
+\onehalfspacing
+
+% Theorem environments
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{property}{Property}[section]
+
+% Header/footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize BETTER Protocol}
+\fancyhead[R]{\footnotesize Whitepaper v1.0}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Commands
+\newcommand{\BETTER}{\textsc{Better}}
+\newcommand{\TOKENBETTER}{\texttt{\$BETTER}}
+\newcommand{\TOKENVBETTER}{\texttt{vBETTER}}
+
+\begin{document}
+
+% =============================================================================
+% TITLE PAGE
+% =============================================================================
+
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+
+{\Huge\bfseries BETTER Protocol}\\[0.5cm]
+{\Large Democratising Execution Infrastructure\\for Truth-Settled Markets}\\[2cm]
+
+{\large Technical and Economic Whitepaper}\\[0.3cm]
+{\normalsize Version 1.0}\\[0.3cm]
+{\normalsize January 2026}\\[3cm]
+
+\vfill
+
+{\small
+BETTER Protocol Foundation\\
+\url{https://tradebetter.app}\\[1cm]
+}
+
+{\footnotesize
+\textit{This document is for informational purposes only and does not constitute\\
+investment advice, a solicitation, or an offer to buy or sell securities.}
+}
+
+\end{titlepage}
+
+\newpage
+\tableofcontents
+\newpage
+
+% =============================================================================
+% ABSTRACT
+% =============================================================================
+
+\section*{Abstract}
+\addcontentsline{toc}{section}{Abstract}
+
+Prediction markets have demonstrated remarkable accuracy in forecasting real-world outcomes, yet retail participants remain structurally disadvantaged against sophisticated actors who deploy low-latency infrastructure and automated execution systems. This information asymmetry persists not because retail lacks capital or insight, but because they lack access to the operational infrastructure necessary to act on time-sensitive opportunities before edge decays.
+
+\BETTER{} Protocol addresses this disparity by providing shared execution infrastructure for prediction market participation. The protocol combines three components: a signal aggregation layer that synthesises information from multiple sources with sub-second latency; a pooled vault system enabling passive exposure to automated strategies; and a bounded decision framework that constrains algorithmic trading within deterministic safety parameters.
+
+The protocol introduces \TOKENBETTER{}, an access and coordination token that gates participation, aligns incentives between strategy operators and depositors, and accrues value through performance-based fee capture. Unlike speculative governance tokens, \TOKENBETTER{} derives utility directly from protocol usage—access requires holding, and fee distribution rewards long-term alignment.
+
+This whitepaper presents the technical architecture, economic model, security considerations, and development roadmap for \BETTER{} Protocol. The system is currently operational in paper-trading mode on Base, with live execution capabilities planned for Q2 2026.
+
+\newpage
+
+% =============================================================================
+% 1. INTRODUCTION AND PROBLEM FRAMING
+% =============================================================================
+
+\section{Introduction and Problem Framing}
+
+\subsection{The Emergence of Prediction Markets}
+
+Prediction markets are exchange-traded instruments that settle based on verifiable real-world outcomes. Unlike traditional derivatives, which reference price feeds or indices, prediction market contracts resolve to binary or scalar values determined by objective criteria—whether an event occurred, which candidate won an election, or whether a metric exceeded a threshold.
+
+The theoretical foundation for prediction markets rests on the efficient aggregation of dispersed information. When participants trade based on private beliefs, market prices converge toward consensus probabilities that often exceed the accuracy of expert forecasts, polling aggregates, and statistical models. This phenomenon has been documented across political elections, sporting events, economic indicators, and scientific outcomes.
+
+Polymarket, the largest prediction market by volume, processed over \$3 billion in trading volume during the 2024 US presidential election cycle, with final prices demonstrating strong calibration against realised outcomes. This scale validates the commercial viability of prediction markets while highlighting the competitive dynamics that govern participation.
+
+\subsection{The Structural Disadvantage of Retail Participants}
+
+While prediction markets theoretically offer equal opportunity—any participant can express views through trading—practical outcomes diverge significantly. Sophisticated market participants deploy infrastructure that provides material advantages:
+
+\textbf{Latency infrastructure.} Professional trading operations monitor news feeds, social media, and data sources with automated systems capable of detecting relevant signals within milliseconds. By the time retail participants manually process information and submit orders, prices have typically adjusted to reflect new information.
+
+\textbf{Execution systems.} Automated trading systems can evaluate opportunities, calculate position sizes, and submit orders without human intervention. This capability is particularly valuable in prediction markets, where edge often exists for seconds rather than hours.
+
+\textbf{Risk management.} Institutional participants employ formal position sizing frameworks, portfolio-level risk constraints, and dynamic hedging strategies. Retail participants typically lack access to such systems, leading to suboptimal allocation and excessive concentration.
+
+\textbf{Information aggregation.} Professional operations combine multiple data sources—wallet activity monitoring, orderbook analysis, sentiment indicators—into unified decision frameworks. Retail participants generally rely on single information sources processed manually.
+
+This asymmetry does not reflect differences in analytical capability or market insight. Many retail participants possess domain expertise that could generate profitable trading opportunities. The constraint is operational infrastructure, not intellectual capital.
+
+\subsection{Why Existing Solutions Are Insufficient}
+
+Several approaches have attempted to address this imbalance, each with significant limitations:
+
+\textbf{Copy trading platforms} allow users to replicate the trades of successful participants. However, copy trading introduces adverse timing effects—followers execute after leaders, often at worse prices. Additionally, leader selection is typically based on historical returns, which may reflect luck or survivorship bias rather than sustainable edge.
+
+\textbf{Prediction market aggregators} provide consolidated views of prices across venues but do not assist with execution, position sizing, or risk management. Information access is necessary but not sufficient for competitive participation.
+
+\textbf{Trading bots and automation tools} require significant technical expertise to deploy and maintain. Most retail participants lack the programming skills, infrastructure knowledge, and operational capacity to run reliable automated systems.
+
+\textbf{Traditional fund structures} (hedge funds, managed accounts) could theoretically provide prediction market exposure but face regulatory constraints, high minimum investments, and limited transparency.
+
+The fundamental gap is clear: no existing solution provides retail participants with access to institutional-grade execution infrastructure while maintaining transparency, accessibility, and aligned incentives.
+
+\subsection{The BETTER Thesis}
+
+\BETTER{} Protocol is premised on a specific hypothesis: the primary constraint preventing retail prediction market success is not capital, insight, or risk tolerance, but operational infrastructure. If this hypothesis is correct, then providing shared infrastructure—signal detection, automated execution, and systematic risk management—should enable retail participants to capture opportunities currently available only to sophisticated actors.
+
+The protocol does not claim to generate alpha through superior analysis. Instead, it provides the operational foundation necessary for participants to act on time-sensitive opportunities. Whether those opportunities exist in a given market environment is an empirical question; what \BETTER{} provides is the infrastructure to exploit them if they do.
+
+\newpage
+
+% =============================================================================
+% 2. SYSTEM OVERVIEW
+% =============================================================================
+
+\section{System Overview}
+
+\subsection{Core Components}
+
+\BETTER{} Protocol consists of four integrated components that together provide end-to-end prediction market execution infrastructure:
+
+\textbf{Signal Layer.} The signal layer aggregates information from multiple external sources, detects potentially actionable patterns, and distributes alerts to downstream components. Sources include real-time order flow from tracked wallets, market metadata from venue APIs, price feeds from reference markets, and sentiment indicators from social platforms. The layer applies quality filters to reduce noise and false positives before broadcasting signals.
+
+\textbf{Terminal Interface.} The terminal provides human operators with real-time visibility into market conditions, signal history, and portfolio status. The interface supports full-text search across historical signals, detailed inspection of individual opportunities, and manual trade submission. While the vault system operates autonomously, the terminal ensures transparency and enables human oversight.
+
+\textbf{Vault System.} The vault is a pooled capital structure that enables passive participation in automated strategies. Users deposit stablecoins and receive proportional share tokens representing their claim on vault performance. Strategies execute trades on behalf of all depositors, with profits and losses allocated pro-rata. The vault abstracts execution complexity while providing transparent accounting.
+
+\textbf{Execution Layer.} The execution layer translates strategy decisions into market orders submitted to prediction market venues. The layer handles order construction, submission, fill tracking, and settlement reconciliation. A paper execution mode enables comprehensive strategy validation before live deployment.
+
+\subsection{Key Actors}
+
+The protocol involves four distinct participant types:
+
+\textbf{Depositors} contribute capital to vaults and receive proportional exposure to strategy performance. Depositors need not understand strategy mechanics or monitor markets actively; they delegate execution to the protocol in exchange for passive exposure.
+
+\textbf{Strategy operators} develop and deploy trading strategies within the protocol framework. Operators define signal interpretation logic, position sizing parameters, and risk constraints. The protocol constrains operators to pre-approved strategy templates and enforces position limits at the infrastructure level.
+
+\textbf{Signal providers} contribute data feeds that inform strategy decisions. Initial signal sources are operated by the protocol team, with plans to enable third-party contribution subject to quality requirements.
+
+\textbf{Token holders} maintain access to protocol services and participate in value capture through fee distribution. Holding above threshold quantities is required for terminal access and vault deposits.
+
+\subsection{Value Flows}
+
+Capital flows through the protocol as follows:
+
+\begin{enumerate}
+  \item Depositors transfer stablecoins (USDC) to vault contracts on Base
+  \item The vault mints share tokens representing depositor claims
+  \item Strategies direct the vault to execute trades on prediction market venues
+  \item Filled trades create positions that appreciate or depreciate based on market movements
+  \item Upon position resolution or early exit, proceeds return to the vault
+  \item Depositors redeem shares for underlying value, net of performance fees
+  \item Performance fees accrue to protocol treasury and token stakers
+\end{enumerate}
+
+This structure separates capital provision (depositors) from execution (strategies) while aligning incentives through performance-based compensation.
+
+\subsection{Design Principles}
+
+The protocol architecture reflects several foundational principles:
+
+\textbf{Paper-first validation.} Every strategy operates in simulation before live deployment. Paper mode realistically models latency, slippage, partial fills, and fees to identify flaws before capital is at risk.
+
+\textbf{Bounded decision-making.} Strategies that incorporate non-deterministic components (such as language model analysis) must produce outputs within pre-defined admissibility constraints. Invalid outputs trigger abstention rather than execution.
+
+\textbf{Graceful degradation.} External dependency failures (API outages, feed disruptions) cause the system to pause or reduce activity rather than make decisions on incomplete information.
+
+\textbf{Transparent accounting.} All vault state—positions, cash balances, share allocations—is queryable through public APIs. Depositors can verify their holdings without trusting off-chain reporting.
+
+\newpage
+
+% =============================================================================
+% 3. TECHNICAL ARCHITECTURE
+% =============================================================================
+
+\section{Technical Architecture}
+
+\subsection{Infrastructure Layer}
+
+The protocol backend operates as a high-performance service deployed on cloud infrastructure, with on-chain components limited to capital custody and share accounting. This hybrid architecture reflects the practical constraints of prediction market execution:
+
+\textbf{Latency requirements.} Competitive execution requires sub-second response to market signals. On-chain computation introduces latency incompatible with time-sensitive trading.
+
+\textbf{Data integration.} Signal generation requires integration with off-chain APIs (Polymarket, data providers) that cannot be accessed from smart contract environments.
+
+\textbf{Cost efficiency.} High-frequency signal processing and order management would incur prohibitive gas costs if performed on-chain.
+
+The backend is implemented in Rust, selected for its combination of memory safety, performance characteristics, and mature asynchronous runtime. The service maintains persistent connections to external data sources and can process thousands of signals per second with single-digit millisecond latency.
+
+\subsection{Signal Detection and Processing}
+
+Signal detection operates through a pipeline architecture:
+
+\textbf{Ingestion.} The system maintains WebSocket connections to real-time data sources and periodic polling of REST APIs. Data sources include wallet order streams, market metadata feeds, reference price feeds, and historical trade records.
+
+\textbf{Detection.} Raw data flows through detection modules that identify potentially significant patterns. Detection logic varies by source: wallet signals fire when tracked addresses submit orders; price signals fire when reference markets move significantly; expiry signals fire when contracts approach settlement with extreme probabilities.
+
+\textbf{Quality filtering.} Detected signals pass through quality gates that filter based on age (signals older than a few seconds are stale), confidence thresholds, and corroboration requirements (multiple confirming indicators).
+
+\textbf{Storage and indexing.} Qualified signals persist to a database with full-text search indexing, enabling historical analysis and compliance review.
+
+\textbf{Distribution.} Signals broadcast to connected clients and internal strategy components via both WebSocket push and REST polling interfaces.
+
+\subsection{Vault Architecture}
+
+The vault system implements share-based proportional ownership:
+
+\textbf{Deposits.} When a user deposits USDC, the vault calculates the current net asset value (NAV) per share and mints new shares accordingly. If NAV per share is \$1.05 and a user deposits \$105, they receive 100 shares.
+
+\textbf{NAV calculation.} NAV equals cash holdings plus the mark-to-market value of open positions. Position valuation uses mid-market prices from venue orderbooks, with appropriate haircuts for illiquid positions.
+
+\textbf{Withdrawals.} Users redeem shares for their proportional claim on NAV. The system transfers USDC equal to shares redeemed multiplied by current NAV per share, less any applicable performance fees.
+
+\textbf{Fee assessment.} Performance fees apply only to profits and are assessed at withdrawal. If a user's shares appreciated from \$1.00 to \$1.20 per share, and the performance fee is 20\%, the user pays fees on \$0.20 per share (\$0.04) and receives \$1.16.
+
+Current implementation maintains vault state on the Base blockchain, with the backend service authorised to execute trades on behalf of the vault. Future iterations may introduce additional on-chain constraints and multi-signature controls.
+
+\subsection{Execution Pipeline}
+
+Strategy decisions flow through a controlled execution pipeline:
+
+\textbf{Opportunity evaluation.} Strategies receive signals and market data, apply their specific logic to identify trading opportunities, calculate position sizes using the Kelly criterion or similar frameworks, and output structured order requests.
+
+\textbf{Risk validation.} Order requests pass through risk checks that enforce position limits per market, per asset class, and in aggregate. Orders exceeding limits are rejected or scaled down.
+
+\textbf{Execution adapter.} Validated orders route to an execution adapter that handles venue-specific order construction and submission. The adapter abstracts venue differences, presenting a uniform interface to strategy components.
+
+\textbf{Fill processing.} The system monitors submitted orders for fills, partial fills, and rejections. Filled quantities update vault positions; unfilled quantities may trigger retry logic or cancellation depending on strategy parameters.
+
+\textbf{Settlement reconciliation.} As prediction market contracts resolve, the system processes settlements and updates vault cash balances accordingly.
+
+\subsection{Paper Trading Mode}
+
+Before live deployment, strategies operate in paper mode with simulated execution:
+
+\textbf{Latency simulation.} Paper fills include configurable delays representing network and venue processing time, with random jitter to model real-world variance.
+
+\textbf{Slippage modeling.} Simulated fills incorporate spread crossing costs and market impact proportional to order size relative to visible liquidity.
+
+\textbf{Partial fills and rejections.} The simulator stochastically generates partial fills and order rejections at configurable rates, testing strategy robustness to execution uncertainty.
+
+\textbf{Fee modeling.} Simulated fills deduct realistic fee amounts based on venue fee schedules.
+
+Paper mode enables comprehensive strategy validation, performance measurement, and parameter optimisation without capital risk.
+
+\subsection{Security Architecture}
+
+The system implements defense-in-depth security:
+
+\textbf{Authentication.} API access requires JWT tokens issued upon successful authentication. Tokens have limited validity periods and include claims specifying permitted operations.
+
+\textbf{Authorisation.} Vault operations (deposit, withdraw, trade) require token holder status verification. The system queries on-chain balances to confirm eligibility before processing requests.
+
+\textbf{Secret management.} API keys, signing credentials, and other secrets load from environment variables, never appearing in source code or configuration files.
+
+\textbf{Input validation.} All external inputs undergo validation before processing. Database operations use parameterised queries to prevent injection attacks.
+
+\textbf{Rate limiting.} Public endpoints enforce rate limits to prevent abuse and ensure fair access during high-demand periods.
+
+\newpage
+
+% =============================================================================
+% 4. TOKENOMICS AND ECONOMIC DESIGN
+% =============================================================================
+
+\section{Tokenomics and Economic Design}
+
+\subsection{Token Justification}
+
+The introduction of a native token requires explicit justification. \TOKENBETTER{} exists for three functional purposes that could not be equivalently served by existing assets:
+
+\textbf{Access gating.} Protocol access requires holding \TOKENBETTER{} above specified thresholds. This mechanism serves multiple functions: it creates friction that deters low-commitment participants, provides a quantifiable admission criterion, and establishes alignment between users and protocol success.
+
+\textbf{Fee capture and distribution.} Performance fees collected by the protocol accumulate in the treasury. A portion of these fees fund operations, while the remainder distributes to staked token holders. This creates direct economic linkage between protocol performance and token value.
+
+\textbf{Coordination and governance.} As the protocol matures, token holders will participate in governance decisions affecting strategy approval, parameter adjustments, and treasury allocation. Token-weighted voting prevents capture by parties without meaningful economic stake.
+
+Using an existing asset (ETH, USDC) for these functions would fail to create protocol-specific alignment. A user holding ETH has no particular incentive to prefer \BETTER{}'s success over competing protocols; a \TOKENBETTER{} holder does.
+
+\subsection{Token Supply and Distribution}
+
+\TOKENBETTER{} has a fixed maximum supply of 1,000,000,000 (one billion) tokens. No inflation mechanism exists; supply can only decrease through burning.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrrp{6cm}@{}}
+\toprule
+\textbf{Allocation} & \textbf{Percentage} & \textbf{Tokens} & \textbf{Terms}\\
+\midrule
+Public Sale & 25\% & 250,000,000 & Fully unlocked at token generation\\
+Liquidity Provision & 15\% & 150,000,000 & Permanently locked in DEX pools\\
+Team and Advisors & 20\% & 200,000,000 & 12-month cliff, 24-month linear vest\\
+Treasury & 25\% & 250,000,000 & Governance-controlled allocation\\
+Ecosystem Grants & 5\% & 50,000,000 & Developer incentives and partnerships\\
+Programmatic Sales & 10\% & 100,000,000 & Released across FDV milestones\\
+\bottomrule
+\end{tabular}
+\caption{Token allocation schedule}
+\end{table}
+
+The allocation reflects several design choices:
+
+\textbf{Meaningful public distribution.} The 25\% public allocation ensures broad initial distribution, preventing concentration that could undermine governance legitimacy.
+
+\textbf{Permanent liquidity commitment.} The 15\% liquidity allocation locks permanently, ensuring trading liquidity independent of team decisions.
+
+\textbf{Team alignment through vesting.} The 12-month cliff prevents team members from capturing short-term speculation; the subsequent vest aligns team incentives with long-term protocol development.
+
+\textbf{Reserved treasury.} The 25\% treasury provides resources for future development, strategic initiatives, and unforeseen needs without requiring additional token issuance.
+
+\subsection{Access Thresholds}
+
+Protocol access requires maintaining \TOKENBETTER{} balances above specified thresholds. These thresholds adjust based on fully diluted valuation (FDV) to maintain approximately stable dollar-denominated access costs:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\textbf{FDV Range} & \textbf{Required Holdings} & \textbf{Approximate Cost}\\
+\midrule
+Below \$10M & 100,000 \TOKENBETTER{} & \$500–\$1,000\\
+\$10M–\$20M & 75,000 \TOKENBETTER{} & \$750–\$1,500\\
+\$20M–\$50M & 50,000 \TOKENBETTER{} & \$1,000–\$2,500\\
+\$50M–\$100M & 25,000 \TOKENBETTER{} & \$1,250–\$2,500\\
+Above \$100M & 10,000 \TOKENBETTER{} & \$1,000+\\
+\bottomrule
+\end{tabular}
+\caption{Access threshold schedule}
+\end{table}
+
+This structure rewards early participants (who acquire tokens at lower prices and receive higher allocations) while ensuring accessibility does not become prohibitive as token price appreciates.
+
+\subsection{Fee Structure}
+
+The protocol generates revenue through performance fees assessed on vault profits:
+
+\textbf{Performance fee rate.} 20\% of net profits, assessed at withdrawal. No fees apply to principal or during loss periods.
+
+\textbf{No management fee.} The protocol does not charge ongoing fees on assets under management. Revenue derives entirely from performance.
+
+\textbf{Fee allocation.} Collected fees split between operational treasury (funding development, infrastructure, and operations) and staker distribution (rewarding long-term token holders).
+
+The performance-only fee structure aligns protocol incentives with depositor outcomes. The protocol earns nothing unless depositors profit.
+
+\subsection{Staking and Distribution}
+
+Token holders may stake \TOKENBETTER{} to receive a share of protocol fee distribution:
+
+\textbf{Staking mechanism.} Users lock tokens in a staking contract for a minimum period (initially 30 days). Staked tokens count toward access thresholds.
+
+\textbf{Distribution calculation.} Fee distributions allocate proportionally to staked balances. A user with 1\% of staked supply receives 1\% of distributed fees.
+
+\textbf{Distribution frequency.} Fees accumulate in the distribution contract and release on a weekly basis, smoothing variance from irregular performance fee timing.
+
+\textbf{Unstaking.} Users may initiate unstaking at any time, subject to the minimum lock period. Tokens in the unstaking queue continue earning distributions until withdrawal.
+
+\subsection{Value Accrual Mechanics}
+
+\TOKENBETTER{} value derives from protocol utility and fee capture:
+
+\textbf{Access demand.} Users seeking vault access must acquire and hold tokens, creating buy pressure proportional to depositor demand.
+
+\textbf{Fee yield.} Staked tokens earn yield from performance fee distribution, providing holding incentive independent of price appreciation.
+
+\textbf{Supply constraints.} Fixed supply with potential burning (from treasury buybacks funded by fees) creates deflationary pressure if protocol revenue exceeds operational costs.
+
+This model creates reflexive dynamics: successful strategy performance generates fees, fees attract stakers, staking reduces circulating supply, reduced supply supports price, higher price increases dollar-denominated yield for existing holders.
+
+\newpage
+
+% =============================================================================
+% 5. SECURITY AND RISK ANALYSIS
+% =============================================================================
+
+\section{Security and Risk Analysis}
+
+\subsection{Trust Assumptions}
+
+The protocol operates under explicit trust assumptions that users should understand:
+
+\textbf{Backend operator trust.} The backend service has authority to execute trades on behalf of vault depositors. While this authority is constrained by on-chain position limits and off-chain risk checks, depositors ultimately trust the operator to execute faithfully. This trust assumption is similar to that placed in centralised exchanges or traditional fund managers.
+
+\textbf{Data source integrity.} Signal quality depends on the accuracy and timeliness of external data sources. Malicious or faulty data feeds could trigger inappropriate trades. The system mitigates this through source diversification and sanity checks, but cannot eliminate the risk entirely.
+
+\textbf{Smart contract correctness.} On-chain vault contracts hold depositor funds. While contracts undergo security review, undiscovered vulnerabilities could result in fund loss. This risk is common to all DeFi protocols.
+
+\textbf{Venue solvency.} The protocol executes trades on external prediction market venues. Venue insolvency, regulatory action, or technical failure could result in loss of funds held at venues.
+
+\subsection{Attack Surfaces}
+
+The protocol presents several potential attack vectors:
+
+\textbf{Backend compromise.} An attacker gaining control of backend systems could execute unauthorised trades, potentially draining vault value through adverse execution. Mitigations include infrastructure security practices, key management procedures, and position limits that cap maximum loss from any single incident.
+
+\textbf{Oracle manipulation.} If an attacker could manipulate NAV calculation inputs, they could mint shares at artificially low NAV (diluting existing holders) or redeem at artificially high NAV (extracting excess value). Mitigations include multiple price sources, staleness checks, and circuit breakers on extreme valuations.
+
+\textbf{Front-running.} Observers could potentially detect pending strategy trades and front-run them, degrading execution quality. Mitigations include order randomisation, execution through private channels where available, and acceptance that some front-running is an unavoidable cost of market participation.
+
+\textbf{Governance attacks.} If token distribution becomes sufficiently concentrated, malicious actors could pass governance proposals that extract value from the protocol or minority holders. Mitigations include time-locked proposal execution, quorum requirements, and initial distribution designed to prevent early concentration.
+
+\subsection{Economic Risks}
+
+Beyond technical attacks, economic risks threaten protocol viability:
+
+\textbf{Strategy underperformance.} Automated strategies may fail to generate positive returns, resulting in depositor losses and fee revenue collapse. The paper trading requirement mitigates this by validating strategies before live deployment, but cannot guarantee future performance.
+
+\textbf{Market regime change.} Strategies calibrated to current market conditions may fail when conditions change. Prediction market liquidity, volatility, and participant composition could evolve in ways that invalidate historical backtests.
+
+\textbf{Competitive pressure.} If multiple protocols deploy similar strategies, competition could arbitrage away available edge. The protocol's advantage depends partly on operational excellence (faster execution, better risk management) that could be replicated.
+
+\textbf{Regulatory intervention.} Prediction markets operate in uncertain regulatory environments. Venue shutdowns, trading restrictions, or protocol-specific enforcement could disrupt operations.
+
+\subsection{Failure Modes and Mitigations}
+
+The protocol implements specific mitigations for identified failure modes:
+
+\textbf{Data feed failure.} If primary data sources become unavailable, the system falls back to secondary sources or pauses trading until feeds recover. Strategies are designed to prefer missed opportunities over decisions based on incomplete information.
+
+\textbf{Execution failure.} If order submission fails, the system retries with exponential backoff before abandoning the opportunity. Partial fills are handled gracefully; unfilled portions may be resubmitted or cancelled depending on strategy logic.
+
+\textbf{Position limit breach.} Hard-coded position limits prevent any single trade from creating excessive concentration. Limits apply at multiple levels (per-market, per-asset-class, aggregate) and are enforced by the execution layer regardless of strategy requests.
+
+\textbf{Liquidity crisis.} If vault redemptions exceed available cash, withdrawal requests enter a queue and process as liquidity becomes available through position settlement or new deposits. The system does not force-liquidate positions into illiquid markets.
+
+\subsection{Disclosure of Limitations}
+
+Users should understand that the protocol cannot eliminate certain risks:
+
+\begin{itemize}
+  \item Past performance does not guarantee future results
+  \item Prediction markets are volatile and can produce total loss of principal
+  \item The protocol team retains significant operational control during early phases
+  \item Smart contract risk, however mitigated, cannot be fully eliminated
+  \item Regulatory developments could force operational changes or shutdown
+\end{itemize}
+
+The protocol is appropriate for participants who understand these risks, can tolerate potential total loss of committed capital, and seek exposure to prediction market returns without the operational burden of direct participation.
+
+\newpage
+
+% =============================================================================
+% 6. GOVERNANCE AND DECENTRALISATION
+% =============================================================================
+
+\section{Governance and Decentralisation}
+
+\subsection{Current Governance Structure}
+
+During the initial operational phase, the protocol operates under centralised control by the founding team. This structure reflects practical necessity: early-stage protocols require rapid iteration, bug fixes, and parameter adjustments that decentralised governance cannot efficiently provide.
+
+Centralised control during this phase includes:
+\begin{itemize}
+  \item Strategy approval and deployment
+  \item Risk parameter configuration
+  \item Infrastructure operation and maintenance
+  \item Treasury management
+  \item Emergency response and incident handling
+\end{itemize}
+
+This concentration of authority creates trust requirements that users should weigh against the benefits of protocol participation.
+
+\subsection{Governance Transition Plan}
+
+The protocol will progressively decentralise as operational stability is established:
+
+\textbf{Phase 1: Controlled operation (current).} Team maintains full operational control. Governance token exists but lacks binding authority. Community feedback informs decisions without formal voting.
+
+\textbf{Phase 2: Advisory governance.} Token holders vote on non-binding proposals. Team commits to explaining decisions that diverge from vote outcomes. This phase establishes governance participation norms without risking operational disruption from premature decentralisation.
+
+\textbf{Phase 3: Constrained governance.} Token holders gain binding authority over specified parameters: access thresholds, fee rates, treasury allocation above operational minimums. Team retains authority over technical operations and emergency response.
+
+\textbf{Phase 4: Full governance.} Token holders gain authority over all protocol parameters including strategy approval, risk limits, and team compensation. Multi-signature requirements prevent unilateral action. Timelock delays enable response to malicious proposals.
+
+Transition between phases depends on demonstrated operational stability, governance participation rates, and absence of security incidents—not predetermined timelines.
+
+\subsection{Governance Mechanism Design}
+
+When binding governance activates, the following mechanisms will apply:
+
+\textbf{Proposal submission.} Any holder above a minimum threshold (initially 0.1\% of circulating supply) may submit proposals. Proposals specify exact parameter changes or actions with implementation details.
+
+\textbf{Voting period.} Proposals remain open for voting for a fixed period (initially 7 days). Token holders vote by signing messages indicating support or opposition.
+
+\textbf{Quorum and threshold.} Proposals pass if they achieve both minimum participation (quorum) and majority support among participating tokens. Initial parameters: 10\% quorum, 50\% majority.
+
+\textbf{Timelock execution.} Passed proposals enter a timelock (initially 48 hours) before execution. This delay enables response to proposals that pass despite community concern.
+
+\textbf{Emergency procedures.} A security council (initially the founding team, later elected by token holders) retains authority to pause protocol operations in response to active exploits. Emergency actions are temporary and expire unless ratified by governance.
+
+\subsection{Decentralisation Constraints}
+
+Certain protocol aspects resist full decentralisation:
+
+\textbf{Infrastructure operation.} Running low-latency trading infrastructure requires centralised operation. Governance may select operators but cannot directly operate infrastructure through voting.
+
+\textbf{Strategy development.} Effective trading strategies require confidentiality during development. Governance may approve or reject strategies but cannot develop them collectively.
+
+\textbf{Legal compliance.} Regulatory obligations may require centralised decision-making incompatible with governance timelines.
+
+The protocol aims for decentralisation where beneficial while acknowledging that some functions remain inherently centralised.
+
+\newpage
+
+% =============================================================================
+% 7. ROADMAP
+% =============================================================================
+
+\section{Development Roadmap}
+
+\subsection{Completed Milestones}
+
+The following capabilities are operational as of this writing:
+
+\begin{itemize}
+  \item Signal aggregation pipeline with multiple data sources
+  \item Terminal interface with real-time signal display and full-text search
+  \item Paper trading vault with share accounting
+  \item Deterministic 15-minute Up/Down strategy (FAST15M)
+  \item Backend infrastructure deployed on cloud providers
+  \item Base chain integration for vault contracts
+\end{itemize}
+
+\subsection{Phase 1: Token Launch and Access Gating (Q1 2026)}
+
+\textbf{Objectives:}
+\begin{itemize}
+  \item Launch \TOKENBETTER{} on Base with DEX liquidity
+  \item Implement token-gated access for terminal and vault
+  \item Establish staking contract and initial fee distribution
+  \item Expand signal source coverage
+  \item Publish security audit results
+\end{itemize}
+
+\textbf{Success criteria:} Token trading with adequate liquidity; access gating functional; initial depositors onboarded to paper vault.
+
+\subsection{Phase 2: Live Execution (Q2 2026)}
+
+\textbf{Objectives:}
+\begin{itemize}
+  \item Activate live execution adapter for Polymarket
+  \item Transition FAST15M strategy from paper to live
+  \item Implement position tracking and reconciliation
+  \item Deploy additional strategy (LONG/bounded LLM)
+  \item Establish operational monitoring and alerting
+\end{itemize}
+
+\textbf{Success criteria:} Live trades executing successfully; strategies demonstrating performance consistent with paper results; no security incidents.
+
+\subsection{Phase 3: Vault Expansion (Q3 2026)}
+
+\textbf{Objectives:}
+\begin{itemize}
+  \item Launch \TOKENVBETTER{} receipt token for vault liquidity
+  \item Enable receipt token trading on secondary markets
+  \item Implement premium/discount arbitrage mechanism
+  \item Activate advisory governance phase
+  \item Expand to additional prediction market venues
+\end{itemize}
+
+\textbf{Success criteria:} Receipt token liquidity established; governance participation above minimum thresholds; multi-venue execution operational.
+
+\subsection{Phase 4: Maturation (Q4 2026 and Beyond)}
+
+\textbf{Objectives:}
+\begin{itemize}
+  \item Transition to constrained governance
+  \item Enable third-party strategy submission
+  \item Develop institutional API access
+  \item Explore adjacent markets (sports betting, financial derivatives)
+  \item Evaluate cross-chain expansion
+\end{itemize}
+
+\textbf{Success criteria:} Governance functioning without team override; multiple active strategies; sustainable fee revenue exceeding operational costs.
+
+\subsection{Roadmap Uncertainty}
+
+This roadmap represents current intentions, not commitments. Development timelines depend on:
+\begin{itemize}
+  \item Security audit findings and remediation requirements
+  \item Regulatory developments affecting prediction markets
+  \item Market conditions affecting protocol viability
+  \item Technical challenges discovered during implementation
+  \item Community feedback indicating priority changes
+\end{itemize}
+
+The team will provide regular updates on progress and adjust plans as circumstances warrant.
+
+\newpage
+
+% =============================================================================
+% 8. CONCLUSION
+% =============================================================================
+
+\section{Conclusion}
+
+\subsection{Summary}
+
+\BETTER{} Protocol addresses a specific market failure: the operational infrastructure gap that prevents retail participants from competing effectively in prediction markets. The protocol provides:
+
+\begin{itemize}
+  \item Signal aggregation with sub-second latency
+  \item Automated strategy execution with systematic risk management
+  \item Pooled vault structure enabling passive participation
+  \item Token-aligned incentives linking protocol success to participant outcomes
+  \item Transparent accounting and progressive decentralisation
+\end{itemize}
+
+The protocol does not promise outsized returns or claim unique predictive insight. It provides infrastructure—the operational foundation necessary for participants to capture opportunities that exist in prediction markets.
+
+\subsection{Long-Term Vision}
+
+If successful, \BETTER{} Protocol could evolve into critical infrastructure for prediction market participation, similar to how automated market makers transformed DeFi trading. The long-term vision includes:
+
+\textbf{Institutional adoption.} As the protocol demonstrates reliable operation and risk management, institutional participants may use it as infrastructure for prediction market exposure, bringing capital inflows that benefit all participants.
+
+\textbf{Strategy ecosystem.} Third-party developers may build strategies on protocol infrastructure, creating a marketplace of approaches that depositors can select based on risk preferences and historical performance.
+
+\textbf{Market expansion.} The infrastructure developed for prediction markets may extend to adjacent domains: sports betting, financial derivatives, and other markets where execution speed and systematic risk management provide advantage.
+
+\textbf{Protocol sovereignty.} Full decentralisation would establish the protocol as infrastructure that no single entity controls, ensuring continuity independent of founding team involvement.
+
+These outcomes are aspirational, not guaranteed. The protocol's trajectory depends on execution quality, market conditions, and community participation.
+
+\subsection{Call to Participation}
+
+\BETTER{} Protocol invites participation from individuals who:
+\begin{itemize}
+  \item Understand prediction market dynamics and risks
+  \item Seek exposure to automated trading strategies
+  \item Value transparency and aligned incentives
+  \item Accept the risk profile of early-stage protocols
+  \item Wish to contribute to protocol development and governance
+\end{itemize}
+
+For those who meet these criteria, the protocol offers an opportunity to participate in prediction markets with infrastructure previously available only to sophisticated institutional actors.
+
+\vspace{1cm}
+\begin{center}
+\textbf{Website:} \url{https://tradebetter.app}\\
+\textbf{Documentation:} \url{https://docs.tradebetter.app}\\
+\textbf{Community:} \url{https://discord.gg/better}
+\end{center}
+
+\newpage
+
+% =============================================================================
+% APPENDIX A: MATHEMATICAL FRAMEWORK
+% =============================================================================
+
+\appendix
+\section{Mathematical Framework}
+
+\subsection{Kelly Criterion Derivation}
+
+The Kelly criterion determines the optimal fraction of capital to allocate to a bet with positive expected value. For a binary outcome with probability $p$ of success and decimal odds $b$ (net return per unit wagered if successful):
+
+\begin{equation}
+f^* = \frac{bp - q}{b} = \frac{p(b+1) - 1}{b}
+\end{equation}
+
+where $q = 1-p$ is the probability of loss.
+
+For prediction markets, the odds $b$ derive from market price $P$:
+\begin{equation}
+b = \frac{1}{P} - 1
+\end{equation}
+
+Substituting:
+\begin{equation}
+f^* = \frac{p - P}{1 - P}
+\end{equation}
+
+This formula gives the fraction of bankroll to wager on a binary contract trading at price $P$ when the true probability is estimated as $p$.
+
+\subsection{Fractional Kelly}
+
+Full Kelly optimises long-term geometric growth rate but produces high volatility. Fractional Kelly applies a multiplier $k \in (0,1)$ to reduce position sizes:
+
+\begin{equation}
+f = k \cdot f^*
+\end{equation}
+
+The protocol uses $k = 0.25$ (quarter Kelly) as default, balancing growth optimisation against drawdown risk.
+
+\subsection{NAV Calculation}
+
+Net Asset Value equals the sum of cash holdings and position mark-to-market values:
+
+\begin{equation}
+\text{NAV} = C + \sum_{i} n_i \cdot P_i
+\end{equation}
+
+where $C$ is cash, $n_i$ is the number of shares held in position $i$, and $P_i$ is the mid-market price for position $i$.
+
+NAV per share:
+\begin{equation}
+\text{NAV}_{\text{share}} = \frac{\text{NAV}}{S_{\text{total}}}
+\end{equation}
+
+where $S_{\text{total}}$ is total outstanding shares.
+
+\subsection{Share Minting and Redemption}
+
+When a user deposits amount $D$:
+\begin{equation}
+S_{\text{minted}} = \frac{D}{\text{NAV}_{\text{share}}}
+\end{equation}
+
+When a user redeems $S$ shares:
+\begin{equation}
+\text{Redemption} = S \cdot \text{NAV}_{\text{share}} \cdot (1 - f_{\text{perf}} \cdot \mathbf{1}_{\text{profit}})
+\end{equation}
+
+where $f_{\text{perf}}$ is the performance fee rate and $\mathbf{1}_{\text{profit}}$ indicates whether the shares appreciated.
+
+\newpage
+
+% =============================================================================
+% APPENDIX B: GLOSSARY
+% =============================================================================
+
+\section{Glossary}
+
+\begin{description}[leftmargin=3cm, style=nextline]
+
+\item[Admissibility] The set of valid outputs from a bounded decision system. Outputs outside this set trigger abstention.
+
+\item[Alpha] Excess returns attributable to skill or edge rather than market exposure.
+
+\item[Bounded Decision System] An automated decision framework with explicit constraints on output format and risk parameters.
+
+\item[Edge] The difference between estimated probability and market-implied probability.
+
+\item[FDV (Fully Diluted Valuation)] Market capitalisation calculated using total token supply rather than circulating supply.
+
+\item[Kelly Criterion] A formula for optimal position sizing that maximises expected logarithmic utility.
+
+\item[NAV (Net Asset Value)] Total value of portfolio holdings, used to determine share pricing.
+
+\item[Paper Trading] Simulated execution that models real market conditions without actual capital deployment.
+
+\item[Prediction Market] A market where contracts settle based on verifiable real-world outcomes.
+
+\item[Receipt Token] A token representing proportional ownership of underlying assets, enabling liquidity for otherwise illiquid positions.
+
+\item[Slippage] The difference between expected and actual execution price.
+
+\item[Staking] Locking tokens in a contract to earn rewards or meet eligibility requirements.
+
+\item[TGE (Token Generation Event)] The initial creation and distribution of protocol tokens.
+
+\item[Timelock] A delay between governance decision and execution, enabling response to problematic proposals.
+
+\item[Vault] A pooled capital structure where multiple depositors share exposure to investment strategies.
+
+\end{description}
+
+\newpage
+
+% =============================================================================
+% APPENDIX C: LEGAL DISCLAIMERS
+% =============================================================================
+
+\section{Legal Disclaimers}
+
+\subsection{No Investment Advice}
+
+This whitepaper is for informational purposes only. Nothing contained herein constitutes investment, legal, tax, or other advice, nor is it a recommendation to purchase, sell, or hold any asset. Prospective participants should consult qualified professionals before making investment decisions.
+
+\subsection{Forward-Looking Statements}
+
+This document contains forward-looking statements regarding the protocol's plans, objectives, expectations, and intentions. These statements involve known and unknown risks, uncertainties, and other factors that may cause actual results to differ materially from those expressed or implied. Forward-looking statements are not guarantees of future performance.
+
+\subsection{No Guarantee of Returns}
+
+Past performance of trading strategies, whether simulated or actual, does not guarantee future results. Prediction markets are volatile, and participants may lose some or all of their committed capital.
+
+\subsection{Regulatory Uncertainty}
+
+The regulatory status of prediction markets, cryptocurrencies, and decentralised protocols varies by jurisdiction and may change. Participants are responsible for compliance with applicable laws and regulations in their jurisdictions.
+
+\subsection{Technology Risks}
+
+The protocol relies on blockchain technology, smart contracts, and external services that may contain bugs, vulnerabilities, or operational failures. No software system can guarantee security or availability.
+
+\subsection{Token Risks}
+
+\TOKENBETTER{} has no inherent value and may lose value or become worthless. Token value depends on protocol adoption, market conditions, and other factors beyond the control of any party.
+
+\vspace{1cm}
+
+\begin{center}
+\textit{Document version 1.0 — January 2026}\\
+\textit{Updates available at \url{https://docs.tradebetter.app/whitepaper}}
+\end{center}
+
+\end{document}

@@ -13,7 +13,11 @@ mod api;
 mod arbitrage; // Phase 4: Arbitrage detection engine
 mod auth; // Phase 7: Authentication & security
 mod backtest;
+mod backtest_v2; // Phase 9: Production-grade deterministic backtesting
+mod latency; // System-wide latency measurement
+mod middleware; // Request logging and rate limiting
 mod models;
+mod performance; // Comprehensive performance profiling
 mod risk;
 mod scrapers;
 mod signals;
@@ -23,7 +27,7 @@ use anyhow::{Context, Result};
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::State,
-    middleware,
+    middleware as axum_mw,
     response::Response,
     routing::{get, post},
     Router,
@@ -192,8 +196,45 @@ struct AppState {
     http_client: reqwest::Client,
     dome_rest: Option<Arc<DomeRestClient>>,
     polymarket_market_ws: Arc<crate::scrapers::polymarket_ws::PolymarketMarketWsCache>,
+    /// HFT-grade book cache (optional; uses polymarket_market_ws as fallback)
+    hft_book_cache: Option<Arc<crate::scrapers::HftBookCache>>,
     binance_feed: Arc<BinancePriceFeed>,
+    /// Enhanced Binance feed with trades + L1 for 15M arbitrage monitoring
+    binance_arb_feed: Arc<crate::scrapers::binance_arb_feed::BinanceArbFeed>,
+    /// Alias for backward compatibility with API handlers
+    binance_price_feed: Arc<BinancePriceFeed>,
     vault: Arc<crate::vault::PooledVault>,
+    /// Latency registry for reactive FAST15M engine (if enabled)
+    fast15m_latency_registry:
+        Arc<ParkingRwLock<Option<Arc<ParkingRwLock<crate::vault::Fast15mLatencyRegistry>>>>>,
+    /// System-wide latency registry
+    latency_registry: Arc<crate::latency::SystemLatencyRegistry>,
+    /// Performance profiler for the trading engine
+    performance_profiler: Arc<crate::performance::PerformanceProfiler>,
+    /// RN-JD belief volatility tracker for 15m markets
+    belief_vol_tracker: Arc<ParkingRwLock<crate::vault::BeliefVolTracker>>,
+    /// RN-JD backtest data collector
+    backtest_collector: Arc<ParkingRwLock<crate::vault::BacktestCollector>>,
+    /// A/B test tracker for model comparison
+    ab_test_tracker: Arc<ParkingRwLock<crate::vault::ABTestTracker>>,
+    /// PRODUCTION: Unified 15M strategy for live trading
+    unified_15m_strategy: Option<Arc<tokio::sync::Mutex<crate::vault::Unified15mStrategy>>>,
+    /// Metrics for unified 15M strategy
+    unified_15m_metrics: Option<Arc<crate::vault::StrategyMetrics>>,
+    /// Chainlink oracle feed for settlement price tracking (15m markets)
+    chainlink_feed: Option<Arc<crate::scrapers::chainlink_feed::ChainlinkFeed>>,
+    /// Backtest v2 artifact store for persisting run results
+    backtest_artifact_store: Option<Arc<crate::backtest_v2::ArtifactStore>>,
+}
+
+impl crate::vault::HasHftCache for AppState {
+    fn hft_cache(&self) -> Option<&crate::scrapers::HftBookCache> {
+        self.hft_book_cache.as_deref()
+    }
+
+    fn legacy_cache(&self) -> &crate::scrapers::polymarket_ws::PolymarketMarketWsCache {
+        &self.polymarket_market_ws
+    }
 }
 
 #[tokio::main]
@@ -289,6 +330,22 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Enhanced Binance feed with trades stream for 15M arbitrage monitoring
+    let binance_arb_feed = if !binance_enabled {
+        crate::scrapers::binance_arb_feed::BinanceArbFeed::disabled()
+    } else {
+        match crate::scrapers::binance_arb_feed::BinanceArbFeed::spawn().await {
+            Ok(feed) => {
+                info!("📈 Binance arb feed (L1 + trades) started for 15M monitoring");
+                feed
+            }
+            Err(e) => {
+                warn!("Failed to start Binance arb feed: {e}");
+                crate::scrapers::binance_arb_feed::BinanceArbFeed::disabled()
+            }
+        }
+    };
+
     // Phase 8: Pooled vault state (shares + paper ledger).
     let vault_db_path = resolve_data_path(env::var("VAULT_DB_PATH").ok(), "betterbot_vault.db");
     let vault_db = Arc::new(crate::vault::VaultDb::new(&vault_db_path)?);
@@ -325,6 +382,134 @@ async fn main() -> Result<()> {
         )
         .await;
 
+    // Initialize system-wide latency registry
+    let latency_registry = Arc::new(crate::latency::SystemLatencyRegistry::new());
+
+    // Initialize performance profiler
+    let performance_profiler = Arc::new(crate::performance::PerformanceProfiler::new());
+    info!("📊 Performance profiler initialized");
+
+    // Initialize RN-JD belief volatility tracker for 15m markets
+    let belief_vol_config = crate::vault::BeliefVolConfig::default();
+    let belief_vol_tracker = Arc::new(ParkingRwLock::new(crate::vault::BeliefVolTracker::new(
+        belief_vol_config,
+    )));
+    info!("📈 Belief volatility tracker initialized (RN-JD)");
+
+    // Initialize RN-JD backtest collector
+    let backtest_collector = Arc::new(ParkingRwLock::new(crate::vault::BacktestCollector::new(
+        10_000,
+    )));
+
+    // Initialize A/B test tracker
+    let ab_test_enabled = env::var("AB_TEST_ENABLED")
+        .map(|s| s == "true" || s == "1")
+        .unwrap_or(false);
+    let ab_test_rnjd_prob = env::var("AB_TEST_RNJD_PROB")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.5);
+    let ab_test_config = crate::vault::ABTestConfig {
+        enabled: ab_test_enabled,
+        rnjd_probability: ab_test_rnjd_prob,
+    };
+    let ab_test_tracker = Arc::new(ParkingRwLock::new(crate::vault::ABTestTracker::new(
+        ab_test_config,
+    )));
+    if ab_test_enabled {
+        info!(
+            "🧪 A/B test enabled (RN-JD probability: {:.0}%)",
+            ab_test_rnjd_prob * 100.0
+        );
+    }
+
+    let orderflow_paper_enabled = env::var("ORDERFLOW_PAPER_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(false);
+
+    // Optional: HFT-grade book cache (enable via HFT_BOOK_CACHE_ENABLED=1)
+    let hft_book_cache_enabled = env::var("HFT_BOOK_CACHE_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(false);
+
+    let hft_book_cache = if hft_book_cache_enabled || orderflow_paper_enabled {
+        info!("📚 Spawning HFT-grade book cache (no REST in hot path)");
+        Some(crate::scrapers::HftBookCache::spawn())
+    } else {
+        None
+    };
+
+    // PRODUCTION: Unified 15M Strategy (use UNIFIED_15M_ENABLED=1 to enable)
+    let unified_15m_enabled = env::var("UNIFIED_15M_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(false);
+
+    let (unified_15m_strategy, unified_15m_metrics) = if unified_15m_enabled && binance_enabled {
+        info!("🎯 Initializing UNIFIED 15M Strategy (PRODUCTION MODE)");
+        let cfg = crate::vault::Unified15mConfig::from_env();
+        info!(
+            "   min_edge: {:.1}%, kelly: {:.0}%, max_pos: ${:.0}, bankroll: ${:.0}",
+            cfg.min_edge * 100.0,
+            cfg.kelly_fraction * 100.0,
+            cfg.max_position_usd,
+            cfg.bankroll
+        );
+
+        let strategy = crate::vault::Unified15mStrategy::new(
+            cfg,
+            binance_feed.clone(),
+            belief_vol_tracker.clone(),
+        );
+        let metrics = strategy.metrics();
+        (
+            Some(Arc::new(tokio::sync::Mutex::new(strategy))),
+            Some(metrics),
+        )
+    } else if unified_15m_enabled {
+        warn!("UNIFIED_15M_ENABLED=1 but BINANCE_ENABLED=0; strategy NOT started");
+        (None, None)
+    } else {
+        (None, None)
+    };
+
+    // Chainlink oracle feed for settlement price tracking
+    // CRITICAL: Polymarket 15m markets settle on Chainlink, NOT Binance spot
+    let chainlink_feed = match crate::scrapers::chainlink_feed::ChainlinkFeed::from_env() {
+        Some(feed) => {
+            info!("🔗 Chainlink oracle feed enabled (POLYGON_RPC_URL set)");
+            let feed = Arc::new(feed);
+            let poller_feed = feed.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    crate::scrapers::chainlink_feed::spawn_chainlink_poller(poller_feed, 2000).await
+                {
+                    warn!(error = %e, "Chainlink poller exited");
+                }
+            });
+            Some(feed)
+        }
+        None => {
+            warn!("⚠️  Chainlink feed NOT configured (set POLYGON_RPC_URL). Using Binance only - oracle lag risk!");
+            None
+        }
+    };
+
+    // Initialize backtest v2 artifact store (optional - for persisting production backtest results)
+    let backtest_artifact_store = {
+        let artifact_db_path = env::var("BACKTEST_ARTIFACT_DB_PATH")
+            .unwrap_or_else(|_| "backtest_artifacts.db".to_string());
+        match crate::backtest_v2::ArtifactStore::new(&artifact_db_path) {
+            Ok(store) => {
+                info!("📊 Backtest artifact store initialized at: {}", artifact_db_path);
+                Some(Arc::new(store))
+            }
+            Err(e) => {
+                warn!("⚠️  Failed to initialize backtest artifact store: {}. Artifact persistence disabled.", e);
+                None
+            }
+        }
+    };
+
     let app_state = AppState {
         signal_storage: signal_storage.clone(),
         risk_manager: risk_manager.clone(),
@@ -332,12 +517,119 @@ async fn main() -> Result<()> {
         http_client,
         dome_rest: dome_rest.clone(),
         polymarket_market_ws,
+        hft_book_cache,
+        binance_price_feed: binance_feed.clone(),
         binance_feed,
+        binance_arb_feed,
         vault,
+        fast15m_latency_registry: Arc::new(ParkingRwLock::new(None)), // Will be set if reactive engine is enabled
+        latency_registry: latency_registry.clone(),
+        performance_profiler: performance_profiler.clone(),
+        belief_vol_tracker,
+        backtest_collector,
+        ab_test_tracker,
+        unified_15m_strategy,
+        unified_15m_metrics,
+        chainlink_feed,
+        backtest_artifact_store,
     };
+
+    // Spawn latency time-series snapshot task (every minute)
+    let latency_snapshot_registry = latency_registry.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            latency_snapshot_registry.snapshot_to_timeseries();
+        }
+    });
+
+    // Spawn throughput snapshot task (every second for sliding window)
+    let throughput_profiler = performance_profiler.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            throughput_profiler.throughput.snapshot_window();
+        }
+    });
 
     // Phase 8: Vault engine (15m deterministic, non-15m router stub).
     crate::vault::VaultEngine::spawn(app_state.clone());
+
+    // Phase 8b: Reactive FAST15M engine (event-driven, <10ms latency target)
+    let reactive_fast15m_enabled = env::var("REACTIVE_FAST15M_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(false);
+
+    if reactive_fast15m_enabled && binance_enabled {
+        info!("⚡ Spawning reactive FAST15M engine (event-driven mode)");
+
+        let reactive_cfg = crate::vault::ReactiveFast15mConfig::from_env();
+        let price_rx = app_state.binance_feed.subscribe();
+
+        // Use paper execution adapter (concrete type for generics)
+        let exec = Arc::new(crate::vault::PaperExecutionAdapter::default());
+
+        let registry = crate::vault::spawn_reactive_fast15m(
+            Arc::new(app_state.clone()),
+            exec,
+            reactive_cfg,
+            price_rx,
+        )
+        .await;
+
+        // Store registry for API access
+        *app_state.fast15m_latency_registry.write() = Some(registry);
+
+        info!("✅ Reactive FAST15M engine started");
+    } else if reactive_fast15m_enabled {
+        warn!("REACTIVE_FAST15M_ENABLED=1 but BINANCE_ENABLED=0; reactive engine NOT started");
+    }
+
+    // Note: Polymarket WS cache will be warmed on-demand when the reactive engine
+    // or polling engine first evaluates each 15M market. The WS cache has a
+    // request_subscribe() method that triggers lazy subscription.
+
+    // Phase 8c: HFT Paper Strategy with RN-JD core (low-risk, high-frequency)
+    let hft_paper_enabled = env::var("HFT_PAPER_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(false);
+
+    if hft_paper_enabled && binance_enabled {
+        info!("🎯 Spawning HFT Paper Strategy (RN-JD core, low-risk/high-frequency)");
+        let hft_config = crate::vault::HftPaperStrategyConfig::from_env();
+        let metrics =
+            crate::vault::spawn_hft_paper_strategy(Arc::new(app_state.clone()), hft_config);
+        info!(
+            "✅ HFT Paper Strategy started (metrics handle available, {} tracked)",
+            metrics.summary().price_updates
+        );
+    } else if hft_paper_enabled {
+        warn!("HFT_PAPER_ENABLED=1 but BINANCE_ENABLED=0; HFT strategy NOT started");
+    }
+
+    if orderflow_paper_enabled {
+        info!("📈 Spawning ORDERFLOW paper engine (Polymarket WS book stream)");
+        let orderflow_cfg = crate::vault::OrderflowPaperConfig::from_env();
+        let orderflow_state = Arc::new(app_state.clone());
+        tokio::spawn(async move {
+            match crate::vault::spawn_orderflow_paper_engine(orderflow_state, orderflow_cfg).await {
+                Ok(metrics) => {
+                    let summary = metrics.summary();
+                    info!(
+                        updates = summary.updates,
+                        evaluations = summary.evaluations,
+                        trades = summary.trades,
+                        "✅ ORDERFLOW paper engine started"
+                    );
+                }
+                Err(e) => {
+                    warn!(error = %e, "ORDERFLOW paper engine failed to start");
+                }
+            }
+        });
+    }
 
     // Spawn parallel data collection tasks
     tokio::spawn(parallel_data_collection(
@@ -347,10 +639,25 @@ async fn main() -> Result<()> {
     ));
 
     // Spawn tracked wallet polling (45-min intervals with rotation)
+    // Also passes unified 15M strategy for order processing
     tokio::spawn(tracked_wallet_polling(
         signal_storage.clone(),
         signal_tx.clone(),
+        app_state.unified_15m_strategy.clone(),
+        app_state.binance_feed.clone(),
     ));
+
+    // Persist 15m Up/Down window start/end prices + outcomes (independent of frontend).
+    {
+        let storage = signal_storage.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::signals::updown_history::spawn_updown_15m_history_collector(storage).await
+            {
+                warn!(error = %e, "UpDown15m history collector exited");
+            }
+        });
+    }
 
     // Phase 4+: Refresh wallet analytics (cached daily) for recently-active wallets.
     tokio::spawn(wallet_analytics_polling(signal_storage.clone(), dome_rest));
@@ -404,28 +711,105 @@ async fn main() -> Result<()> {
             get(api::get_vault_llm_decisions),
         )
         .route("/api/vault/llm/models", get(api::get_vault_llm_models))
+        .route("/api/belief-vol/stats", get(api::get_belief_vol_stats))
+        .route("/api/backtest/records", get(api::get_backtest_records))
+        .route("/api/backtest/stats", get(api::get_backtest_stats))
+        .route("/api/ab-test/summary", get(api::get_ab_test_summary))
         .route("/api/vault/deposit", post(api::post_vault_deposit))
         .route("/api/vault/withdraw", post(api::post_vault_withdraw))
         .route("/api/trade/order", post(api::post_trade_order))
         .route("/api/risk/stats", get(api::get_risk_stats_simple))
+        .route("/api/latency/stats", get(api::get_latency_stats))
+        .route("/api/latency/spans", get(api::get_latency_spans))
+        .route("/api/latency/timeseries", get(api::get_latency_timeseries))
+        .route("/api/latency/cdf", get(api::get_latency_cdf))
+        .route("/api/latency/dashboard", get(api::get_latency_dashboard))
+        // Performance profiling endpoints
+        .route("/api/performance/report", get(api::get_performance_report))
+        .route("/api/performance/quick", get(api::get_performance_quick))
+        .route("/api/performance/health", get(api::get_performance_health))
+        .route(
+            "/api/performance/pipeline",
+            get(api::get_performance_pipeline),
+        )
+        .route("/api/performance/memory", get(api::get_performance_memory))
+        .route("/api/performance/cpu", get(api::get_performance_cpu))
+        .route("/api/performance/io", get(api::get_performance_io))
+        .route(
+            "/api/performance/throughput",
+            get(api::get_performance_throughput),
+        )
+        .route(
+            "/api/performance/benchmark",
+            get(api::get_performance_benchmark),
+        )
+        .route(
+            "/api/performance/dashboard",
+            get(api::get_performance_dashboard),
+        )
+        .route(
+            "/api/performance/load-test",
+            post(api::post_performance_load_test),
+        )
+        .route("/api/arbitrage/15m", get(api::get_arbitrage_15m))
+        .route("/api/oracle/comparison", get(api::get_oracle_comparison))
+        .route("/api/updown15m/history", get(api::get_updown_15m_history))
+        .route("/api/paper/state", get(api::get_paper_trading_state))
+        .route("/api/paper/start", post(api::post_paper_trading_start))
+        .route("/api/paper/stop", post(api::post_paper_trading_stop))
+        .route("/api/paper/reset", post(api::post_paper_trading_reset))
         .route("/api/auth/me", get(auth_api::get_current_user))
         .route("/ws", get(websocket_handler))
-        .route_layer(middleware::from_fn_with_state(
+        .route_layer(axum_mw::from_fn_with_state(
             jwt_handler.clone(),
             auth_middleware,
         ))
         .with_state(app_state.clone());
 
-    // Public routes (health check + vault stats for marketing)
+    // Public routes (health check + backtest for marketing)
     let public_routes = Router::new()
         .route("/health", get(health_check))
-        .with_state(app_state);
+        .route("/api/backtest/run", get(api::get_backtest_run))
+        .with_state(app_state.clone());
 
-    let app = Router::new()
+    // Backtest v2 API routes (if artifact store is available)
+    // - /api/v2/backtest/* - authenticated routes (all runs)
+    // - /api/public/v2/backtest/* - public routes (published runs only)
+    let (backtest_v2_routes, backtest_v2_public_routes) = if let Some(ref store) = app_state.backtest_artifact_store {
+        let backtest_v2_state = Arc::new(api::BacktestV2State {
+            artifact_store: store.clone(),
+        });
+        (
+            Some(api::backtest_v2_router().with_state(backtest_v2_state.clone())),
+            Some(api::backtest_v2_public_router().with_state(backtest_v2_state)),
+        )
+    } else {
+        (None, None)
+    };
+
+    let mut app = Router::new()
         .merge(public_routes)
         .merge(protected_routes)
-        .merge(auth_router)
-        .layer(CorsLayer::permissive());
+        .merge(auth_router);
+    
+    // Add backtest v2 routes if available (authenticated - all runs)
+    if let Some(v2_routes) = backtest_v2_routes {
+        app = app.nest("/api/v2/backtest", v2_routes);
+        info!("📊 Backtest v2 API enabled at /api/v2/backtest/*");
+    }
+    
+    // Add public backtest v2 routes (no auth required - published runs only)
+    if let Some(v2_public_routes) = backtest_v2_public_routes {
+        app = app.nest("/api/public/v2/backtest", v2_public_routes);
+        info!("🌐 Public Backtest v2 API enabled at /api/public/v2/backtest/*");
+    }
+    
+    // Add middleware layers (order matters - applied bottom-to-top)
+    let app = app
+        .layer(CorsLayer::permissive())
+        .layer(axum::middleware::from_fn(crate::middleware::logging::request_logging_simple));
+    
+    info!("🔍 Request logging middleware enabled");
 
     // Start server
     let addr = "0.0.0.0:3000";
@@ -1019,9 +1403,12 @@ async fn scrape_dome_real(api_key: String) -> Result<Vec<MarketSignal>> {
 
 /// Tracked wallet polling with WebSocket streaming and REST fallback
 /// Mission: Zero missed entries. Real-time = competitive advantage.
+/// Also feeds orders to the unified 15M strategy if enabled.
 async fn tracked_wallet_polling(
     storage: Arc<DbSignalStorage>,
     signal_tx: broadcast::Sender<WsServerEvent>,
+    unified_strategy: Option<Arc<tokio::sync::Mutex<crate::vault::Unified15mStrategy>>>,
+    binance_feed: Arc<BinancePriceFeed>,
 ) -> Result<()> {
     info!("👑 Starting tracked wallet STREAMING system");
 
@@ -1101,19 +1488,27 @@ async fn tracked_wallet_polling(
 
     let mut rest_client = DomeRealtimeClient::new(dome_api_key, wallet_labels.clone());
 
-    // Hybrid approach: WebSocket primary (real-time), REST fallback (30s)
-    let mut ws_connected = false;
-    let mut poll_interval = tokio::time::interval(Duration::from_secs(30)); // 30s REST fallback
+    // Hybrid approach: WebSocket primary (real-time), REST fallback (background task)
+    let mut ws_last_seen = std::time::Instant::now();
+    let mut poll_interval = tokio::time::interval(Duration::from_secs(60)); // 60s REST fallback check
     poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    info!("🔥 Hybrid tracking active: WebSocket (real-time) + REST (30s fallback)");
+    // Channel for REST polling results (non-blocking)
+    // Note: dome_realtime uses its own DomeOrder type
+    let (rest_result_tx, mut rest_result_rx) = tokio::sync::mpsc::channel::<(
+        Vec<crate::models::MarketSignal>,
+        Vec<(crate::scrapers::dome_realtime::DomeOrder, String)>,
+    )>(1);
+    let rest_polling_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Hybrid loop: process WebSocket messages AND poll REST API
+    info!("🔥 Hybrid tracking active: WebSocket (real-time) + REST (60s background fallback)");
+
+    // Hybrid loop: process WebSocket messages AND poll REST API (non-blocking)
     loop {
         tokio::select! {
-            // Process WebSocket messages when available
+            // Process WebSocket messages when available (PRIORITY)
             Some(order) = order_rx.recv() => {
-                ws_connected = true;
+                ws_last_seen = std::time::Instant::now();
 
                 // Find wallet label
                 let wallet_label = wallet_labels
@@ -1164,8 +1559,18 @@ async fn tracked_wallet_polling(
                     tx_hash: Some(tx_hash.clone()),
                 }];
 
-                // Detect signals from this order
+                // Detect signals from this order (with latency tracking)
+                let detect_start = std::time::Instant::now();
                 let signals = detector.detect_trader_entry(&dome_order, &user, wallet_label);
+                let detect_us = detect_start.elapsed().as_micros() as u64;
+                latency::global_registry().record_span(
+                    latency::LatencySpan::new(
+                        latency::SpanType::SignalDetection,
+                        detect_us,
+                    )
+                );
+                // Also record to CPU profiler for hot path tracking
+                performance::global_profiler().cpu.record_span("signal_detection", detect_us);
 
                 // Store and broadcast immediately
                 for signal in signals {
@@ -1195,64 +1600,107 @@ async fn tracked_wallet_polling(
                         let _ = enrich_tx.try_send(job);
                     }
                 }
+
+                // === UNIFIED 15M STRATEGY: Feed order for processing ===
+                // Only process 15m up/down markets
+                if market_slug.contains("-updown-15m-") {
+                    if let (Some(ref strategy), Some(ref outcome)) = (&unified_strategy, &token_label) {
+                        let mut strat = strategy.lock().await;
+                        if let Some(trade) = strat.on_order(&market_slug, outcome, price, timestamp) {
+                            info!(
+                                "[UNIFIED] Trade recorded: {} {} @ {:.4} -> {:.4} (PnL: ${:.2})",
+                                trade.side, trade.market_slug, trade.entry_price, trade.exit_price, trade.net_pnl
+                            );
+                        }
+                    }
+                }
             }
 
-            // Poll REST API every 60 seconds as fallback
+            // Spawn REST polling as background task (non-blocking) every 60s
             _ = poll_interval.tick() => {
-                // Only poll REST when we haven't seen any WebSocket messages since the last tick.
-                // This keeps the Dome load low when WS is healthy (HFT path) while retaining a
-                // safety net for missed WS events / disconnects.
-                if ws_connected {
-                    ws_connected = false;
+                // Skip if WebSocket is healthy (received message in last 30s)
+                if ws_last_seen.elapsed() < Duration::from_secs(30) {
+                    debug!("WebSocket healthy, skipping REST poll");
                     continue;
                 }
 
-                info!("🔄 REST polling for tracked wallets (WebSocket fallback)...");
+                // Skip if REST polling is already running
+                if rest_polling_active.load(std::sync::atomic::Ordering::Relaxed) {
+                    debug!("REST polling already in progress, skipping");
+                    continue;
+                }
 
-                match rest_client.poll_all_wallets_with_orders().await {
-                    Ok((signals, orders)) => {
-                        if !signals.is_empty() {
-                            info!("📊 REST API: Found {} signals from tracked wallets", signals.len());
+                // Spawn REST polling as background task
+                info!("🔄 Spawning REST polling for tracked wallets (background)...");
+                rest_polling_active.store(true, std::sync::atomic::Ordering::Relaxed);
 
-                            for signal in &signals {
-                                if let Err(e) = storage.store(signal).await {
-                                    warn!("Failed to store REST signal {}: {}", signal.id, e);
-                                }
-                                let _ = signal_tx.send(WsServerEvent::Signal(signal.clone()));
-                            }
+                let mut rest_client_clone = rest_client.clone();
+                let rest_result_tx_clone = rest_result_tx.clone();
+                let rest_polling_active_clone = rest_polling_active.clone();
 
-                            // Queue enrichment for REST signals (same as WebSocket path)
-                            for (order, wallet_label) in orders {
-                                let raw_json = serde_json::to_string(&order).unwrap_or_default();
-                                let job = EnrichmentJob {
-                                    signal_id: format!("dome_order_{}", order.order_hash),
-                                    user: order.user.clone(),
-                                    market_slug: order.market_slug.clone(),
-                                    condition_id: order.condition_id.clone(),
-                                    token_id: order.token_id.clone(),
-                                    token_label: order.token_label.clone(),
-                                    side: order.side.clone(),
-                                    price: order.price,
-                                    shares_normalized: order.shares_normalized,
-                                    timestamp: order.timestamp,
-                                    order_hash: order.order_hash.clone(),
-                                    tx_hash: order.tx_hash.clone(),
-                                    title: order.title.clone(),
-                                    raw_payload_json: raw_json,
-                                };
-                                if let Err(e) = enrich_tx.try_send(job) {
-                                    debug!("Enrichment queue full for REST signal: {}", e);
+                tokio::spawn(async move {
+                    match rest_client_clone.poll_all_wallets_with_orders().await {
+                        Ok((signals, orders)) => {
+                            // orders is already Vec<(DomeOrder, String)> with labels
+                            let _ = rest_result_tx_clone.send((signals, orders)).await;
+                        }
+                        Err(e) => {
+                            warn!("REST polling error: {}", e);
+                        }
+                    }
+                    rest_polling_active_clone.store(false, std::sync::atomic::Ordering::Relaxed);
+                });
+            }
+
+            // Process REST polling results (non-blocking)
+            Some((signals, orders)) = rest_result_rx.recv() => {
+                if !signals.is_empty() {
+                    info!("📊 REST API: Found {} signals from tracked wallets", signals.len());
+
+                    for signal in &signals {
+                        if let Err(e) = storage.store(signal).await {
+                            warn!("Failed to store REST signal {}: {}", signal.id, e);
+                        }
+                        let _ = signal_tx.send(WsServerEvent::Signal(signal.clone()));
+                    }
+
+                    // Queue enrichment for REST signals
+                    for (order, _wallet_label) in orders {
+                        let raw_json = serde_json::to_string(&order).unwrap_or_default();
+                        let job = EnrichmentJob {
+                            signal_id: format!("dome_order_{}", order.order_hash),
+                            user: order.user.clone(),
+                            market_slug: order.market_slug.clone(),
+                            condition_id: order.condition_id.clone(),
+                            token_id: order.token_id.clone(),
+                            token_label: order.token_label.clone(),
+                            side: order.side.clone(),
+                            price: order.price,
+                            shares_normalized: order.shares_normalized,
+                            timestamp: order.timestamp,
+                            order_hash: order.order_hash.clone(),
+                            tx_hash: order.tx_hash.clone(),
+                            title: order.title.clone(),
+                            raw_payload_json: raw_json.clone(),
+                        };
+                        if let Err(e) = enrich_tx.try_send(job) {
+                            debug!("Enrichment queue full for REST signal: {}", e);
+                        }
+
+                        // === UNIFIED 15M STRATEGY: Feed REST order for processing ===
+                        if order.market_slug.contains("-updown-15m-") {
+                            if let (Some(ref strategy), Some(ref outcome)) = (&unified_strategy, &order.token_label) {
+                                let mut strat = strategy.lock().await;
+                                if let Some(trade) = strat.on_order(&order.market_slug, outcome, order.price, order.timestamp) {
+                                    info!(
+                                        "[UNIFIED] Trade recorded (REST): {} {} @ {:.4} -> {:.4} (PnL: ${:.2})",
+                                        trade.side, trade.market_slug, trade.entry_price, trade.exit_price, trade.net_pnl
+                                    );
                                 }
                             }
                         }
                     }
-                    Err(e) => {
-                        warn!("REST polling error: {}", e);
-                    }
                 }
-
-                // Reset WebSocket flag - if it was connected, next loop will set it true again
-                ws_connected = false;
             }
         }
     }

@@ -116,6 +116,86 @@ impl DomeRestClient {
         Ok(markets_resp.markets.into_iter().next())
     }
 
+    /// Search markets with pagination - returns all markets matching a pattern
+    pub async fn search_markets(
+        &self,
+        status: Option<&str>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<MarketsResponse> {
+        let url = self.url("/polymarket/markets");
+        let mut qp: Vec<(String, String)> = Vec::with_capacity(4);
+        if let Some(s) = status {
+            qp.push(("status".to_string(), s.to_string()));
+        }
+        qp.push(("limit".to_string(), limit.to_string()));
+        qp.push(("offset".to_string(), offset.to_string()));
+
+        let resp = self
+            .client
+            .get(&url)
+            .query(&qp)
+            .send()
+            .await
+            .context("GET /polymarket/markets search failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "GET /polymarket/markets search {}: {}",
+                status,
+                text
+            ));
+        }
+
+        resp.json::<MarketsResponse>()
+            .await
+            .context("Failed to parse markets response")
+    }
+
+    /// Fetch all orders for a specific market slug with pagination
+    pub async fn get_all_orders_for_market(
+        &self,
+        market_slug: &str,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
+    ) -> Result<Vec<DomeOrder>> {
+        let mut all_orders: Vec<DomeOrder> = Vec::new();
+        let limit = 1000u32;
+        let mut pagination_key: Option<String> = None;
+
+        for _page in 0..200 {
+            let resp = self
+                .get_orders_with_pagination_key(
+                    OrdersFilter {
+                        market_slug: Some(market_slug.to_string()),
+                        condition_id: None,
+                        token_id: None,
+                        user: None,
+                    },
+                    start_time,
+                    end_time,
+                    Some(limit),
+                    None,
+                    pagination_key.clone(),
+                )
+                .await?;
+
+            let count = resp.orders.len();
+            all_orders.extend(resp.orders);
+
+            pagination_key = resp.pagination.and_then(|p| p.pagination_key);
+            if count < limit as usize || pagination_key.is_none() {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        Ok(all_orders)
+    }
+
     pub async fn get_orders(
         &self,
         filter: OrdersFilter,
@@ -124,8 +204,21 @@ impl DomeRestClient {
         limit: Option<u32>,
         offset: Option<u32>,
     ) -> Result<OrdersResponse> {
+        self.get_orders_with_pagination_key(filter, start_time, end_time, limit, offset, None)
+            .await
+    }
+
+    pub async fn get_orders_with_pagination_key(
+        &self,
+        filter: OrdersFilter,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+        pagination_key: Option<String>,
+    ) -> Result<OrdersResponse> {
         let url = self.url("/polymarket/orders");
-        let mut qp: Vec<(String, String)> = Vec::with_capacity(8);
+        let mut qp: Vec<(String, String)> = Vec::with_capacity(10);
 
         if let Some(market_slug) = filter.market_slug {
             qp.push(("market_slug".to_string(), market_slug));
@@ -148,7 +241,10 @@ impl DomeRestClient {
         if let Some(l) = limit {
             qp.push(("limit".to_string(), l.to_string()));
         }
-        if let Some(o) = offset {
+        // Use pagination_key if provided, otherwise use offset
+        if let Some(pk) = pagination_key {
+            qp.push(("pagination_key".to_string(), pk));
+        } else if let Some(o) = offset {
             qp.push(("offset".to_string(), o.to_string()));
         }
 

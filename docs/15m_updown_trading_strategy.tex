@@ -1,0 +1,517 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{margin=1in}
+
+\title{15-Minute Up/Down Binary Options Trading Strategy\\
+\large Technical Documentation}
+\author{BetterBot Quantitative Systems}
+\date{January 2026}
+
+\newtheorem{definition}{Definition}
+\newtheorem{theorem}{Theorem}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides a comprehensive technical specification of the 15-minute Up/Down binary options trading strategy implemented in BetterBot. The strategy exploits latency arbitrage opportunities in Polymarket's crypto price prediction markets by computing theoretical fair values using a driftless lognormal model calibrated to real-time Binance price feeds. We detail the probability model, entry/exit logic, position sizing via Kelly criterion, and fee-adjusted profit calculations.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Market Structure}
+%==============================================================================
+
+\subsection{15-Minute Up/Down Markets}
+
+Polymarket offers binary prediction markets on whether a cryptocurrency's price will be higher (``Up'') or lower (``Down'') at the end of a 15-minute window compared to the start.
+
+\begin{definition}[Up/Down Market]
+A 15-minute Up/Down market for asset $A$ with start time $t_0$ and end time $t_1 = t_0 + 900$ seconds has two mutually exclusive outcomes:
+\begin{itemize}
+    \item \textbf{Up}: $P_A(t_1) \geq P_A(t_0)$
+    \item \textbf{Down}: $P_A(t_1) < P_A(t_0)$
+\end{itemize}
+where $P_A(t)$ denotes the price of asset $A$ at time $t$.
+\end{definition}
+
+\subsection{Supported Assets}
+
+The strategy currently supports four cryptocurrency assets:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Asset} & \textbf{Market Slug Prefix} & \textbf{Binance Symbol} \\
+\midrule
+Bitcoin & \texttt{btc-updown-15m-} & \texttt{BTCUSDT} \\
+Ethereum & \texttt{eth-updown-15m-} & \texttt{ETHUSDT} \\
+Solana & \texttt{sol-updown-15m-} & \texttt{SOLUSDT} \\
+XRP & \texttt{xrp-updown-15m-} & \texttt{XRPUSDT} \\
+\bottomrule
+\end{tabular}
+\caption{Supported assets and their identifiers}
+\end{table}
+
+\subsection{Binary Outcome Payoffs}
+
+Each share in a binary market pays:
+\begin{equation}
+\text{Payoff per share} = 
+\begin{cases}
+\$1.00 & \text{if outcome is correct} \\
+\$0.00 & \text{if outcome is incorrect}
+\end{cases}
+\end{equation}
+
+For a position of $n$ shares purchased at price $p_{\text{entry}}$:
+\begin{align}
+\text{Cost} &= n \cdot p_{\text{entry}} \\
+\text{Gross P\&L (win)} &= n \cdot (1 - p_{\text{entry}}) \\
+\text{Gross P\&L (lose)} &= -n \cdot p_{\text{entry}}
+\end{align}
+
+%==============================================================================
+\section{Probability Model}
+%==============================================================================
+
+\subsection{Driftless Lognormal Model}
+
+We model the underlying asset price as a geometric Brownian motion without drift over the short 15-minute horizon:
+
+\begin{equation}
+\frac{dP}{P} = \sigma \, dW
+\end{equation}
+
+where $\sigma$ is the volatility (per $\sqrt{\text{second}}$) and $W$ is a standard Wiener process.
+
+\begin{theorem}[Probability of Up Outcome]
+Given:
+\begin{itemize}
+    \item $P_0$: Price at market start time $t_0$
+    \item $P_t$: Current price at time $t$
+    \item $\sigma$: Volatility per $\sqrt{\text{second}}$
+    \item $\tau = t_1 - t$: Time remaining until market expiry (seconds)
+\end{itemize}
+
+The probability that the final price $P_{t_1} \geq P_0$ is:
+
+\begin{equation}
+\mathbb{P}[\text{Up}] = \Phi\left(\frac{\ln(P_t / P_0)}{\sigma \sqrt{\tau}}\right)
+\end{equation}
+
+where $\Phi(\cdot)$ is the standard normal CDF.
+\end{theorem}
+
+\begin{proof}
+Under the driftless lognormal model, $\ln(P_{t_1}/P_t) \sim \mathcal{N}(0, \sigma^2 \tau)$. Therefore:
+\begin{align}
+\mathbb{P}[P_{t_1} \geq P_0] &= \mathbb{P}\left[\ln(P_{t_1}) \geq \ln(P_0)\right] \\
+&= \mathbb{P}\left[\ln(P_{t_1}/P_t) \geq \ln(P_0/P_t)\right] \\
+&= \mathbb{P}\left[Z \geq -\frac{\ln(P_t/P_0)}{\sigma\sqrt{\tau}}\right] \\
+&= \Phi\left(\frac{\ln(P_t/P_0)}{\sigma\sqrt{\tau}}\right)
+\end{align}
+where $Z \sim \mathcal{N}(0,1)$.
+\end{proof}
+
+\subsection{Conservative Shrinkage}
+
+To account for model uncertainty and adverse selection, we apply a shrinkage transformation that pulls the raw probability estimate toward 0.5:
+
+\begin{equation}
+p_{\text{shrunk}} = 0.5 + s \cdot (p_{\text{raw}} - 0.5)
+\end{equation}
+
+where $s \in [0, 1]$ is the shrinkage factor. The default value is $s = 0.35$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ccc}
+\toprule
+$p_{\text{raw}}$ & $p_{\text{shrunk}}$ (s=0.35) & Effect \\
+\midrule
+0.90 & 0.64 & Strong signal reduced \\
+0.70 & 0.57 & Moderate signal reduced \\
+0.50 & 0.50 & No change at fair value \\
+0.30 & 0.43 & Moderate signal reduced \\
+0.10 & 0.36 & Strong signal reduced \\
+\bottomrule
+\end{tabular}
+\caption{Effect of shrinkage on probability estimates}
+\end{table}
+
+The probability is clamped to $[0.0001, 0.9999]$ to avoid numerical issues.
+
+\subsection{Volatility Estimation}
+
+The volatility parameter $\sigma$ (per $\sqrt{\text{second}}$) is estimated from the rolling standard deviation of Binance price returns. The Binance price feed maintains a history of mid prices and computes:
+
+\begin{equation}
+\sigma = \text{std}(\{\ln(P_{t_i}/P_{t_{i-1}})\}) / \sqrt{\Delta t}
+\end{equation}
+
+where $\Delta t$ is the sampling interval.
+
+%==============================================================================
+\section{Edge Calculation}
+%==============================================================================
+
+\subsection{Definition of Edge}
+
+The trading edge is defined as the difference between our model probability and the market-implied probability:
+
+\begin{equation}
+\text{Edge} = p_{\text{model}} - p_{\text{market}}
+\end{equation}
+
+where $p_{\text{market}}$ is the current order price for the relevant outcome (Up or Down).
+
+\subsection{Entry Conditions}
+
+A trade is considered when:
+\begin{equation}
+|\text{Edge}| \geq \text{min\_edge}
+\end{equation}
+
+The default minimum edge is $\text{min\_edge} = 0.05$ (5\%).
+
+We only take \textbf{long} positions (buying underpriced outcomes):
+\begin{itemize}
+    \item If $\text{Edge} > 0$ and order is for ``Up'' $\Rightarrow$ BUY\_UP
+    \item If $\text{Edge} > 0$ and order is for ``Down'' $\Rightarrow$ BUY\_DOWN
+\end{itemize}
+
+Short selling (selling overpriced outcomes) is not implemented.
+
+%==============================================================================
+\section{Position Sizing}
+%==============================================================================
+
+\subsection{Kelly Criterion}
+
+Position sizes are determined using a simplified Kelly criterion:
+
+\begin{equation}
+f^* = k \cdot |\text{Edge}| \cdot 10
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $f^*$ is the fraction of bankroll to risk
+    \item $k$ is the Kelly fraction (default: 0.02 or 2\%)
+    \item The factor of 10 scales the edge to a reasonable bet size
+\end{itemize}
+
+\subsection{Position Limits}
+
+The position size is constrained:
+
+\begin{equation}
+\text{Position}_{\text{USD}} = \min(f^*, \text{max\_position\_pct}) \times \text{Bankroll}
+\end{equation}
+
+Default parameters:
+\begin{itemize}
+    \item $\text{Bankroll} = \$10{,}000$
+    \item $\text{kelly\_fraction} = 0.02$
+    \item $\text{max\_position\_pct} = 0.005$ (0.5\%)
+    \item Maximum position: \$50 per trade
+    \item Minimum position: \$10 (trades below this are skipped)
+\end{itemize}
+
+\subsection{Share Calculation}
+
+Given a position size in USD and entry price:
+\begin{equation}
+\text{Shares} = \frac{\text{Position}_{\text{USD}}}{p_{\text{entry}}}
+\end{equation}
+
+%==============================================================================
+\section{Exit Logic}
+%==============================================================================
+
+\subsection{Exit Conditions}
+
+An open position is exited when any of the following conditions are met:
+
+\begin{enumerate}
+    \item \textbf{Favorable Price Move}: The market price moved in our favor by more than the fee threshold
+    \item \textbf{Edge Reversal}: The edge has reversed against our position beyond the minimum edge
+    \item \textbf{Timeout}: Position held for $\geq 180$ seconds
+    \item \textbf{Market Expiry}: The 15-minute window has ended (binary settlement)
+\end{enumerate}
+
+\subsection{Outcome Matching (Critical)}
+
+When evaluating exit conditions, we \textbf{must} match the incoming order's outcome to our position:
+\begin{itemize}
+    \item A BUY\_UP position can \textbf{only} be exited on an Up order
+    \item A BUY\_DOWN position can \textbf{only} be exited on a Down order
+\end{itemize}
+
+This prevents the erroneous comparison of Up entry prices against Down exit prices (or vice versa).
+
+\subsection{Favorable Move Threshold}
+
+The minimum profitable price move accounts for round-trip fees:
+
+\begin{equation}
+\text{min\_move} = f_{\text{rate}}
+\end{equation}
+
+where $f_{\text{rate}}$ is the estimated round-trip fee rate (see Section~\ref{sec:fees}).
+
+For a BUY\_UP position:
+\begin{equation}
+\text{Favorable} = (p_{\text{current}} - p_{\text{entry}}) > \text{min\_move}
+\end{equation}
+
+For a BUY\_DOWN position:
+\begin{equation}
+\text{Favorable} = (p_{\text{entry}} - p_{\text{current}}) > \text{min\_move}
+\end{equation}
+
+\subsection{Edge Reversal}
+
+For a BUY\_UP position, edge reversal occurs when:
+\begin{equation}
+\text{Edge}_{\text{current}} < -\text{min\_edge}
+\end{equation}
+
+For a BUY\_DOWN position:
+\begin{equation}
+\text{Edge}_{\text{current}} > \text{min\_edge}
+\end{equation}
+
+%==============================================================================
+\section{Fee Model}
+\label{sec:fees}
+%==============================================================================
+
+\subsection{Polymarket Fee Structure}
+
+Polymarket charges fees on trades that vary with the price level. Fees are approximately:
+\begin{itemize}
+    \item $\sim$1.5\% per side at mid-prices ($p \approx 0.50$)
+    \item Lower fees at extreme prices (near 0 or 1)
+    \item No fee on binary settlement payouts
+\end{itemize}
+
+\subsection{Fee Rate Approximation}
+
+We model the fee rate as a function of distance from mid-price:
+
+\begin{equation}
+f_{\text{rate}} = 0.03 \times (1 - |p_{\text{entry}} - 0.5|)
+\end{equation}
+
+This gives:
+\begin{itemize}
+    \item 3\% round-trip fee at $p = 0.50$
+    \item 1.5\% round-trip fee at $p = 0.0$ or $p = 1.0$
+\end{itemize}
+
+\subsection{Early Exit P\&L}
+
+For early exits (before market expiry):
+
+\begin{align}
+\text{Gross P\&L} &= \text{Shares} \times (p_{\text{exit}} - p_{\text{entry}}) \\
+\text{Notional} &= \text{Shares} \times p_{\text{entry}} \\
+\text{Fees} &= \text{Notional} \times f_{\text{rate}} \\
+\text{Net P\&L} &= \text{Gross P\&L} - \text{Fees}
+\end{align}
+
+\subsection{Binary Settlement P\&L}
+
+For positions held to market expiry:
+
+\begin{align}
+f_{\text{entry}} &= 0.015 \times (1 - |p_{\text{entry}} - 0.5|) \\
+\text{Fees} &= \text{Shares} \times p_{\text{entry}} \times f_{\text{entry}}
+\end{align}
+
+\begin{equation}
+\text{Gross P\&L} = 
+\begin{cases}
+\text{Shares} \times (1 - p_{\text{entry}}) & \text{if win} \\
+-\text{Shares} \times p_{\text{entry}} & \text{if lose}
+\end{cases}
+\end{equation}
+
+\begin{equation}
+\text{Net P\&L} = \text{Gross P\&L} - \text{Fees}
+\end{equation}
+
+%==============================================================================
+\section{Binary Settlement}
+%==============================================================================
+
+\subsection{Outcome Determination}
+
+At market expiry time $t_1$, the actual outcome is determined by comparing Binance prices:
+
+\begin{equation}
+\text{Actual Outcome} = 
+\begin{cases}
+\text{Up} & \text{if } P_{\text{Binance}}(t_1) \geq P_{\text{Binance}}(t_0) \\
+\text{Down} & \text{if } P_{\text{Binance}}(t_1) < P_{\text{Binance}}(t_0)
+\end{cases}
+\end{equation}
+
+\subsection{Win/Lose Determination}
+
+\begin{equation}
+\text{We Win} = 
+\begin{cases}
+\text{True} & \text{if (BUY\_UP and Actual=Up) or (BUY\_DOWN and Actual=Down)} \\
+\text{False} & \text{otherwise}
+\end{cases}
+\end{equation}
+
+%==============================================================================
+\section{Algorithm Summary}
+%==============================================================================
+
+\begin{algorithm}[H]
+\caption{15-Minute Up/Down Trading Strategy}
+\begin{algorithmic}[1]
+\Require Order event with $(market\_slug, outcome, price, timestamp)$
+\Require Binance price feed with $(P_0, P_t, \sigma)$
+\Require Open positions map, configuration parameters
+
+\State Parse market slug to extract $(asset, t_0, t_1)$
+\State $\tau \gets t_1 - t_{\text{now}}$
+\If{$\tau < 30$ seconds}
+    \State \Return \Comment{Too close to expiry}
+\EndIf
+
+\State $p_{\text{raw}} \gets \Phi\left(\frac{\ln(P_t/P_0)}{\sigma\sqrt{\tau}}\right)$
+\State $p_{\text{up}} \gets 0.5 + s \cdot (p_{\text{raw}} - 0.5)$ \Comment{Shrinkage}
+\State $p_{\text{down}} \gets 1 - p_{\text{up}}$
+
+\If{$outcome = \text{``Up''}$}
+    \State $p_{\text{model}} \gets p_{\text{up}}$
+\Else
+    \State $p_{\text{model}} \gets p_{\text{down}}$
+\EndIf
+
+\State $edge \gets p_{\text{model}} - price$
+
+\If{position exists for $market\_slug$}
+    \If{$outcome$ does not match position side}
+        \State \Return \Comment{Wrong outcome for this position}
+    \EndIf
+    \State Evaluate exit conditions (favorable, reversed, timeout)
+    \If{should exit}
+        \State Close position, calculate P\&L with fees
+        \State \Return
+    \EndIf
+\EndIf
+
+\If{$edge > min\_edge$ \textbf{and} no existing position}
+    \State $f^* \gets kelly\_fraction \times edge \times 10$
+    \State $size \gets \min(f^*, max\_pct) \times bankroll$
+    \If{$size \geq \$10$}
+        \State Open position: $(price, size/price, side, timestamp)$
+    \EndIf
+\EndIf
+
+\end{algorithmic}
+\end{algorithm}
+
+%==============================================================================
+\section{Configuration Parameters}
+%==============================================================================
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llp{6cm}}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Description} \\
+\midrule
+\texttt{bankroll} & \$10,000 & Total capital for position sizing \\
+\texttt{min\_edge} & 0.05 (5\%) & Minimum edge required for entry \\
+\texttt{kelly\_fraction} & 0.02 & Fraction of Kelly to use \\
+\texttt{max\_position\_pct} & 0.005 & Maximum position as \% of bankroll \\
+\texttt{shrink} & 0.35 & Probability shrinkage factor \\
+\texttt{min\_time\_remaining} & 30s & Don't trade within 30s of expiry \\
+\texttt{max\_hold\_time} & 180s & Force exit after 3 minutes \\
+\bottomrule
+\end{tabular}
+\caption{Strategy configuration parameters}
+\end{table}
+
+%==============================================================================
+\section{Risk Considerations}
+%==============================================================================
+
+\subsection{Model Risk}
+\begin{itemize}
+    \item The driftless lognormal model assumes no drift, which may not hold during strong trends
+    \item Volatility estimation may lag sudden regime changes
+    \item Shrinkage factor is heuristic and may be suboptimal
+\end{itemize}
+
+\subsection{Execution Risk}
+\begin{itemize}
+    \item Paper trading assumes fills at observed prices; real execution may face slippage
+    \item Latency between Binance price observation and Polymarket order placement
+    \item Order book depth may not support desired position sizes
+\end{itemize}
+
+\subsection{Fee Risk}
+\begin{itemize}
+    \item Fee model is an approximation; actual fees may differ
+    \item High-frequency trading amplifies fee impact
+    \item Fee structure may change over time
+\end{itemize}
+
+%==============================================================================
+\section{Appendix: Implementation Details}
+%==============================================================================
+
+\subsection{Market Slug Format}
+
+Market slugs follow the pattern:
+\begin{verbatim}
+{asset}-updown-15m-{start_timestamp}
+\end{verbatim}
+
+Example: \texttt{btc-updown-15m-1768524300}
+
+The start timestamp is a Unix timestamp (seconds since epoch). The end timestamp is always $start + 900$.
+
+\subsection{Data Sources}
+
+\begin{itemize}
+    \item \textbf{Binance WebSocket}: Real-time price feed for BTC, ETH, SOL, XRP
+    \item \textbf{Dome WebSocket}: Real-time order flow from Polymarket
+    \item \textbf{Dome REST API}: Fallback polling for order data
+\end{itemize}
+
+\subsection{Latency Tracking}
+
+The system tracks tick-to-trade latency components:
+\begin{itemize}
+    \item Network latency: Time from order timestamp to receipt
+    \item Signal compute: Time to calculate model probability
+    \item Risk check: Time for position sizing calculation
+    \item Order placement: Time to record the trade
+\end{itemize}
+
+\end{document}

@@ -1,0 +1,813 @@
+\documentclass[11pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{xcolor}
+
+\geometry{margin=1in}
+
+% Theorem environments
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[section]
+\newtheorem{assumption}{Assumption}[section]
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem{remark}{Remark}[section]
+\newtheorem{corollary}{Corollary}[section]
+
+% Custom commands
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Cov}{\mathrm{Cov}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\PP}{\mathbb{P}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\DeclareMathOperator{\logit}{logit}
+\DeclareMathOperator{\sigmoid}{sigmoid}
+
+\title{\textbf{15-Minute Up/Down Crypto Markets on Polymarket} \\ \Large Measure-Theoretic and Microstructure-Aware Specification (FAST15M)}
+\author{BetterBot Quantitative Team}
+\date{January 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document specifies the implemented trading logic for Polymarket \emph{15-minute crypto Up/Down} markets. We begin from a filtered probability space and interpret conditional expectation as an $L^2$-orthogonal projection (functional-analytic view), then model the \emph{Up} event as a digital payoff and derive probability estimates under a local lognormal/GBM approximation. We also formalize the implemented RN-JD correction in log-odds space with belief-volatility tracking and jump-regime gating. Finally, we state explicit assumptions for Polymarket's \emph{15-minute fee schedule} (price-dependent quadratic fees), orderbook microstructure (bid/ask, staleness, IOC execution), and oracle basis risk (Chainlink vs Binance), and we present the complete decision algorithm.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Introduction and Problem Setting}
+%==============================================================================
+
+\subsection{Market Structure}
+
+We consider binary prediction markets on Polymarket where the outcome is determined by whether a cryptocurrency's price ends higher or lower than its starting price over a 15-minute window.
+
+\begin{definition}[15-Minute Up/Down Market]
+Let $t_0$ denote the market start time and $t_1 = t_0 + 900$ seconds the expiry time. Let $P_t$ denote the price of the underlying asset (BTC, ETH, SOL, or XRP) at time $t$. The market resolves as:
+\begin{equation}
+    \text{Outcome} = \begin{cases}
+        \texttt{Up} & \text{if } P^{\mathrm{CL}}_{t_1} > P^{\mathrm{CL}}_{t_0} \\
+        \texttt{Down} & \text{if } P^{\mathrm{CL}}_{t_1} \leq P^{\mathrm{CL}}_{t_0}
+    \end{cases}
+\end{equation}
+\end{definition}
+
+\begin{remark}[Oracle vs observed price]
+In implementation, the strategy observes a high-frequency Binance mid $P_t$.
+Settlement uses a Chainlink oracle price $P_t^{\mathrm{CL}}$.
+The polling FAST15M path may skip trading when estimated oracle lag/divergence is dangerous; otherwise, the model treats $P_t$ as a proxy for $P_t^{\mathrm{CL}}$.
+\end{remark}
+
+\begin{remark}
+The ``equal'' case ($P_{t_1} = P_{t_0}$) resolves to \texttt{Down}. In practice, exact equality has measure zero under continuous price models.
+\end{remark}
+
+\subsection{Notation}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{cl}
+\toprule
+\textbf{Symbol} & \textbf{Description} \\
+\midrule
+$P_t$ & Underlying asset price at time $t$ \\
+$P_t^{\mathrm{CL}}$ & Chainlink oracle settlement price at time $t$ \\
+$P_0$ & Price at market start ($t = t_0$) \\
+$P_{\text{now}}$ & Current observed price \\
+$\tau$ & Time remaining to expiry (seconds) \\
+$\sigma$ & Volatility per $\sqrt{\text{second}}$ \\
+$p_{\text{up}}$ & Probability of \texttt{Up} outcome \\
+$p_{\text{down}}$ & Probability of \texttt{Down} outcome ($= 1 - p_{\text{up}}$) \\
+$a_{\text{up}}, a_{\text{down}}$ & Best ask prices for Up/Down contracts \\
+$B$ & Bankroll (available capital in USDC) \\
+$f^*$ & Kelly fraction \\
+$\kappa$ & Fractional Kelly multiplier \\
+$s$ & Shrinkage parameter \\
+\bottomrule
+\end{tabular}
+\caption{Notation summary}
+\end{table}
+
+%==============================================================================
+\section{Mathematical Setting: Prediction Markets as Traded Conditional Expectations}
+%==============================================================================
+
+\subsection{Filtered probability space (information model)}
+
+\begin{definition}[Stochastic basis]\label{def:stochastic_basis}
+Fix a finite horizon $T>0$. We work on a stochastic basis
+$(\Omega,\mathcal{F},(\mathcal{F}_t)_{t\in[0,T]},\PP)$ satisfying the usual conditions.
+The filtration $(\mathcal{F}_t)$ represents the \emph{information} available to the strategy at time $t$ (Binance mid-price feed, Polymarket orderbook state, oracle health signals, and internal clocks/latency measurements).
+\end{definition}
+
+\begin{remark}[Functional-analytic viewpoint]
+For any probability measure $\mu$ on $(\Omega,\mathcal{F})$, the space $L^2(\Omega,\mathcal{F},\mu)$ is a Hilbert space.
+For any $t$, the conditional expectation operator
+$\E^{\mu}[\cdot\mid\mathcal{F}_t]$ is the $L^2$-orthogonal projection onto the closed subspace $L^2(\Omega,\mathcal{F}_t,\mu)$.
+This is the precise sense in which ``pricing by conditional expectation'' is a projection of future payoffs onto currently observable information.
+\end{remark}
+
+\subsection{Contracts, payoff random variables, and the Up/Down event}
+
+Let $t_0$ denote the window start, $t_1=t_0+900$ seconds the window end.
+Let $P_t$ denote the \emph{observed/model} price used by the strategy (Binance mid) and let $P_t^{\mathrm{CL}}$ denote the \emph{settlement oracle} reference price (Chainlink).
+
+\begin{definition}[Resolution random variables]\label{def:resolution_payoffs}
+Define the event
+\begin{equation}
+  A \;:=\; \{ P^{\mathrm{CL}}_{t_1} > P^{\mathrm{CL}}_{t_0} \}\,.
+\end{equation}
+Define the Up payoff $Y^{\mathrm{Up}} := \mathbf{1}_A$ and the Down payoff $Y^{\mathrm{Down}} := 1-Y^{\mathrm{Up}}$.
+\end{definition}
+
+\begin{remark}
+The code uses Binance for $P$ (fast, high frequency) but settlement uses Chainlink $P^{\mathrm{CL}}$.
+This introduces \emph{basis/oracle risk} even if the model for $\widetilde{S}$ is perfect.
+The polling FAST15M path implements an \emph{oracle lag/divergence} guardrail that can skip trading when the estimated basis is dangerous.
+\end{remark}
+
+\subsection{No-arbitrage, pricing measures, and what ``risk-neutral'' means here}
+
+Polymarket outcome shares are bounded claims paying 1 USDC on the winning outcome and 0 otherwise.
+Let $\pi_t^{\mathrm{Up}}$ and $\pi_t^{\mathrm{Down}}$ denote the (mid) prices at time $t$ for the Up/Down shares, respectively.
+
+\begin{assumption}[Pricing measure (idealized)]\label{ass:pricing_measure}
+Ignoring fees, spreads, and inventory constraints, there exists a probability measure $\Q\sim\PP$ such that the discounted mid-price process $\pi^{\mathrm{Up}}$ is a $\Q$-martingale:
+\begin{equation}
+  \pi_t^{\mathrm{Up}} \;=\; \E^{\Q}\!\left[ Y^{\mathrm{Up}}\,\middle|\,\mathcal{F}_t \right],\qquad t\in[0,t_1].
+\end{equation}
+Equivalently, $\pi^{\mathrm{Up}}$ is the $L^2(\Q)$-projection of the terminal payoff onto $\mathcal{F}_t$.
+\end{assumption}
+
+\begin{remark}[Incompleteness and operational interpretation]
+Prediction markets are typically \emph{incomplete}; $\Q$ need not be unique.
+Operationally, FAST15M treats the observed market mid as defining (one) admissible pricing measure via the identity above, and then uses structural information from the crypto price process to produce an \emph{alternative} conditional probability estimate.
+The edge computation is then performed against \emph{tradable} bid/ask prices with transaction costs.
+\end{remark}
+
+\subsection{Transaction costs: bid/ask and the 15-minute fee functional}
+
+Let $a_t^{\mathrm{Up}}$ and $a_t^{\mathrm{Down}}$ be the best asks (top-of-book) for Up/Down.
+FAST15M enters positions by buying at the best ask with IOC (Immediate-or-Cancel) semantics.
+
+\begin{assumption}[Polymarket 15-minute fee schedule]\label{ass:polymarket_fee}
+For 15-minute crypto markets, Polymarket charges a deterministic fee depending on the execution price $p\in(0,1)$.
+The fee per share is
+\begin{equation}
+  f(p) \;:=\; \frac{1}{4}\,\bigl(p(1-p)\bigr)^2\,\,\,\text{USDC/share}.
+\end{equation}
+Thus for a trade of $q$ shares executed at price $p$, the fee is $q\,f(p)$.
+\end{assumption}
+
+\begin{remark}
+The function $f$ is symmetric about $p=1/2$, maximal at $p=1/2$ with $f(1/2)=0.015625$ (1.5625\% of notional per share), and decays toward 0 near $p\in\{0,1\}$.
+The user-provided fee table is consistent with this formula (up to rounding).
+\end{remark}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{cccc}
+\toprule
+Price $p$ & Fee/share $f(p)$ & Cost (100 shares) & Fee (100 shares) \\
+\midrule
+0.01 & 0.0000245 & 1.00 & 0.0025 \\
+0.05 & 0.0005641 & 5.00 & 0.0564 \\
+0.10 & 0.0020250 & 10.00 & 0.2025 \\
+0.20 & 0.0064000 & 20.00 & 0.6400 \\
+0.30 & 0.0110250 & 30.00 & 1.1025 \\
+0.40 & 0.0144000 & 40.00 & 1.4400 \\
+0.50 & 0.0156250 & 50.00 & 1.5625 \\
+0.60 & 0.0144000 & 60.00 & 1.4400 \\
+0.70 & 0.0110250 & 70.00 & 1.1025 \\
+0.80 & 0.0064000 & 80.00 & 0.6400 \\
+0.90 & 0.0020250 & 90.00 & 0.2025 \\
+0.99 & 0.0000245 & 99.00 & 0.0025 \\
+\bottomrule
+\end{tabular}
+\caption{Polymarket 15-minute fee schedule examples (computed from $f(p)=\tfrac14(p(1-p))^2$; values match the provided examples up to rounding).}
+\end{table}
+
+
+%==============================================================================
+\section{Underlying Price Model: Semimartingale Foundations and the GBM Approximation}
+%==============================================================================
+
+\subsection{Model class and why we start there}
+
+The relevant mathematical object is the distribution of the terminal sign event
+$\{P_{t_1} > P_{t_0}\}$ (under settlement oracle) and its approximation from the observed feed.
+Modern mathematical finance places asset prices in the class of (special) semimartingales because:
+(i) this is the maximal class for which stochastic integration against trading strategies is well-defined, and
+(ii) the Fundamental Theorem of Asset Pricing (Delbaen--Schachermayer) is formulated in this setting.
+
+\begin{assumption}[Observed crypto price as an It\^o semimartingale]\label{ass:semimartingale}
+On $(\Omega,\mathcal{F},(\mathcal{F}_t),\PP)$, the observed price process $(P_t)_{t\in[t_0,t_1]}$ is strictly positive and admits (locally) the decomposition
+\begin{equation}
+  d\log P_t = \mu_t\,dt + \sigma_t\,dW_t + dJ_t,
+\end{equation}
+where $W$ is a Brownian motion, $\sigma_t\ge 0$ is progressively measurable, and $J$ is a pure-jump semimartingale (possibly zero).
+\end{assumption}
+
+\begin{remark}[Why ``GBM'' shows up]
+If the jump term $J$ is negligible over a short horizon and $\sigma_t$ is approximately constant, then $\log P$ has approximately Gaussian increments.
+Formally, the continuous local-martingale part of $\log P$ is a time-changed Brownian motion (Dambis--Dubins--Schwarz), and freezing $\sigma_t$ over $[t_{\mathrm{now}},t_1]$ yields a Gaussian increment with variance $\int_{t_{\mathrm{now}}}^{t_1}\sigma_u^2\,du$.
+Thus the lognormal/GBM form is the analytically tractable first-order local approximation in the semimartingale model class.
+FAST15M uses it because it permits closed-form digital probabilities and microsecond-scale recomputation.
+\end{remark}
+
+\subsection{Local driftless GBM approximation (implemented baseline)}
+
+\begin{assumption}[Local driftless GBM approximation under a pricing measure]\label{ass:gbm}
+Fix a pricing measure $\Q$ as in Assumption \ref{ass:pricing_measure}.
+On the short horizon $[t_{\mathrm{now}},t_1]$ the implementation approximates
+\begin{equation}
+    \frac{dP_t}{P_t} \approx \sigma \, dW_t^{\Q}
+\end{equation}
+with constant $\sigma>0$.
+\end{assumption}
+
+\begin{remark}[Why we drop drift at 15-minute horizon]
+Even under a physical measure with drift $\mu$, the drift contribution to log-returns is $O(\tau)$ while the diffusion contribution is $O(\sqrt{\tau})$.
+For $\tau \le 900$ seconds and typical intraday crypto volatilities, $\tfrac12\sigma^2\tau$ and $\mu\tau$ are several orders of magnitude smaller than the diffusive standard deviation $\sigma\sqrt{\tau}$.
+This justifies a local driftless approximation for the specific decision statistic used (a sign event).
+\end{remark}
+
+\begin{proposition}[Log-Price Distribution]\label{prop:logprice}
+Under Assumption \ref{ass:gbm}, for any $t > t_{\text{now}}$:
+\begin{equation}
+    \ln\left(\frac{P_t}{P_{\text{now}}}\right) \sim \mathcal{N}\left(-\frac{1}{2}\sigma^2(t - t_{\text{now}}), \sigma^2(t - t_{\text{now}})\right)
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+By It\^o's lemma applied to $X_t = \ln P_t$:
+\begin{equation}
+    dX_t = -\frac{1}{2}\sigma^2 dt + \sigma \, dW_t^{\Q}
+\end{equation}
+Integrating from $t_{\text{now}}$ to $t$ gives the result.
+\end{proof}
+
+\subsection{Volatility Estimation}
+
+\begin{assumption}[Realized Volatility Estimation]\label{ass:vol}
+The volatility parameter $\sigma$ (per $\sqrt{\text{second}}$) is estimated from recent high-frequency price data using realized volatility:
+\begin{equation}
+    \hat{\sigma}^2 = \frac{1}{n}\sum_{i=1}^{n} \left(\ln\frac{P_{t_i}}{P_{t_{i-1}}}\right)^2 \cdot \frac{1}{\Delta t}
+\end{equation}
+where $\{P_{t_i}\}$ are sampled prices and $\Delta t$ is the sampling interval.
+\end{assumption}
+
+\begin{remark}
+In implementation, we use an exponential moving average of squared returns from the Binance price feed with a half-life calibrated to approximately 30 minutes of data.
+\end{remark}
+
+%==============================================================================
+\section{Probability Estimation}
+%==============================================================================
+
+\subsection{Raw Probability Calculation}
+
+\begin{proposition}[Raw Probability of Up]\label{prop:rawprob}
+Given start price $P_0$, current price $P_{\text{now}}$, volatility $\sigma$, and remaining time $\tau$ seconds, the probability that the final price exceeds the start price is:
+\begin{equation}
+    p_{\text{up}}^{\text{raw}} = \Phi\left(\frac{\ln(P_{\text{now}}/P_0)}{\sigma\sqrt{\tau}}\right)
+\end{equation}
+where $\Phi(\cdot)$ is the standard normal cumulative distribution function.
+\end{proposition}
+
+\begin{remark}[Exact driftless-GBM digital probability vs FAST15M implementation]
+Under Assumption \ref{ass:gbm} with $d\log P_t = -\tfrac12\sigma^2dt+\sigma dW_t^{\Q}$, the exact conditional probability is
+\begin{equation}
+  \PP^{\Q}(P_{t_1}>P_0\mid\mathcal{F}_{t_{\mathrm{now}}})
+  \,=\,
+  \Phi\!\left(\frac{\ln(P_{\text{now}}/P_0) - \tfrac12\sigma^2\tau}{\sigma\sqrt{\tau}}\right).
+\end{equation}
+The function implemented in \texttt{p\_up\_driftless\_lognormal} drops the $-\tfrac12\sigma^2\tau$ term, which is negligible at 15-minute horizons for typical intraday crypto volatilities.
+\end{remark}
+
+\begin{proof}
+We seek $\PP^{\Q}[P_{t_1} > P_0 \mid P_{\text{now}}]$.
+
+By Proposition \ref{prop:logprice}:
+\begin{equation}
+    \ln\left(\frac{P_{t_1}}{P_{\text{now}}}\right) \sim \mathcal{N}\left(-\frac{1}{2}\sigma^2\tau, \sigma^2\tau\right)
+\end{equation}
+
+Therefore:
+\begin{equation}
+    \ln\left(\frac{P_{t_1}}{P_0}\right) = \ln\left(\frac{P_{\text{now}}}{P_0}\right) + \ln\left(\frac{P_{t_1}}{P_{\text{now}}}\right) \sim \mathcal{N}\left(\ln\frac{P_{\text{now}}}{P_0} - \frac{1}{2}\sigma^2\tau, \sigma^2\tau\right)
+\end{equation}
+
+The probability that $P_{t_1} > P_0$ is:
+\begin{align}
+    \PP^{\Q}[P_{t_1} > P_0] &= \PP^{\Q}\left[\ln\frac{P_{t_1}}{P_0} > 0\right] \\
+    &= \PP^{\Q}\left[Z > \frac{-\ln(P_{\text{now}}/P_0) + \frac{1}{2}\sigma^2\tau}{\sigma\sqrt{\tau}}\right]
+\end{align}
+where $Z \sim \mathcal{N}(0,1)$.
+
+For short horizons where $\frac{1}{2}\sigma^2\tau \ll |\ln(P_{\text{now}}/P_0)|$, this simplifies to:
+\begin{equation}
+    p_{\text{up}}^{\text{raw}} \approx \Phi\left(\frac{\ln(P_{\text{now}}/P_0)}{\sigma\sqrt{\tau}}\right)
+\end{equation}
+\end{proof}
+
+\begin{corollary}[Limiting Behavior]
+As $\tau \to 0$:
+\begin{equation}
+    p_{\text{up}}^{\text{raw}} \to \begin{cases}
+        1 & \text{if } P_{\text{now}} > P_0 \\
+        0.5 & \text{if } P_{\text{now}} = P_0 \\
+        0 & \text{if } P_{\text{now}} < P_0
+    \end{cases}
+\end{equation}
+At market start ($P_{\text{now}} = P_0$): $p_{\text{up}}^{\text{raw}} = 0.5$.
+\end{corollary}
+
+\subsection{RN-JD enhancement: belief volatility, martingale drift correction, and jump regime gating}\label{sec:rnjd}
+
+The polling FAST15M implementation additionally computes an \emph{RN-JD corrected} probability estimate using the market mid as an anchor and a belief-volatility model in log-odds space.
+This follows the code in \texttt{vault/rnjd.rs} and \texttt{vault/belief\_vol.rs}.
+
+\paragraph{Market-implied probability and log-odds.}
+Let $p_t^{\mathrm{mkt}}\in(0,1)$ denote a market-implied probability proxy computed from top-of-book asks:
+\begin{equation}
+  p_t^{\mathrm{mkt}} :=
+  \begin{cases}
+    \tfrac12\bigl(a_t^{\mathrm{Up}} + (1-a_t^{\mathrm{Down}})\bigr), & a_t^{\mathrm{Up}},a_t^{\mathrm{Down}}\ \text{available}\\
+    a_t^{\mathrm{Up}}, & a_t^{\mathrm{Down}}\ \text{missing}\\
+    1-a_t^{\mathrm{Down}}, & a_t^{\mathrm{Up}}\ \text{missing}\\
+    \tfrac12, & \text{both missing.}
+  \end{cases}
+\end{equation}
+Define the log-odds process $x_t := \logit(p_t^{\mathrm{mkt}})$.
+
+\paragraph{Belief volatility tracking.}
+Given observations $(x_{t_i})$, the implementation forms increments $\Delta x_i := x_{t_i}-x_{t_{i-1}}$ and annualizes the squared increment
+\begin{equation}
+  \mathrm{sqinc}_i := \frac{(\Delta x_i)^2}{\Delta t_i^{\mathrm{yr}}},
+  \qquad \Delta t_i^{\mathrm{yr}} := \frac{t_i-t_{i-1}}{365.25\cdot 24\cdot 3600}.
+\end{equation}
+It maintains an EMA variance estimate $v_i$ and belief volatility $\sigma_b$:
+\begin{equation}
+  v_i := \alpha\,\mathrm{sqinc}_i + (1-\alpha)v_{i-1},\qquad \sigma_b := \sqrt{v_i},
+\end{equation}
+with defaults $\alpha=0.1$, prior $\sigma_b=2.0$, and a minimum of 30 samples before deeming the estimate reliable.
+
+\paragraph{Price-vol to belief-vol conversion (bridge).}
+When belief-vol estimates are unreliable, the implementation derives a belief-vol proxy from observed price volatility via
+\begin{equation}
+  \sigma_b^{\mathrm{px}} \approx \frac{\sigma_{\mathrm{px}}}{p(1-p)},\qquad p:=p_t^{\mathrm{mkt}}\in[0.05,0.95],
+\end{equation}
+and blends tracked and price-derived values (70\% tracked / 30\% price-derived when tracked is reliable).
+
+\paragraph{Risk-neutral drift correction in log-odds.}
+Under the RN-JD modeling choice, $p_t^{\mathrm{mkt}}$ is treated as a $\Q$-martingale (Assumption \ref{ass:pricing_measure}).
+Writing dynamics in log-odds space pins down the drift (no-arbitrage constraint). The implemented diffusion-only drift is
+\begin{equation}
+  \mu_x(p) = -\tfrac12\sigma_b^2\,(1-2p),\qquad p\in(0,1),
+\end{equation}
+and the corresponding short-horizon drift correction is $\Delta x \approx \mu_x(p_t^{\mathrm{mkt}})\,\tau^{\mathrm{yr}}$.
+Given a raw price-based probability $p_{\text{up}}^{\text{raw}}$ (Proposition \ref{prop:rawprob}), the RN-JD corrected estimate is
+\begin{equation}
+  p_{\text{up}}^{\mathrm{rnjd}} := \sigmoid\Bigl(\logit(p_{\text{up}}^{\text{raw}}) + \mu_x(p_t^{\mathrm{mkt}})\,\tau^{\mathrm{yr}}\Bigr).
+\end{equation}
+
+\paragraph{Jump regime detection and trading conservatism.}
+The implementation computes a z-score for recent moves in $x$:
+\begin{equation}
+  z := \frac{|\Delta x|}{\sigma_b\sqrt{\Delta t^{\mathrm{yr}}}}.
+\end{equation}
+If at least 2 jumps with $z>3$ occur in the past 300 seconds, it flags \texttt{jump\_regime=true} and increases the minimum required edge by a factor of 2.
+This is an explicit microstructure/jump-aware guardrail rather than a full jump-diffusion calibration.
+
+
+\subsection{Conservative Shrinkage}
+
+\begin{assumption}[Model Uncertainty]\label{ass:uncertainty}
+Our probability estimate is subject to uncertainty from:
+\begin{enumerate}
+    \item Volatility estimation error
+    \item Deviation from the GBM assumption (fat tails, jumps)
+    \item Market microstructure effects not captured by the model
+\end{enumerate}
+\end{assumption}
+
+To account for this uncertainty, we apply a conservative shrinkage toward the uninformative prior of 0.5:
+
+\begin{definition}[Shrinkage Transformation]\label{def:shrink}
+Let $\widehat{p}_{\text{up}}$ denote the ``base'' model probability estimate, i.e.
+$\widehat{p}_{\text{up}} \in \{p_{\text{up}}^{\text{raw}},\,p_{\text{up}}^{\mathrm{rnjd}}\}$ depending on the engine variant.
+The shrunk probability estimate is:
+\begin{equation}
+    p_{\text{up}} = 0.5 + s \cdot (\widehat{p}_{\text{up}} - 0.5)
+\end{equation}
+where $s \in [0, 1]$ is the shrinkage parameter.
+\end{definition}
+
+\begin{proposition}[Shrinkage Properties]
+The shrinkage transformation satisfies:
+\begin{enumerate}
+    \item \textbf{Bounds preservation}: $p_{\text{up}} \in (0, 1)$ for all $p_{\text{up}}^{\text{raw}} \in (0, 1)$
+    \item \textbf{Symmetry}: $p_{\text{up}}(0.5 + \delta) + p_{\text{up}}(0.5 - \delta) = 1$ for all $\delta$
+    \item \textbf{Monotonicity}: $p_{\text{up}}$ is strictly increasing in $p_{\text{up}}^{\text{raw}}$
+    \item \textbf{Conservatism}: $|p_{\text{up}} - 0.5| \leq |p_{\text{up}}^{\text{raw}} - 0.5|$
+\end{enumerate}
+\end{proposition}
+
+\begin{assumption}[Default Shrinkage]\label{ass:shrink}
+We use $s = 0.35$ as the default shrinkage parameter, implying that our final estimate moves only 35\% of the way from 0.5 toward the raw model estimate.
+\end{assumption}
+
+\begin{remark}
+The choice of $s = 0.35$ is motivated by:
+\begin{itemize}
+    \item Backtesting showing improved Sharpe ratio compared to $s = 1$ (no shrinkage)
+    \item Bayesian interpretation: blending a prior of $\text{Beta}(1,1)$ with observed evidence
+    \item Robustness to volatility misestimation
+\end{itemize}
+\end{remark}
+
+\subsection{Numerical Bounds}
+
+\begin{assumption}[Probability Clamping]\label{ass:clamp}
+To avoid numerical issues and extreme positions, probabilities are clamped:
+\begin{equation}
+    p_{\text{up}} \gets \max(0.0001, \min(0.9999, p_{\text{up}}))
+\end{equation}
+\end{assumption}
+
+%==============================================================================
+\section{Edge Calculation}
+%==============================================================================
+
+\begin{definition}[Edge]
+The economically relevant comparison is between our probability estimate and the \emph{all-in} cost of acquiring a share.
+With best ask $a\in(0,1)$ and fee function $f$ from Assumption \ref{ass:polymarket_fee}, the all-in buy cost per share is
+\begin{equation}
+  c(a) := a + f(a).
+\end{equation}
+Define fee-adjusted edges:
+\begin{align}
+    \text{edge}_{\text{up}}^{\mathrm{fee}} &= p_{\text{up}} - c(a_{\text{up}}) \\
+    \text{edge}_{\text{down}}^{\mathrm{fee}} &= (1 - p_{\text{up}}) - c(a_{\text{down}})
+\end{align}
+\end{definition}
+
+\begin{proposition}[Fee-adjusted edge equals expected net value of entry-only hold]\label{prop:edge_ev}
+Consider buying 1 share of the Up contract at ask $a$ and holding to settlement (no exit trade).
+Under Assumption \ref{ass:polymarket_fee}, the total entry cost is $c(a)=a+f(a)$ and the terminal payoff is $Y^{\mathrm{Up}}\in\{0,1\}$.
+If $p:=\E^{\Q}[Y^{\mathrm{Up}}\mid\mathcal{F}_t]$ is the relevant pricing probability, then the conditional expected net value is
+\begin{equation}
+  \E^{\Q}[Y^{\mathrm{Up}}-c(a)\mid\mathcal{F}_t] = p-c(a)=\text{edge}_{\text{up}}^{\mathrm{fee}}.
+\end{equation}
+\end{proposition}
+
+\begin{remark}[Implementation note]
+The current FAST15M entry logic in \texttt{engine.rs} and \texttt{fast15m\_reactive.rs} compares $p$ against the raw ask (i.e. uses $p-a$) and enforces a minimum edge threshold.
+Economically, the threshold should be interpreted as covering $f(a)$ plus spread/slippage and model risk.
+\end{remark}
+
+%==============================================================================
+\section{Microstructure and Execution Model (Polymarket CLOB + Oracle Basis Risk)}
+%==============================================================================
+
+\subsection{Orderbook primitives and the tradable price}
+
+Polymarket's CLOB is an order-driven market with a discrete limit order book.
+At any time $t$, for each outcome token, the book induces a best bid $b_t$ and best ask $a_t$.
+FAST15M uses the best ask $a_t$ as the executable entry price (buying liquidity).
+
+\begin{assumption}[Top-of-book execution model]\label{ass:tob_exec}
+On entry, the strategy submits an IOC buy order at the current best ask and assumes (up to partial fill) execution at a price close to $a_t$.
+Any residual non-filled quantity is cancelled.
+\end{assumption}
+
+\subsection{Market data access, staleness, and the ``HFT cache'' contract}
+
+The implementation maintains a WebSocket-driven orderbook cache for Polymarket tokens.
+Let $\widehat{\mathcal{B}}_t$ denote the cached book snapshot and $\Delta_{\mathrm{stale}}$ the maximum staleness threshold.
+
+\begin{assumption}[Staleness-bounded best-ask reads]\label{ass:stale}
+Best-ask reads prefer the WS cache; if the cached snapshot is newer than $\Delta_{\mathrm{stale}}\approx 1500\,\mathrm{ms}$, the best ask is extracted from it.
+If the cache is stale or missing and the path is not designated HFT-only, a REST snapshot fallback may be used with a short timeout.
+\end{assumption}
+
+\begin{remark}
+This is a microstructure-critical assumption: when the cache is stale, using an ask from a REST snapshot introduces additional latency and selection bias.
+The codebase also contains a cache-only best-ask helper (``HFT-grade''), which never blocks on REST and instead skips the tick.
+\end{remark}
+
+\subsection{Execution costs in simulation vs reality}
+
+\begin{assumption}[Paper execution adapter cost model]\label{ass:paper_costs}
+In paper mode, execution cost is modeled via:
+\begin{itemize}
+  \item random latency (base + jitter),
+  \item adverse slippage (base spread-crossing + size-dependent impact),
+  \item partial fills with a fixed probability, and
+  \item a constant fee rate (default 0.5\% of notional) applied to filled notional.
+\end{itemize}
+\end{assumption}
+
+\begin{remark}
+Assumption \ref{ass:paper_costs} is a \emph{simulation} model. Real Polymarket 15-minute fees follow Assumption \ref{ass:polymarket_fee} (price-dependent quadratic fees).
+From a specification standpoint, the economically correct fee functional is $f(p)$; the constant 0.5\% is an approximation used by the paper adapter.
+\end{remark}
+
+\subsection{Oracle basis risk (Chainlink vs Binance) and a guardrail}
+
+\begin{assumption}[Oracle divergence guardrail (polling FAST15M path)]\label{ass:oracle_guard}
+Let $P_t$ be Binance mid and $P_t^{\mathrm{CL}}$ be Chainlink.
+When the Chainlink feed is available, the polling FAST15M path may skip trading if estimated divergence (in bps) and/or oracle staleness enters a dangerous regime.
+\end{assumption}
+
+
+\begin{assumption}[Minimum Edge Threshold]\label{ass:minedge}
+We only consider trading when edge exceeds a minimum threshold $e_{\min}$:
+\begin{equation}
+    \text{edge} > e_{\min}
+\end{equation}
+Default: $e_{\min} = 0.01$ (1\%).
+\end{assumption}
+
+\begin{remark}
+The minimum edge requirement accounts for:
+\begin{itemize}
+    \item Polymarket 15-minute fees $f(a)$ (Assumption \ref{ass:polymarket_fee}), which peak at $\approx 1.56\%$ per trade near $a=0.5$
+    \item Slippage from crossing the spread
+    \item Model estimation error
+\end{itemize}
+\end{remark}
+
+%==============================================================================
+\section{Position Sizing: Kelly Criterion}
+%==============================================================================
+
+\subsection{Kelly Formula for Binary Outcomes}
+
+\begin{definition}[Kelly Fraction]
+For a binary bet where we estimate probability $p$ of winning and the market offers odds implied by price $q$ (i.e., decimal odds $b = 1/q - 1$), the optimal fraction of bankroll to wager is:
+\begin{equation}
+    f^* = \frac{p \cdot b - (1-p)}{b} = \frac{p(1/q - 1) - (1-p)}{1/q - 1}
+\end{equation}
+\end{definition}
+
+\begin{proposition}[Kelly Simplification for Binary Markets]
+When buying at price $q$ with estimated probability $p$:
+\begin{equation}
+    f^* = \frac{p - q}{1 - q}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+The decimal odds when buying at price $q$ are $b = (1-q)/q$ (you pay $q$ to win $1-q$ net). Substituting:
+\begin{align}
+    f^* &= \frac{p \cdot \frac{1-q}{q} - (1-p)}{\frac{1-q}{q}} \\
+    &= \frac{p(1-q) - q(1-p)}{1-q} \\
+    &= \frac{p - pq - q + pq}{1-q} \\
+    &= \frac{p - q}{1 - q}
+\end{align}
+\end{proof}
+
+\subsection{Fractional Kelly}
+
+\begin{assumption}[Fractional Kelly]\label{ass:fractkelly}
+To reduce variance and account for estimation error in $p$, we use fractional Kelly:
+\begin{equation}
+    f_{\text{actual}} = \kappa \cdot f^*
+\end{equation}
+where $\kappa \in (0, 1]$ is the Kelly fraction multiplier.
+\end{assumption}
+
+\begin{remark}
+The choice of $\kappa$ trades off expected growth rate against variance:
+\begin{itemize}
+    \item $\kappa = 1$: Full Kelly, maximum expected log-growth but high variance
+    \item $\kappa = 0.5$: Half Kelly, 75\% of expected growth with 50\% of variance
+    \item $\kappa = 0.25$: Quarter Kelly, more conservative
+\end{itemize}
+We use $\kappa = 0.05$ for FAST15M due to the high frequency of trades.
+\end{remark}
+
+\subsection{Position Limits}
+
+\begin{assumption}[Maximum Position]\label{ass:maxpos}
+Individual positions are capped at a maximum fraction of bankroll:
+\begin{equation}
+    f_{\text{actual}} \gets \min(f_{\text{actual}}, f_{\max})
+\end{equation}
+Default: $f_{\max} = 0.01$ (1\% of bankroll per trade).
+\end{assumption}
+
+\begin{assumption}[Minimum Position]\label{ass:minpos}
+Positions below a minimum USD threshold are not executed:
+\begin{equation}
+    \text{Position}_{\text{USD}} = B \cdot f_{\text{actual}} \geq \text{pos}_{\min}
+\end{equation}
+Default: $\text{pos}_{\min} = \$1$.
+\end{assumption}
+
+%==============================================================================
+\section{Implemented FAST15M Decision Logic (Polling and Reactive Variants)}
+%==============================================================================
+
+This repository contains two concrete implementations of the 15-minute Up/Down entry logic.
+Both are ``entry-only'' (buy at ask, hold to resolution) and differ primarily in (i) evaluation cadence and latency targets, and (ii) probability model enrichment.
+
+\subsection{Variant A: Polling FAST15M (\texttt{VaultEngine::evaluate\_updown15m})}
+
+\begin{algorithm}[H]
+\caption{Polling FAST15M decision (RN-JD enhanced + vol-adjusted Kelly)}
+\label{alg:fast15m_polling}
+\begin{algorithmic}[1]
+\Require Parsed 15m market window $(t_0,t_1)$, token IDs (Up/Down)
+\Require Binance mid $P_{\text{now}}$, start proxy $P_0$, realized vol $\sigma$ (per $\sqrt{\text{s}}$)
+\Require Best asks $a_{\text{up}}, a_{\text{down}}$ from WS cache (REST fallback allowed)
+\Require Parameters: shrink $s$, min edge $e_{\min}$, cooldown, bankroll/risk caps
+\Ensure IOC buy order request or NO\_TRADE
+
+\State $\tau \gets (t_1- t_{\text{now}})$
+\If{$\tau < 15\text{s}$} \Return NO\_TRADE \EndIf
+\State \textbf{(Oracle guard)} If Chainlink divergence/staleness is dangerous, \Return NO\_TRADE
+
+\State Compute market mid proxy $p^{\mathrm{mkt}}$ from $(a_{\text{up}},a_{\text{down}})$ and record it in the belief-vol tracker
+
+\State \textbf{(RN-JD estimate)} $\widehat{p}_{\text{up}} \gets p_{\text{up}}^{\mathrm{rnjd}}$ using Section~\ref{sec:rnjd} (fallback: $p_{\text{up}}^{\text{raw}}$)
+\State \textbf{(Shrink)} $p_{\text{up}} \gets 0.5 + s(\widehat{p}_{\text{up}}-0.5)$; $p_{\text{down}}\gets 1-p_{\text{up}}$
+
+\State \textbf{(Side selection)} choose Up vs Down by comparing $p_{\text{up}}-a_{\text{up}}$ and $p_{\text{down}}-a_{\text{down}}$
+\State $\text{edge} \gets p_{\text{side}} - a_{\text{side}}$
+\State \textbf{(Jump regime gating)} If jump regime, set $e_{\min}\gets 2e_{\min}$
+\If{$\text{edge} < e_{\min}$} \Return NO\_TRADE \EndIf
+
+\State \textbf{(Vol-adjusted Kelly)} compute $\sigma_b$ from belief-vol tracker and size via \texttt{kelly\_with\_belief\_vol}
+\If{Kelly says skip or position $<\$1$} \Return NO\_TRADE \EndIf
+
+\State \Return IOC BUY at price $a_{\text{side}}$ for notional determined by Kelly
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Variant B: Reactive FAST15M (\texttt{ReactiveFast15mEngine})}
+
+\begin{algorithm}[H]
+\caption{Reactive FAST15M decision (event-driven + cache-only book)}
+\label{alg:fast15m_reactive}
+\begin{algorithmic}[1]
+\Require A Binance price update event for one of \{BTC,ETH,SOL,XRP\}
+\Ensure Optional IOC buy order request or NO\_TRADE
+
+\State Compute current 15m window start $t_0 := t_{\text{now}} - (t_{\text{now}}\bmod 900)$ and end $t_1 := t_0+900$
+\If{$t_1-t_{\text{now}} < 60\text{s}$} \Return NO\_TRADE \EndIf
+\State Enforce per-asset cooldown (default 30s)
+\State Enforce a minimum evaluation interval outside the first 60s of the window
+
+\State Estimate $p_{\text{up}}^{\text{raw}}$ via \texttt{p\_up\_driftless\_lognormal} and apply shrinkage $s$
+\State Apply ``edge-change'' gating: only proceed if $|\,|p_{\text{up}}-0.5|-\text{last\_edge}\,|$ exceeds threshold
+
+\State Resolve Up/Down token IDs via Gamma and cache them
+\State Fetch best asks from the WS book cache \emph{only} (skip tick if cache miss/stale)
+
+\State Choose side by comparing $p-a$ for Up/Down
+\If{$\text{edge}<e_{\min}$} \Return NO\_TRADE \EndIf
+
+\State Size via standard fractional Kelly \texttt{calculate\_kelly\_position}
+\If{Kelly says skip} \Return NO\_TRADE \EndIf
+
+\State \Return IOC BUY at the best ask for the selected side
+\end{algorithmic}
+\end{algorithm}
+
+%==============================================================================
+\section{Operational Constraints}
+%==============================================================================
+
+\subsection{Cooldown Period}
+
+\begin{assumption}[Trade Cooldown]\label{ass:cooldown}
+After executing a trade on an asset, no further trades on that asset are permitted for $T_{\text{cool}}$ seconds.
+\begin{equation}
+    t_{\text{current}} - t_{\text{last\_trade}} \geq T_{\text{cool}}
+\end{equation}
+Default: $T_{\text{cool}} = 30$ seconds.
+\end{assumption}
+
+\begin{remark}
+The cooldown prevents overtrading when price oscillates around a threshold and ensures sufficient time for market conditions to evolve.
+\end{remark}
+
+\subsection{Window Boundaries}
+
+\begin{assumption}[Window-end skip buffers]\label{ass:window}
+To avoid adverse selection and settlement/latency risk near expiry, the implementations enforce a window-end skip buffer.
+Let $\tau=t_1-t_{\mathrm{now}}$.
+\begin{itemize}
+  \item \textbf{Polling FAST15M:} skip if $\tau < 15\,\mathrm{s}$.
+  \item \textbf{Reactive FAST15M:} skip if $\tau < 60\,\mathrm{s}$ (\texttt{window\_end\_idle\_sec}).
+\end{itemize}
+\end{assumption}
+
+\begin{remark}
+This constraint avoids:
+\begin{itemize}
+    \item Extreme probability estimates near expiry (as $\tau \to 0$)
+    \item Execution risk when settlement is imminent
+    \item Reduced liquidity typically observed near expiry
+\end{itemize}
+\end{remark}
+
+%==============================================================================
+\section{Summary of Assumptions}
+%==============================================================================
+
+\subsection{Mathematical finance / prediction-market setting}
+
+\begin{enumerate}[label=\textbf{S\arabic*.}]
+    \item \textbf{(Stochastic basis)} We work on $(\Omega,\mathcal{F},(\mathcal{F}_t),\PP)$ (Definition \ref{def:stochastic_basis}).
+    \item \textbf{(Payoff model)} Up/Down outcome shares are bounded claims with payoffs as in Definition \ref{def:resolution_payoffs}.
+    \item \textbf{(Pricing measure, idealized)} Ignoring frictions, there exists $\Q\sim\PP$ such that mid prices satisfy $\pi_t^{\mathrm{Up}}=\E^{\Q}[Y^{\mathrm{Up}}\mid\mathcal{F}_t]$ (Assumption \ref{ass:pricing_measure}).
+\end{enumerate}
+
+\subsection{Observed crypto price model and justification}
+
+\begin{enumerate}[label=\textbf{M\arabic*.}]
+    \item \textbf{(Semimartingale baseline)} $\log P$ is modeled as an It\^o semimartingale with possible jumps (Assumption \ref{ass:semimartingale}).
+    \item \textbf{(Local GBM approximation)} For ultra-short horizon probability computation, we freeze volatility and drop drift, yielding a driftless GBM/lognormal approximation under a pricing measure (Assumption \ref{ass:gbm}).
+    \item \textbf{(Volatility estimation)} $\sigma$ is estimated from recent high-frequency returns (Assumption \ref{ass:vol}).
+    \item \textbf{(Oracle basis risk)} Settlement uses Chainlink $P^{\mathrm{CL}}$ while the model observes Binance $P$; a guardrail may skip trading under dangerous divergence (Assumption \ref{ass:oracle_guard}).
+\end{enumerate}
+
+\subsection{Microstructure and transaction costs}
+
+\begin{enumerate}[label=\textbf{E\arabic*.}]
+    \item \textbf{(Top-of-book IOC)} Entry is modeled as buying at best ask with IOC semantics (Assumption \ref{ass:tob_exec}).
+    \item \textbf{(Staleness)} Best-ask reads prefer WS cache with a staleness bound; some paths allow REST fallback (Assumption \ref{ass:stale}).
+    \item \textbf{(15m fee functional)} Real 15m crypto markets have price-dependent fees $f(p)=\tfrac14(p(1-p))^2$ (Assumption \ref{ass:polymarket_fee}).
+    \item \textbf{(Paper costs)} Paper execution may instead approximate fees as a constant rate plus slippage/latency noise (Assumption \ref{ass:paper_costs}).
+\end{enumerate}
+
+\subsection{Strategy controls (implemented guardrails)}
+
+\begin{enumerate}[label=\textbf{T\arabic*.}]
+    \item \textbf{(Shrinkage)} Apply shrinkage toward $0.5$ with default $s=0.35$ (Definition \ref{def:shrink}).
+    \item \textbf{(Minimum edge)} Require a minimum edge threshold (default 1\%); polling FAST15M doubles this in jump regime (Assumption \ref{ass:minedge} + Section~\ref{sec:rnjd}).
+    \item \textbf{(Jump regime)} Detect jump regimes from log-odds z-scores and require stricter entry conditions (Section~\ref{sec:rnjd}).
+    \item \textbf{(Position sizing)} Use fractional Kelly; polling FAST15M uses belief-vol-adjusted Kelly while reactive FAST15M uses standard Kelly (Assumption \ref{ass:fractkelly}).
+    \item \textbf{(Position caps)} Enforce a max-position fraction and a minimum notional (Assumptions \ref{ass:maxpos}--\ref{ass:minpos}).
+    \item \textbf{(Cooldown)} Enforce a per-asset cooldown (default 30s) (Assumption \ref{ass:cooldown}).
+    \item \textbf{(Window-end skip)} Skip the last part of the window (15s polling; 60s reactive) (Assumption \ref{ass:window}).
+\end{enumerate}
+
+%==============================================================================
+\section{Parameter Reference}
+%==============================================================================
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llll}
+\toprule
+\textbf{Parameter} & \textbf{Symbol} & \textbf{Default} & \textbf{Environment Variable} \\
+\midrule
+Shrinkage & $s$ & 0.35 & \texttt{UPDOWN15M\_SHRINK} \\
+Minimum edge & $e_{\min}$ & 0.01 & \texttt{UPDOWN15M\_MIN\_EDGE} \\
+Kelly fraction & $\kappa$ & 0.05 & \texttt{UPDOWN15M\_KELLY\_FRACTION} \\
+Max position \% & $f_{\max}$ & 0.01 & \texttt{UPDOWN15M\_MAX\_POSITION\_PCT} \\
+Min position USD & $\text{pos}_{\min}$ & \$1 & --- \\
+Cooldown & $T_{\text{cool}}$ & 30s & \texttt{UPDOWN15M\_COOLDOWN\_SEC} \\
+Window end buffer & $T_{\text{end}}$ & 60s & --- \\
+Poll interval & --- & 2000ms & \texttt{UPDOWN15M\_POLL\_MS} \\
+\bottomrule
+\end{tabular}
+\caption{FAST15M Configuration Parameters}
+\end{table}
+
+%==============================================================================
+\section{Conclusion}
+%==============================================================================
+
+This specification describes the 15-minute Up/Down trading logic as an application of (i) prediction-market pricing as conditional expectation on a filtered probability space, (ii) a semimartingale-to-local-diffusion modeling step for the observed crypto price process, and (iii) explicit microstructure and transaction-cost constraints from the Polymarket CLOB.
+
+Concretely, the system implements two entry-only variants:
+\begin{itemize}
+  \item a low-latency reactive engine (event-driven) using a driftless lognormal approximation plus shrinkage and standard fractional Kelly, and
+  \item a polling engine that enriches the estimate with an RN-JD drift correction in log-odds space, belief-volatility tracking, and jump-regime gating, and sizes with belief-vol-adjusted Kelly.
+\end{itemize}
+
+The document also makes explicit the non-negotiable ``plumbing'' assumptions: price-dependent 15-minute fees $f(p)$, staleness-bounded orderbook reads, IOC execution semantics, and oracle basis risk (Chainlink vs Binance).
+
+\end{document}

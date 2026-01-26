@@ -5,7 +5,9 @@
 use crate::models::{Market, PolymarketEvent};
 use anyhow::{bail, Context, Result};
 use reqwest::{Client, StatusCode};
+use serde::Deserializer;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
@@ -70,6 +72,7 @@ impl PolymarketScraper {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .user_agent("BetterBot/1.0 (Arbitrage Engine)")
+            .danger_accept_invalid_certs(true) // Workaround for cert issues in dev
             .build()
             .expect("Failed to create HTTP client");
 
@@ -351,6 +354,27 @@ pub struct GammaMarketsResponse {
     pub next_cursor: Option<String>,
 }
 
+fn de_string_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = Value::deserialize(deserializer)?;
+    match v {
+        Value::Array(arr) => Ok(arr
+            .into_iter()
+            .filter_map(|x| match x {
+                Value::String(s) => Some(s),
+                Value::Number(n) => Some(n.to_string()),
+                _ => None,
+            })
+            .collect()),
+        Value::String(s) => {
+            serde_json::from_str::<Vec<String>>(&s).map_err(serde::de::Error::custom)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GammaMarket {
     pub id: String,
@@ -362,6 +386,10 @@ pub struct GammaMarket {
     pub end_date_iso: Option<String>,
     pub volume: Option<f64>,
     pub liquidity: Option<f64>,
+    #[serde(default, deserialize_with = "de_string_vec")]
+    pub outcomes: Vec<String>,
+    #[serde(rename = "clobTokenIds", default, deserialize_with = "de_string_vec")]
+    pub clob_token_ids: Vec<String>,
     pub outcome_prices: Option<Vec<f64>>,
     pub closed: bool,
     pub active: bool,

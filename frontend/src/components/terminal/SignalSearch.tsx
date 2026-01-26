@@ -28,7 +28,7 @@ export const SignalSearch: React.FC<SignalSearchProps> = ({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder="Search markets (keywords, phrases, market_slug:btc)..."
-            className="w-full bg-void border border-grey/30 px-4 py-2 text-[13px] font-mono text-white placeholder-grey/60 focus:border-better-blue focus:outline-none transition-colors"
+            className="w-full bg-void border border-grey/30 px-4 py-2 text-[13px] font-mono text-fg placeholder-grey/60 focus:border-better-blue focus:outline-none transition-colors"
             spellCheck={false}
           />
 
@@ -36,7 +36,7 @@ export const SignalSearch: React.FC<SignalSearchProps> = ({
             <button
               type="button"
               onClick={() => onChange('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-grey/60 hover:text-white transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-fg/70 hover:text-fg transition-colors"
               aria-label="Clear search"
             >
               x
@@ -47,11 +47,11 @@ export const SignalSearch: React.FC<SignalSearchProps> = ({
         {trimmed && (
           <div className="flex items-center gap-2 whitespace-nowrap">
             {mode === 'local' && (
-              <span className="text-[10px] font-mono text-grey/80 border border-grey/30 px-2 py-1">
+              <span className="text-[10px] font-mono text-fg/90 border border-grey/30 px-2 py-1">
                 LOCAL
               </span>
             )}
-            <div className="text-[12px] font-mono text-grey/70 tabular-nums">
+            <div className="text-[12px] font-mono text-fg/80 tabular-nums">
               {isSearching
                 ? 'SEARCHING...'
                 : `${resultsCount} ${resultsCount === 1 ? 'MATCH' : 'MATCHES'}`}
@@ -67,7 +67,7 @@ export const SignalSearch: React.FC<SignalSearchProps> = ({
               ? 'text-red-400'
               : banner.tone === 'warning'
                 ? 'text-yellow-300'
-                : 'text-grey/60'
+                : 'text-fg/70'
           }`}
         >
           {banner.message}
@@ -75,7 +75,7 @@ export const SignalSearch: React.FC<SignalSearchProps> = ({
       )}
 
       {trimmed && !banner?.message && !isSearching && resultsCount === 0 && (
-        <div className="mt-2 text-[11px] font-mono text-grey/60">
+        <div className="mt-2 text-[11px] font-mono text-fg/70">
           No matches for "{trimmed}". Try different keywords or clear search.
         </div>
       )}

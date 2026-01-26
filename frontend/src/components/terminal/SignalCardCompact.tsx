@@ -34,8 +34,8 @@ function tabButtonClass(active: boolean): string {
   return [
     'px-2 py-1 text-[11px] font-mono border transition-colors',
     active
-      ? 'border-white bg-white text-black'
-      : 'border-grey/30 text-grey/80 hover:text-white hover:border-grey/50',
+      ? 'border-fg bg-fg text-void'
+      : 'border-grey/30 text-fg/90 hover:text-fg hover:border-grey/50',
   ].join(' ');
 }
 
@@ -200,14 +200,14 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
   };
 
   return (
-    <div className="border-b border-grey/10 bg-surface hover:bg-white/5 transition-colors">
+    <div className="border-b border-grey/10 bg-surface hover:bg-fg/5 transition-colors">
       <div className="px-4 md:px-6 py-4">
         {/* Row 1 */}
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="text-[11px] font-mono text-grey/80">[{getSignalLabel(signal.signal_type.type)}]</div>
-            <div className="text-[11px] font-mono text-grey/80 truncate">{formatTimestamp(signal.detected_at)}</div>
-            <div className="text-[11px] font-mono text-grey/80 truncate">{walletShort}</div>
+            <div className="text-[11px] font-mono text-fg/90">[{getSignalLabel(signal.signal_type.type)}]</div>
+            <div className="text-[11px] font-mono text-fg/90 truncate">{formatTimestamp(signal.detected_at)}</div>
+            <div className="text-[11px] font-mono text-fg/90 truncate">{walletShort}</div>
             <div className="text-[11px] font-mono text-better-blue-lavender truncate">{formatConfidence(signal.confidence)}</div>
           </div>
 
@@ -218,7 +218,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
               className={`border px-2 py-1 text-[11px] font-mono transition-colors ${
                 isTradeExpanded
                   ? 'border-success bg-success/20 text-success'
-                  : 'border-white bg-white text-black hover:bg-white/90'
+                  : 'border-fg bg-fg text-void hover:bg-fg/90'
               }`}
             >
               {isTradeExpanded ? '[CLOSE]' : '[TRADE]'}
@@ -226,7 +226,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
             <button
               type="button"
               onClick={() => open('DETAILS')}
-              className="border border-grey/30 px-2 py-1 text-[11px] font-mono text-grey/80 hover:text-white hover:border-grey/50"
+              className="border border-grey/30 px-2 py-1 text-[11px] font-mono text-fg/90 hover:text-fg hover:border-grey/50"
             >
               [OPEN]
             </button>
@@ -236,7 +236,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
         {/* Row 2 */}
         <div className="mt-1 flex items-center justify-between gap-3">
           <div
-            className="text-[13px] font-mono font-semibold text-white truncate cursor-pointer"
+            className="text-[13px] font-mono font-semibold text-fg truncate cursor-pointer"
             title={marketTitle}
             onClick={() => open('DETAILS')}
           >
@@ -248,7 +248,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
                 key={t}
                 type="button"
                 onClick={() => open(t)}
-                className="text-[11px] font-mono text-grey/80 hover:text-white"
+                className="text-[11px] font-mono text-fg/90 hover:text-fg"
               >
                 [{t}]
               </button>
@@ -260,27 +260,27 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
         <div className="mt-3 grid grid-cols-9 gap-2">
           <div>
             <div className="text-[10px] text-better-blue-light/90">PRICE</div>
-            <div className="text-[12px] font-mono text-white tabular-nums">
+            <div className="text-[12px] font-mono text-fg tabular-nums">
               {typeof displayPrice === 'number' ? formatPrice(displayPrice) : '---'}
             </div>
           </div>
           <div>
             <div className="text-[10px] text-better-blue-light/90">SIZE</div>
-            <div className="text-[12px] font-mono text-white tabular-nums">
+            <div className="text-[12px] font-mono text-fg tabular-nums">
               {typeof displaySizeUsd === 'number' ? `$${displaySizeUsd.toFixed(2)}` : '---'}
             </div>
           </div>
           <div>
             <div className="text-[10px] text-better-blue-light/90">ACTION</div>
             <div className={`text-[12px] font-mono font-semibold truncate ${
-              orderSide === 'BUY' ? 'text-success' : orderSide === 'SELL' ? 'text-danger' : 'text-white'
+              orderSide === 'BUY' ? 'text-success' : orderSide === 'SELL' ? 'text-danger' : 'text-fg'
             }`}>
               {orderSide}
             </div>
           </div>
           <div>
             <div className="text-[10px] text-better-blue-light/90">OUTCOME</div>
-            <div className="text-[12px] font-mono text-white truncate">{outcome}</div>
+            <div className="text-[12px] font-mono text-fg truncate">{outcome}</div>
           </div>
           <div>
             <div className="text-[10px] text-better-blue-light/90">Δ</div>
@@ -290,7 +290,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
           </div>
           <div>
             <div className="text-[10px] text-better-blue-light/90">SPREAD</div>
-            <div className="text-[12px] font-mono text-white tabular-nums">
+            <div className="text-[12px] font-mono text-fg tabular-nums">
               {typeof derived?.spread_at_entry === 'number' ? formatPrice(derived.spread_at_entry) : '---'}
             </div>
           </div>
@@ -308,7 +308,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
           </div>
           <div>
             <div className="text-[10px] text-better-blue-light/90">METADATA</div>
-            <div className="text-[12px] font-mono text-white truncate">{signal.context_status ?? '---'}</div>
+            <div className="text-[12px] font-mono text-fg truncate">{signal.context_status ?? '---'}</div>
           </div>
         </div>
       </div>
@@ -324,27 +324,27 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
             {/* Mini orderbook preview */}
             {canFetchBook && (
               <div className="grid grid-cols-4 gap-2">
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="text-[10px] text-better-blue-light/90 uppercase">Bid</div>
                   <div className="text-[13px] font-mono text-success tabular-nums">
                     {bookLoading ? '...' : typeof bookData?.best_bid === 'number' ? formatPrice(bookData.best_bid) : '---'}
                   </div>
                 </div>
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="text-[10px] text-better-blue-light/90 uppercase">Ask</div>
                   <div className="text-[13px] font-mono text-danger tabular-nums">
                     {bookLoading ? '...' : typeof bookData?.best_ask === 'number' ? formatPrice(bookData.best_ask) : '---'}
                   </div>
                 </div>
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="text-[10px] text-better-blue-light/90 uppercase">Spread</div>
-                  <div className="text-[13px] font-mono text-white tabular-nums">
+                  <div className="text-[13px] font-mono text-fg tabular-nums">
                     {bookLoading ? '...' : typeof bookData?.spread === 'number' ? formatPrice(bookData.spread) : '---'}
                   </div>
                 </div>
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="text-[10px] text-better-blue-light/90 uppercase">Imb</div>
-                  <div className="text-[13px] font-mono text-white tabular-nums">
+                  <div className="text-[13px] font-mono text-fg tabular-nums">
                     {bookLoading ? '...' : typeof bookData?.imbalance_10bps === 'number' ? bookData.imbalance_10bps.toFixed(2) : '---'}
                   </div>
                 </div>
@@ -352,9 +352,9 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
             )}
 
             {/* Trade controls */}
-            <div className="bg-white/5 rounded p-3 space-y-3">
+            <div className="bg-fg/5 rounded p-3 space-y-3">
               <div className="flex items-center justify-between">
-                <div className="text-[11px] font-mono text-grey/80">One-click trade (Polymarket)</div>
+                <div className="text-[11px] font-mono text-fg/90">One-click trade (Polymarket)</div>
                 <div className={`text-[10px] font-mono ${tradingEnabled ? 'text-success' : 'text-warning'}`}>
                   {tradingEnabled ? 'ENABLED' : 'DISABLED'}
                 </div>
@@ -409,7 +409,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
                   <input
                     value={String(tradeNotionalUsd)}
                     onChange={(e) => setTradeNotionalUsd(Number(e.target.value) || 0)}
-                    className="ml-auto w-[100px] bg-black/50 border border-grey/30 px-2 py-1 text-[12px] font-mono text-white tabular-nums"
+                    className="ml-auto w-[100px] bg-void/50 border border-grey/30 px-2 py-1 text-[12px] font-mono text-fg tabular-nums"
                     inputMode="decimal"
                   />
                 </div>
@@ -438,7 +438,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
                     onChange={(e) => setTradeCustomPrice(e.target.value)}
                     disabled={tradePriceMode !== 'CUSTOM'}
                     placeholder="$0.50"
-                    className="mt-1 w-full bg-black/50 border border-grey/30 px-2 py-1 text-[12px] font-mono text-white tabular-nums disabled:opacity-40"
+                    className="mt-1 w-full bg-void/50 border border-grey/30 px-2 py-1 text-[12px] font-mono text-fg tabular-nums disabled:opacity-40"
                   />
                 </div>
               </div>
@@ -446,7 +446,7 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
 
             {/* ARM / SUBMIT */}
             <div className="flex items-center justify-between">
-              <div className="text-[10px] font-mono text-grey/70 truncate">
+              <div className="text-[10px] font-mono text-fg/80 truncate">
                 {marketSlugForBook ? `market=${marketSlugForBook}` : ''}
                 {outcomeForBook ? ` • outcome=${outcomeForBook}` : ''}
               </div>
@@ -465,14 +465,14 @@ export const SignalCardCompact = memo<SignalCardCompactProps>(({ signal, onOpenI
                   type="button"
                   disabled={!tradingEnabled || !tradeArmed}
                   onClick={handleTradeSubmit}
-                  className="border border-grey/30 px-3 py-1 text-[11px] font-mono text-grey/80 hover:text-white hover:border-grey/50 disabled:opacity-40"
+                  className="border border-grey/30 px-3 py-1 text-[11px] font-mono text-fg/90 hover:text-fg hover:border-grey/50 disabled:opacity-40"
                 >
                   [SUBMIT]
                 </button>
               </div>
             </div>
 
-            {tradeStatus && <div className="text-[11px] font-mono text-grey/80">{tradeStatus}</div>}
+            {tradeStatus && <div className="text-[11px] font-mono text-fg/90">{tradeStatus}</div>}
           </div>
         </div>
       </div>

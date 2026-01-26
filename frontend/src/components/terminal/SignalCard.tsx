@@ -270,10 +270,10 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
   }, [ctx?.order?.title, signal.details.market_title, signal.market_slug]);
 
   const pnlColor = (val: number | undefined) => {
-    if (val === undefined) return 'text-grey/80';
+    if (val === undefined) return 'text-fg/90';
     if (val > 0) return 'text-success';
     if (val < 0) return 'text-danger';
-    return 'text-white';
+    return 'text-fg';
   };
 
   // CLOB /book expects an outcome-level `clobTokenId` (a large integer string).
@@ -480,23 +480,23 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
             </span>
           )}
         </div>
-        <span className="text-sm font-mono font-bold text-white">{formatConfidence(signal.confidence)}</span>
+        <span className="text-sm font-mono font-bold text-fg">{formatConfidence(signal.confidence)}</span>
       </div>
 
       {/* Market Title */}
-      <div className="mb-3 font-mono text-white text-sm">
+      <div className="mb-3 font-mono text-fg text-sm">
         {marketTitle}
       </div>
 
       {/* Core Metrics - Always Shown */}
-      <div className="grid grid-cols-4 gap-3 p-2 bg-white/5 rounded">
+      <div className="grid grid-cols-4 gap-3 p-2 bg-fg/5 rounded">
         <div>
           <div className="text-[10px] text-better-blue-light/70 uppercase tracking-wide">Price</div>
-          <div className="font-mono text-white text-sm mt-0.5">{formatPrice(price)}</div>
+          <div className="font-mono text-fg text-sm mt-0.5">{formatPrice(price)}</div>
         </div>
         <div>
           <div className="text-[10px] text-better-blue-light/70 uppercase tracking-wide">Size</div>
-          <div className="font-mono text-white text-sm mt-0.5">{positionDisplay}</div>
+          <div className="font-mono text-fg text-sm mt-0.5">{positionDisplay}</div>
         </div>
         <div>
           <div className="text-[10px] text-better-blue-light/70 uppercase tracking-wide">Side</div>
@@ -504,7 +504,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
         </div>
         <div>
           <div className="text-[10px] text-better-blue-light/70 uppercase tracking-wide">Action</div>
-          <div className={`font-mono text-sm font-semibold mt-0.5 ${isBuy ? 'text-success' : isSell ? 'text-danger' : 'text-white'}`}>
+          <div className={`font-mono text-sm font-semibold mt-0.5 ${isBuy ? 'text-success' : isSell ? 'text-danger' : 'text-fg'}`}>
             {isBuy ? 'BUY' : isSell ? 'SELL' : actionText}
           </div>
         </div>
@@ -517,7 +517,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
             {/* Price Delta */}
             <div>
               <div className="text-[9px] text-better-blue-light/70 uppercase">Δ Price</div>
-              <div className={`font-mono text-xs ${typeof ctxDeltaBps === 'number' ? (ctxDeltaBps > 0 ? 'text-success' : ctxDeltaBps < 0 ? 'text-danger' : 'text-white') : 'text-grey/70'}`}>
+              <div className={`font-mono text-xs ${typeof ctxDeltaBps === 'number' ? (ctxDeltaBps > 0 ? 'text-success' : ctxDeltaBps < 0 ? 'text-danger' : 'text-fg') : 'text-fg/80'}`}>
                 {typeof ctxDeltaBps === 'number' ? `${ctxDeltaBps > 0 ? '+' : ''}${ctxDeltaBps.toFixed(0)} bps` : '---'}
               </div>
               <div className="font-mono text-[10px] text-better-blue-lavender">
@@ -529,21 +529,21 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
             {/* Current Price */}
             <div>
               <div className="text-[9px] text-better-blue-light/70 uppercase">Now</div>
-              <div className="font-mono text-xs text-white">
+              <div className="font-mono text-xs text-fg">
                 {typeof ctxLatestPrice === 'number' ? formatPrice(ctxLatestPrice) : '---'}
               </div>
             </div>
             {/* Spread */}
             <div>
               <div className="text-[9px] text-better-blue-light/70 uppercase">Spread</div>
-              <div className="font-mono text-xs text-white">
+              <div className="font-mono text-xs text-fg">
                 {typeof ctxSpread === 'number' ? `${(ctxSpread * 100).toFixed(1)}%` : '---'}
               </div>
             </div>
             {/* Volume */}
             <div>
               <div className="text-[9px] text-better-blue-light/70 uppercase">Volume</div>
-              <div className="font-mono text-xs text-white">
+              <div className="font-mono text-xs text-fg">
                 {typeof marketVolume === 'number' ? formatVolumeCompact(marketVolume) : '---'}
               </div>
             </div>
@@ -608,11 +608,11 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
           )}
 
           {showMarketPanel && (
-            <div className="bg-white/5 rounded p-2">
+            <div className="bg-fg/5 rounded p-2">
               <div className="text-[9px] text-better-blue-light/70 uppercase mb-1">Market</div>
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-[10px] text-white truncate">{marketTitle}</span>
+                  <span className="font-mono text-[10px] text-fg truncate">{marketTitle}</span>
                 </div>
                 {signal.market_slug && (
                   <div className="flex items-center justify-between gap-2">
@@ -623,7 +623,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                         e.stopPropagation();
                         copyToClipboard(signal.market_slug);
                       }}
-                      className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+                      className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
                     >
                       [COPY]
                     </button>
@@ -638,7 +638,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                         e.stopPropagation();
                         copyToClipboard(outcomeForBook);
                       }}
-                      className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+                      className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
                     >
                       [COPY]
                     </button>
@@ -653,7 +653,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                         e.stopPropagation();
                         copyToClipboard(conditionId);
                       }}
-                      className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+                      className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
                     >
                       [COPY]
                     </button>
@@ -671,7 +671,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                         e.stopPropagation();
                         copyToClipboard(clobTokenIdForBook);
                       }}
-                      className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+                      className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
                     >
                       [COPY]
                     </button>
@@ -682,7 +682,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
           )}
 
           {showWalletPanel && walletAddress && (
-            <div className="bg-white/5 rounded p-2">
+            <div className="bg-fg/5 rounded p-2">
               <div className="text-[9px] text-better-blue-light/70 uppercase mb-1">Wallet</div>
               <div className="flex items-center justify-between gap-2">
                 <span className="font-mono text-[10px] text-better-blue-lavender truncate">{walletAddress}</span>
@@ -692,7 +692,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                     e.stopPropagation();
                     copyToClipboard(walletAddress);
                   }}
-                  className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+                  className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
                 >
                   [COPY]
                 </button>
@@ -706,25 +706,25 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
               <div className="grid grid-cols-4 gap-2">
                 <div>
                   <div className="text-[9px] text-better-blue-light/60">7D</div>
-                  <div className="font-mono text-xs text-white">
+                  <div className="font-mono text-xs text-fg">
                     {typeof sharpe7d === 'number' ? sharpe7d.toFixed(2) : '---'}
                   </div>
                 </div>
                 <div>
                   <div className="text-[9px] text-better-blue-light/60">14D</div>
-                  <div className="font-mono text-xs text-white">
+                  <div className="font-mono text-xs text-fg">
                     {typeof sharpe14d === 'number' ? sharpe14d.toFixed(2) : '---'}
                   </div>
                 </div>
                 <div>
                   <div className="text-[9px] text-better-blue-light/60">30D</div>
-                  <div className="font-mono text-xs text-white">
+                  <div className="font-mono text-xs text-fg">
                     {typeof sharpe30d === 'number' ? sharpe30d.toFixed(2) : '---'}
                   </div>
                 </div>
                 <div>
                   <div className="text-[9px] text-better-blue-light/60">90D</div>
-                  <div className="font-mono text-xs text-white">
+                  <div className="font-mono text-xs text-fg">
                     {typeof sharpe90d === 'number' ? sharpe90d.toFixed(2) : '---'}
                   </div>
                 </div>
@@ -738,13 +738,13 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <div className="text-[9px] text-better-blue-light/60">Trades</div>
-                  <div className="font-mono text-xs text-white">
+                  <div className="font-mono text-xs text-fg">
                     {typeof tradeCount24h === 'number' ? tradeCount24h : '---'}
                   </div>
                 </div>
                 <div>
                   <div className="text-[9px] text-better-blue-light/60">Avg Size</div>
-                  <div className="font-mono text-xs text-white">
+                  <div className="font-mono text-xs text-fg">
                     {typeof avgTrade24h === 'number' ? formatVolume(avgTrade24h) : '---'}
                   </div>
                 </div>
@@ -762,31 +762,31 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                     e.stopPropagation();
                     fetchWalletAnalytics(true);
                   }}
-                  className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+                  className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
                   disabled={!canFetchAnalytics || analyticsLoading}
                 >
                   [REFRESH]
                 </button>
               </div>
 
-              {!canFetchAnalytics && <div className="text-[10px] text-grey/70 font-mono">No wallet address</div>}
+              {!canFetchAnalytics && <div className="text-[10px] text-fg/80 font-mono">No wallet address</div>}
               {analyticsError && <div className="text-[10px] text-danger font-mono">{analyticsError}</div>}
-              {analyticsLoading && <div className="text-[10px] text-grey/70 font-mono">Loading…</div>}
+              {analyticsLoading && <div className="text-[10px] text-fg/80 font-mono">Loading…</div>}
 
               <div className="space-y-2">
-                <div className="bg-white/5 rounded p-2 flex items-center justify-between gap-3">
+                <div className="bg-fg/5 rounded p-2 flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[9px] text-better-blue-light/60 uppercase">Wallet (Realized) — USD PnL-to-date</div>
                     <div className="flex items-center gap-2">
-                      <div className="w-[46px] text-right text-[9px] font-mono text-grey/80">
+                      <div className="w-[46px] text-right text-[9px] font-mono text-fg/90">
                         {typeof walletCurveMeta?.min === 'number' ? formatPnL(walletCurveMeta.min) : ''}
                       </div>
                       <Sparkline values={walletCurveSeries} width={170} height={32} />
-                      <div className="w-[46px] text-left text-[9px] font-mono text-grey/80">
+                      <div className="w-[46px] text-left text-[9px] font-mono text-fg/90">
                         {typeof walletCurveMeta?.max === 'number' ? formatPnL(walletCurveMeta.max) : ''}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mt-1 text-[9px] font-mono text-grey/80">
+                    <div className="flex items-center justify-between mt-1 text-[9px] font-mono text-fg/90">
                       <span>{formatDayLabel(walletCurveMeta?.start)}</span>
                       <span>{formatDayLabel(walletCurveMeta?.end)}</span>
                     </div>
@@ -795,40 +795,40 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                     <div className="text-[9px] font-mono text-better-blue-lavender">{walletAnalytics?.lookback_days ?? 90}D</div>
                     <div className="mt-1">
                       <div className="text-[9px] text-better-blue-light/60">ROE</div>
-                      <div className="text-[10px] font-mono text-white">
+                      <div className="text-[10px] font-mono text-fg">
                         {formatPct(walletAnalytics?.wallet_roe_pct, 1)}
                       </div>
                     </div>
                     <div className="mt-1">
                       <div className="text-[9px] text-better-blue-light/60">WR</div>
-                      <div className="text-[10px] font-mono text-white">
+                      <div className="text-[10px] font-mono text-fg">
                         {formatWinRate(walletAnalytics?.wallet_win_rate)}
                       </div>
                     </div>
                     <div className="mt-1">
                       <div className="text-[9px] text-better-blue-light/60">Profit Factor</div>
-                      <div className="text-[10px] font-mono text-white">
+                      <div className="text-[10px] font-mono text-fg">
                         {formatProfitFactor(walletAnalytics?.wallet_profit_factor)}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="bg-white/5 rounded p-2 flex items-center justify-between gap-3">
+                <div className="bg-fg/5 rounded p-2 flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[9px] text-better-blue-light/60 uppercase">
                       Copy (Fixed ${walletAnalytics?.fixed_buy_notional_usd ?? 1}/ORDER) — USD PnL-to-date
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className="w-[46px] text-right text-[9px] font-mono text-grey/80">
+                      <div className="w-[46px] text-right text-[9px] font-mono text-fg/90">
                         {typeof copyCurveMeta?.min === 'number' ? formatPnL(copyCurveMeta.min) : ''}
                       </div>
                       <Sparkline values={copyCurveSeries} width={170} height={32} />
-                      <div className="w-[46px] text-left text-[9px] font-mono text-grey/80">
+                      <div className="w-[46px] text-left text-[9px] font-mono text-fg/90">
                         {typeof copyCurveMeta?.max === 'number' ? formatPnL(copyCurveMeta.max) : ''}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mt-1 text-[9px] font-mono text-grey/80">
+                    <div className="flex items-center justify-between mt-1 text-[9px] font-mono text-fg/90">
                       <span>{formatDayLabel(copyCurveMeta?.start)}</span>
                       <span>{formatDayLabel(copyCurveMeta?.end)}</span>
                     </div>
@@ -837,19 +837,19 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                     <div className="text-[9px] font-mono text-better-blue-lavender">{walletAnalytics?.lookback_days ?? 90}D</div>
                     <div className="mt-1">
                       <div className="text-[9px] text-better-blue-light/60">ROE</div>
-                      <div className="text-[10px] font-mono text-white">
+                      <div className="text-[10px] font-mono text-fg">
                         {formatPct(walletAnalytics?.copy_roe_pct, 1)}
                       </div>
                     </div>
                     <div className="mt-1">
                       <div className="text-[9px] text-better-blue-light/60">WR</div>
-                      <div className="text-[10px] font-mono text-white">
+                      <div className="text-[10px] font-mono text-fg">
                         {formatWinRate(walletAnalytics?.copy_win_rate)}
                       </div>
                     </div>
                     <div className="mt-1">
                       <div className="text-[9px] text-better-blue-light/60">Profit Factor</div>
-                      <div className="text-[10px] font-mono text-white">
+                      <div className="text-[10px] font-mono text-fg">
                         {formatProfitFactor(walletAnalytics?.copy_profit_factor)}
                       </div>
                     </div>
@@ -857,7 +857,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                 </div>
 
                 {walletAnalytics?.copy_roe_denom_usd && (
-                  <div className="text-[9px] font-mono text-grey/70">
+                  <div className="text-[9px] font-mono text-fg/80">
                     ROE denom ≈ {formatVolumeCompact(walletAnalytics.copy_roe_denom_usd)} gross buys (copy)
                     {walletAnalytics.wallet_roe_denom_usd
                       ? ` • ${formatVolumeCompact(walletAnalytics.wallet_roe_denom_usd)} gross buys (wallet)`
@@ -871,7 +871,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                     <div className="grid grid-cols-4 gap-2">
                       <div>
                         <div className="text-[9px] text-better-blue-light/60">7D</div>
-                        <div className="font-mono text-xs text-white">
+                        <div className="font-mono text-xs text-fg">
                           {typeof walletAnalytics.copy_sharpe_7d === 'number'
                             ? walletAnalytics.copy_sharpe_7d.toFixed(2)
                             : '---'}
@@ -879,7 +879,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                       </div>
                       <div>
                         <div className="text-[9px] text-better-blue-light/60">14D</div>
-                        <div className="font-mono text-xs text-white">
+                        <div className="font-mono text-xs text-fg">
                           {typeof walletAnalytics.copy_sharpe_14d === 'number'
                             ? walletAnalytics.copy_sharpe_14d.toFixed(2)
                             : '---'}
@@ -887,7 +887,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                       </div>
                       <div>
                         <div className="text-[9px] text-better-blue-light/60">30D</div>
-                        <div className="font-mono text-xs text-white">
+                        <div className="font-mono text-xs text-fg">
                           {typeof walletAnalytics.copy_sharpe_30d === 'number'
                             ? walletAnalytics.copy_sharpe_30d.toFixed(2)
                             : '---'}
@@ -895,7 +895,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                       </div>
                       <div>
                         <div className="text-[9px] text-better-blue-light/60">90D</div>
-                        <div className="font-mono text-xs text-white">
+                        <div className="font-mono text-xs text-fg">
                           {typeof walletAnalytics.copy_sharpe_90d === 'number'
                             ? walletAnalytics.copy_sharpe_90d.toFixed(2)
                             : '---'}
@@ -918,7 +918,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                     e.stopPropagation();
                     fetchBook();
                   }}
-                  className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+                  className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
                   disabled={!canFetchBook || bookLoading}
                 >
                   [REFRESH]
@@ -926,13 +926,13 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
               </div>
 
               {!canFetchBook && (
-                <div className="text-[10px] text-grey/70 font-mono">Missing token_id or (market_slug, outcome)</div>
+                <div className="text-[10px] text-fg/80 font-mono">Missing token_id or (market_slug, outcome)</div>
               )}
               {bookError && <div className="text-[10px] text-danger font-mono">{bookError}</div>}
-              {bookLoading && <div className="text-[10px] text-grey/70 font-mono">Loading…</div>}
+              {bookLoading && <div className="text-[10px] text-fg/80 font-mono">Loading…</div>}
 
               {bookData && (
-                <div className="bg-white/5 rounded p-2">
+                <div className="bg-fg/5 rounded p-2">
                   <div className="grid grid-cols-3 gap-2 mb-2">
                     <div>
                       <div className="text-[9px] text-better-blue-light/60">Bid</div>
@@ -948,7 +948,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                     </div>
                     <div>
                       <div className="text-[9px] text-better-blue-light/60">Imb (10bps)</div>
-                      <div className="font-mono text-xs text-white">
+                      <div className="font-mono text-xs text-fg">
                         {typeof bookData.imbalance_10bps === 'number' ? bookData.imbalance_10bps.toFixed(2) : '---'}
                       </div>
                     </div>
@@ -958,15 +958,15 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                     <div className="grid grid-cols-3 gap-2 mb-2">
                       <div>
                         <div className="text-[9px] text-better-blue-light/60">Depth 10bps</div>
-                        <div className="font-mono text-xs text-white">{formatVolume(bookData.depth.bps_10)}</div>
+                      <div className="font-mono text-xs text-fg">{formatVolume(bookData.depth.bps_10)}</div>
                       </div>
                       <div>
                         <div className="text-[9px] text-better-blue-light/60">Depth 25bps</div>
-                        <div className="font-mono text-xs text-white">{formatVolume(bookData.depth.bps_25)}</div>
+                      <div className="font-mono text-xs text-fg">{formatVolume(bookData.depth.bps_25)}</div>
                       </div>
                       <div>
                         <div className="text-[9px] text-better-blue-light/60">Depth 50bps</div>
-                        <div className="font-mono text-xs text-white">{formatVolume(bookData.depth.bps_50)}</div>
+                      <div className="font-mono text-xs text-fg">{formatVolume(bookData.depth.bps_50)}</div>
                       </div>
                     </div>
                   )}
@@ -1036,7 +1036,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
               setShowDetails(true);
               setShowMarketPanel((v) => !v);
             }}
-            className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+            className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
           >
             [{showMarketPanel ? 'MARKET-' : 'MARKET'}]
           </button>
@@ -1049,7 +1049,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                 setShowDetails(true);
                 setShowWalletPanel((v) => !v);
               }}
-              className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+              className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
             >
               [{showWalletPanel ? 'WALLET-' : 'WALLET'}]
             </button>
@@ -1070,7 +1070,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
                 return next;
               });
             }}
-            className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+            className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
           >
             [{showDetails ? 'HIDE' : 'DETAILS'}]
           </button>
@@ -1082,7 +1082,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
               setShowDetails(true);
               setShowChart((v) => !v);
             }}
-            className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+            className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
             disabled={!canFetchAnalytics}
           >
             [{showChart ? 'CHART-' : 'CHART'}]
@@ -1095,7 +1095,7 @@ const SignalCardComponent: React.FC<SignalCardProps> = ({ signal }) => {
               setShowDetails(true);
               setShowBook((v) => !v);
             }}
-            className="text-[9px] font-mono text-better-blue-lavender hover:text-white transition-colors"
+            className="text-[9px] font-mono text-better-blue-lavender hover:text-fg transition-colors"
           >
             [{showBook ? 'BOOK-' : 'BOOK'}]
           </button>

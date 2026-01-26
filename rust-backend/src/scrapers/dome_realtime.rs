@@ -82,6 +82,7 @@ pub struct Pagination {
 }
 
 /// Real-time polling client with connection pooling
+#[derive(Clone)]
 pub struct DomeRealtimeClient {
     client: Client,
     tracked_wallets: HashMap<String, String>, // address -> label

@@ -67,6 +67,9 @@ cleanup() {
     echo "🛑 Shutting down BetterBot..."
     kill $BACKEND_PID 2>/dev/null || true
     kill $FRONTEND_PID 2>/dev/null || true
+    # cargo/npm can spawn child processes; ensure ports are freed
+    lsof -ti:3000 | xargs kill -9 2>/dev/null || true
+    lsof -ti:5173 | xargs kill -9 2>/dev/null || true
     echo "✓ Shutdown complete"
     echo ""
     echo "[SEE YOU SPACE COWBOY...]"
@@ -80,7 +83,7 @@ echo "🚀 Starting Rust backend..."
 cd rust-backend
 cargo build --release 2>&1 | grep -E "(Compiling|Finished)" &
 sleep 2
-cargo run --release > /tmp/betterbot-backend.log 2>&1 &
+cargo run --release --bin betterbot > /tmp/betterbot-backend.log 2>&1 &
 BACKEND_PID=$!
 cd ..
 
@@ -100,15 +103,20 @@ echo ""
 # Start React frontend
 echo "🎨 Starting React frontend (Nostromo Interface)..."
 cd frontend
-npm run dev > /tmp/betterbot-frontend.log 2>&1 &
+npm run dev -- --host 0.0.0.0 --port 5173 --strictPort > /tmp/betterbot-frontend.log 2>&1 &
 FRONTEND_PID=$!
 cd ..
 
 echo "⏳ Waiting for frontend to start..."
 sleep 3
 
-echo "✓ Frontend started (PID: $FRONTEND_PID)"
-echo "   → http://localhost:5173"
+if ! curl -sSf http://localhost:5173/ > /dev/null 2>&1; then
+    echo "⚠️ Frontend check failed. Check logs:"
+    tail -n 20 /tmp/betterbot-frontend.log
+else
+    echo "✓ Frontend started (PID: $FRONTEND_PID)"
+    echo "   → http://localhost:5173"
+fi
 echo ""
 
 echo "╔═══════════════════════════════════════════════════════════════╗"

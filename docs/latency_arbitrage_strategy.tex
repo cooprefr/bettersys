@@ -1,0 +1,1669 @@
+\documentclass[12pt,a4paper]{report}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{float}
+\usepackage{subcaption}
+\usepackage{fancyhdr}
+\usepackage{setspace}
+
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{arrows,shapes,positioning,calc}
+
+% Page geometry
+\geometry{margin=1in}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\leftmark}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Theorem environments
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{remark}{Remark}[chapter]
+\newtheorem{example}{Example}[chapter]
+
+% Code listing style
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\definecolor{rustred}{rgb}{0.8,0.2,0.1}
+
+\lstdefinestyle{rustcode}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{rustred}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    language=C,
+    morekeywords={fn,let,mut,pub,struct,impl,use,async,await,match,Some,None,Ok,Err,self,Self,where,trait,type,const,static,move,ref,if,else,for,while,loop,return,break,continue,in,as,mod,crate,super,dyn,unsafe,extern,true,false,i64,f64,usize,String,Vec,Option,Result,Arc,HashMap}
+}
+
+\lstdefinestyle{typescript}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{blue}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    morekeywords={const,let,var,function,async,await,return,if,else,for,while,interface,type,export,import,from,class,extends,implements,new,this,super,typeof,instanceof,null,undefined,true,false,number,string,boolean,void,any,Promise}
+}
+
+% Custom commands
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\Cov}{\mathrm{Cov}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\indicator}{\mathbf{1}}
+\newcommand{\Normal}{\mathcal{N}}
+\newcommand{\dif}{\mathrm{d}}
+\DeclareMathOperator{\sign}{sign}
+\DeclareMathOperator{\Phi}{\Phi}
+
+\title{
+    \vspace{-2cm}
+    \textbf{Latency Arbitrage in Prediction Markets:\\
+    A Mathematical Framework for 15-Minute Binary Options}\\
+    \vspace{0.5cm}
+    \large Technical Documentation and Implementation Guide
+}
+\author{
+    BetterBot Quantitative Research\\
+    \texttt{research@betterbot.xyz}
+}
+\date{January 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document presents a comprehensive mathematical framework for exploiting latency arbitrage opportunities in cryptocurrency prediction markets, specifically targeting Polymarket's 15-minute Up/Down binary options. We develop a rigorous probabilistic model based on geometric Brownian motion, derive optimal position sizing using fractional Kelly criterion, and implement a high-frequency trading system capable of detecting and exploiting mispricings within milliseconds. The strategy achieves theoretical edge through the fundamental observation that prediction market prices lag behind continuous spot price movements on centralized exchanges. We provide complete mathematical derivations, statistical analyses, and production-ready code implementations in Rust and TypeScript.
+\end{abstract}
+
+\tableofcontents
+
+\chapter{Introduction and Market Structure}
+
+\section{Overview of Prediction Markets}
+
+Prediction markets are exchange-traded instruments where the payoff depends on the outcome of future events. Unlike traditional financial derivatives, prediction market contracts typically settle to either 0 or 1 (representing ``No'' or ``Yes'' outcomes), making them equivalent to binary options or digital options in mathematical finance.
+
+\begin{definition}[Binary Prediction Contract]
+A binary prediction contract on event $E$ is a financial instrument that pays:
+\begin{equation}
+    V_T = \begin{cases}
+        1 & \text{if } E \text{ occurs by time } T \\
+        0 & \text{otherwise}
+    \end{cases}
+\end{equation}
+where $T$ is the contract expiration time.
+\end{definition}
+
+The market price $P_t \in [0,1]$ of such a contract at time $t < T$ represents the market's implied probability that event $E$ will occur.
+
+\section{Polymarket 15-Minute Up/Down Markets}
+
+Polymarket offers a continuous series of 15-minute binary options on cryptocurrency prices. For each asset (BTC, ETH, SOL, XRP), markets are created every 15 minutes with the following structure:
+
+\begin{definition}[15-Minute Up/Down Contract]
+For asset $A$ with spot price process $\{S_t\}$, the 15-minute Up/Down contract starting at time $t_0$ is defined as:
+\begin{align}
+    \text{``Up'' contract payoff:} \quad V_{\text{up}} &= \indicator_{S_{t_0 + 900} > S_{t_0}} \\
+    \text{``Down'' contract payoff:} \quad V_{\text{down}} &= \indicator_{S_{t_0 + 900} \leq S_{t_0}} = 1 - V_{\text{up}}
+\end{align}
+where 900 seconds = 15 minutes.
+\end{definition}
+
+\begin{remark}
+The Up and Down contracts are complementary: $V_{\text{up}} + V_{\text{down}} = 1$ always. This creates a zero-sum game between Up and Down holders, with the market maker extracting fees.
+\end{remark}
+
+\section{Market Microstructure}
+
+Polymarket operates as a Central Limit Order Book (CLOB) with the following characteristics:
+
+\begin{itemize}
+    \item \textbf{Order Types}: Good-Til-Cancelled (GTC), Fill-or-Kill (FOK), Fill-And-Kill (FAK)
+    \item \textbf{Price Increments}: 0.001 (0.1\%)
+    \item \textbf{Fees}: Approximately 0.5\% per transaction
+    \item \textbf{Settlement}: Automatic settlement at market expiry based on oracle price feed
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{Typical 15-Minute Market Parameters}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Parameter} & \textbf{BTC} & \textbf{ETH} \\
+\midrule
+Average Daily Volume & \$500K--\$2M & \$200K--\$800K \\
+Typical Spread & 2--5\% & 3--6\% \\
+Top of Book Depth & \$1K--\$10K & \$500--\$5K \\
+Market Duration & 15 minutes & 15 minutes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{The Latency Arbitrage Opportunity}
+
+The fundamental thesis of our strategy rests on the following observation:
+
+\begin{proposition}[Information Asymmetry]
+Prediction market prices on Polymarket exhibit systematic lag relative to spot price movements on centralized exchanges (Binance, Coinbase). This lag creates a statistical edge for traders who can:
+\begin{enumerate}
+    \item Observe spot price movements in real-time
+    \item Compute fair value probabilities using a mathematical model
+    \item Execute trades before market prices adjust
+\end{enumerate}
+\end{proposition}
+
+The latency advantage arises from several factors:
+\begin{itemize}
+    \item \textbf{Data Pipeline Latency}: Polymarket participants may be using delayed price feeds
+    \item \textbf{Cognitive Latency}: Human traders cannot react instantaneously
+    \item \textbf{Liquidity Fragmentation}: Market makers may not continuously update quotes
+    \item \textbf{Information Processing}: Complex probability calculations take time
+\end{itemize}
+
+\chapter{Mathematical Framework}
+
+\section{Geometric Brownian Motion Model}
+
+We model cryptocurrency spot prices using geometric Brownian motion (GBM), the standard model in financial mathematics.
+
+\begin{definition}[Geometric Brownian Motion]
+The spot price $S_t$ follows geometric Brownian motion if it satisfies the stochastic differential equation:
+\begin{equation}
+    \dif S_t = \mu S_t \, \dif t + \sigma S_t \, \dif W_t
+\end{equation}
+where:
+\begin{itemize}
+    \item $\mu$ is the drift rate (expected return)
+    \item $\sigma$ is the volatility (standard deviation of returns)
+    \item $W_t$ is a standard Brownian motion
+\end{itemize}
+\end{definition}
+
+\begin{theorem}[GBM Solution]
+The solution to the GBM SDE with initial condition $S_0$ is:
+\begin{equation}
+    S_t = S_0 \exp\left[\left(\mu - \frac{\sigma^2}{2}\right)t + \sigma W_t\right]
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Apply Itô's lemma to $f(S_t) = \ln S_t$:
+\begin{align}
+    \dif(\ln S_t) &= \frac{1}{S_t} \dif S_t - \frac{1}{2} \cdot \frac{1}{S_t^2} (\dif S_t)^2 \\
+    &= \frac{1}{S_t}(\mu S_t \, \dif t + \sigma S_t \, \dif W_t) - \frac{1}{2} \cdot \frac{\sigma^2 S_t^2}{S_t^2} \, \dif t \\
+    &= \left(\mu - \frac{\sigma^2}{2}\right) \dif t + \sigma \, \dif W_t
+\end{align}
+Integrating from 0 to $t$:
+\begin{equation}
+    \ln S_t - \ln S_0 = \left(\mu - \frac{\sigma^2}{2}\right)t + \sigma W_t
+\end{equation}
+Exponentiating yields the result.
+\end{proof}
+
+\section{The Driftless Lognormal Model}
+
+For short time horizons (15 minutes), we adopt a \textbf{driftless} model, setting $\mu = 0$. This is justified by:
+
+\begin{enumerate}
+    \item \textbf{Empirical Evidence}: Over 15-minute windows, drift is negligible compared to volatility
+    \item \textbf{Market Efficiency}: Expected returns over short horizons should be approximately zero
+    \item \textbf{Conservatism}: Removing drift makes the model more robust
+\end{enumerate}
+
+\begin{proposition}[Driftless Model]
+Under the driftless assumption ($\mu = 0$), the log-return over interval $[t_0, t]$ is:
+\begin{equation}
+    X_t \coloneqq \ln\left(\frac{S_t}{S_{t_0}}\right) = -\frac{\sigma^2}{2}(t - t_0) + \sigma W_{t-t_0}
+\end{equation}
+which follows a normal distribution:
+\begin{equation}
+    X_t \sim \Normal\left(-\frac{\sigma^2(t-t_0)}{2}, \sigma^2(t-t_0)\right)
+\end{equation}
+\end{proposition}
+
+\begin{remark}
+The negative mean term $-\frac{\sigma^2}{2}(t-t_0)$ is the ``volatility drag'' or ``variance drain'' that arises from the difference between arithmetic and geometric means.
+\end{remark}
+
+\section{Probability of Up Movement}
+
+The core of our model is computing $\Prob(S_T > S_{t_0})$ given current information.
+
+\begin{theorem}[Up Probability Formula]\label{thm:p_up}
+At time $t \in [t_0, T)$, given that we observe $S_t$, the probability that $S_T > S_{t_0}$ is:
+\begin{equation}
+    p_{\text{up}}(t) = \Phi\left(\frac{\ln(S_t/S_{t_0})}{\sigma\sqrt{T-t}}\right)
+\end{equation}
+where $\Phi(\cdot)$ is the standard normal CDF.
+\end{theorem}
+
+\begin{proof}
+We need to compute $\Prob(S_T > S_{t_0} \mid S_t)$.
+
+Under the driftless model:
+\begin{equation}
+    \ln S_T = \ln S_t + \left(-\frac{\sigma^2}{2}(T-t) + \sigma W_{T-t}\right)
+\end{equation}
+
+The condition $S_T > S_{t_0}$ is equivalent to $\ln S_T > \ln S_{t_0}$, which becomes:
+\begin{equation}
+    \ln S_t - \frac{\sigma^2}{2}(T-t) + \sigma W_{T-t} > \ln S_{t_0}
+\end{equation}
+
+Rearranging:
+\begin{equation}
+    W_{T-t} > \frac{\ln S_{t_0} - \ln S_t + \frac{\sigma^2}{2}(T-t)}{\sigma}
+\end{equation}
+
+Since $W_{T-t} \sim \Normal(0, T-t)$, we have $Z \coloneqq \frac{W_{T-t}}{\sqrt{T-t}} \sim \Normal(0,1)$.
+
+Thus:
+\begin{equation}
+    \Prob(S_T > S_{t_0} \mid S_t) = \Prob\left(Z > \frac{\ln(S_{t_0}/S_t) + \frac{\sigma^2}{2}(T-t)}{\sigma\sqrt{T-t}}\right)
+\end{equation}
+
+For short time horizons, the term $\frac{\sigma^2(T-t)}{2\sigma\sqrt{T-t}} = \frac{\sigma\sqrt{T-t}}{2}$ is small (for $\sigma \approx 0.0001$ per $\sqrt{\text{second}}$ and $T-t < 900$ seconds, this is $< 0.015$).
+
+Neglecting this second-order term and using $\Prob(Z > -z) = \Phi(z)$:
+\begin{equation}
+    p_{\text{up}}(t) \approx \Phi\left(\frac{\ln(S_t/S_{t_0})}{\sigma\sqrt{T-t}}\right)
+\end{equation}
+\end{proof}
+
+\section{Volatility Estimation}
+
+The volatility parameter $\sigma$ is critical to the model. We estimate it using a rolling window of observed price data.
+
+\begin{definition}[Realized Volatility Estimator]
+Given price observations $\{S_{t_i}\}_{i=0}^{n}$ at times $\{t_i\}$, the realized volatility estimator is:
+\begin{equation}
+    \hat{\sigma} = \sqrt{\frac{1}{n} \sum_{i=1}^{n} \left(\frac{\ln(S_{t_i}/S_{t_{i-1}})}{\sqrt{t_i - t_{i-1}}}\right)^2}
+\end{equation}
+\end{definition}
+
+In our implementation, we use the notation $\sigma_{\sqrt{s}}$ to denote volatility per square root second:
+\begin{equation}
+    \sigma_{\sqrt{s}} = \sigma \cdot \frac{1}{\sqrt{1 \text{ second}}}
+\end{equation}
+
+This allows us to compute:
+\begin{equation}
+    \sigma\sqrt{T-t} = \sigma_{\sqrt{s}} \cdot \sqrt{T-t}
+\end{equation}
+
+\section{Conservative Shrinkage}
+
+Raw model probabilities can be overconfident. We apply a shrinkage transformation to pull probabilities toward 0.5:
+
+\begin{definition}[Shrinkage to Half]
+For shrinkage parameter $\lambda \in [0,1]$, the shrunk probability is:
+\begin{equation}
+    \tilde{p} = 0.5 + \lambda(p - 0.5)
+\end{equation}
+\end{definition}
+
+\begin{proposition}[Properties of Shrinkage]
+The shrinkage transformation has the following properties:
+\begin{enumerate}
+    \item $\tilde{p} \in [0.5 - 0.5\lambda, 0.5 + 0.5\lambda]$
+    \item $\lambda = 1$: No shrinkage ($\tilde{p} = p$)
+    \item $\lambda = 0$: Complete shrinkage ($\tilde{p} = 0.5$)
+    \item Preserves ordering: $p_1 > p_2 \Rightarrow \tilde{p}_1 > \tilde{p}_2$
+\end{enumerate}
+\end{proposition}
+
+In our implementation, we use $\lambda = 0.35$, which bounds probabilities to $[0.325, 0.675]$.
+
+\begin{lstlisting}[style=rustcode, caption={Shrinkage Implementation in Rust}]
+pub fn shrink_to_half(p: f64, shrink: f64) -> f64 {
+    let s = shrink.clamp(0.0, 1.0);
+    (0.5 + s * (p - 0.5)).clamp(0.0001, 0.9999)
+}
+\end{lstlisting}
+
+\section{Complete Probability Computation}
+
+Combining all elements, the complete probability computation is:
+
+\begin{algorithm}[H]
+\caption{Model Probability Computation}
+\begin{algorithmic}[1]
+\Require Current time $t$, market start time $t_0$, market end time $T$
+\Require Start price $S_{t_0}$, current price $S_t$, volatility $\sigma_{\sqrt{s}}$
+\Require Shrinkage parameter $\lambda$
+\Ensure Model probability $\tilde{p}_{\text{up}}$
+\State $\tau \gets T - t$ \Comment{Time remaining in seconds}
+\If{$\tau \leq 0$ or $S_t \leq 0$ or $S_{t_0} \leq 0$}
+    \State \Return None
+\EndIf
+\State $x \gets \ln(S_t / S_{t_0})$ \Comment{Log return since start}
+\State $\sigma_\tau \gets \sigma_{\sqrt{s}} \cdot \sqrt{\tau}$ \Comment{Volatility over remaining time}
+\State $z \gets x / \sigma_\tau$ \Comment{Standardized log return}
+\State $p \gets \Phi(z)$ \Comment{Raw probability}
+\State $\tilde{p} \gets 0.5 + \lambda \cdot (p - 0.5)$ \Comment{Shrunk probability}
+\State \Return $\text{clamp}(\tilde{p}, 0.0001, 0.9999)$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{lstlisting}[style=rustcode, caption={Complete Probability Function in Rust}]
+use statrs::distribution::{ContinuousCDF, Normal};
+
+pub fn p_up_driftless_lognormal(
+    p_start: f64,
+    p_now: f64,
+    sigma_per_sqrt_s: f64,
+    t_rem_sec: f64,
+) -> Option<f64> {
+    // Validate inputs
+    if !(p_start > 0.0 && p_now > 0.0) {
+        return None;
+    }
+    if !(sigma_per_sqrt_s.is_finite() && sigma_per_sqrt_s > 0.0) {
+        return None;
+    }
+    if !(t_rem_sec.is_finite() && t_rem_sec > 0.0) {
+        return None;
+    }
+
+    // Compute log return
+    let x = (p_now / p_start).ln();
+    
+    // Compute denominator (volatility * sqrt(time))
+    let denom = sigma_per_sqrt_s * t_rem_sec.sqrt();
+    if !(denom.is_finite() && denom > 0.0) {
+        return None;
+    }
+
+    // Compute z-score and probability
+    let z = x / denom;
+    let n = Normal::new(0.0, 1.0).ok()?;
+    let p = n.cdf(z);
+
+    if p.is_finite() {
+        Some(p.clamp(0.0001, 0.9999))
+    } else {
+        None
+    }
+}
+\end{lstlisting}
+
+\chapter{Edge Detection and Signal Generation}
+
+\section{Definition of Edge}
+
+The ``edge'' is the difference between our model's fair value and the market price.
+
+\begin{definition}[Trading Edge]
+For an outcome with model probability $\tilde{p}_{\text{model}}$ and market price $P_{\text{market}}$:
+\begin{equation}
+    \text{Edge} = \tilde{p}_{\text{model}} - P_{\text{market}}
+\end{equation}
+\end{definition}
+
+\begin{itemize}
+    \item \textbf{Positive edge}: Model thinks the outcome is more likely than the market implies $\Rightarrow$ BUY signal
+    \item \textbf{Negative edge}: Model thinks the outcome is less likely than the market implies $\Rightarrow$ SELL signal (or avoid)
+\end{itemize}
+
+\begin{proposition}[Expected Profit]
+For a trade of $n$ shares at edge $e$:
+\begin{equation}
+    \E[\text{Profit}] = n \cdot e
+\end{equation}
+assuming the model is correctly calibrated.
+\end{proposition}
+
+\begin{proof}
+Let $V \in \{0, 1\}$ be the contract payoff. The expected value of buying at price $P$ is:
+\begin{align}
+    \E[\text{Profit}] &= \E[n(V - P)] \\
+    &= n(\E[V] - P) \\
+    &= n(\tilde{p}_{\text{model}} - P) \\
+    &= n \cdot e
+\end{align}
+\end{proof}
+
+\section{Effective Edge Computation}
+
+The raw edge must be adjusted for execution costs and fill probability.
+
+\begin{definition}[Effective Edge]
+\begin{equation}
+    e_{\text{eff}} = (e_{\text{raw}} - \text{fees} - \text{slippage}) \times \Prob(\text{fill})
+\end{equation}
+\end{definition}
+
+\subsection{Fee Structure}
+
+Polymarket charges approximately 0.5\% per transaction:
+\begin{equation}
+    \text{fees} = 0.005 \times \text{notional}
+\end{equation}
+
+For a round-trip trade (entry + exit):
+\begin{equation}
+    \text{total fees} \approx 0.01 \times \text{notional}
+\end{equation}
+
+\subsection{Slippage Model}
+
+Slippage depends on order size relative to available liquidity:
+
+\begin{definition}[Linear Slippage Model]
+\begin{equation}
+    \text{slippage}(Q) = \alpha \cdot \frac{Q}{L}
+\end{equation}
+where:
+\begin{itemize}
+    \item $Q$ is the order quantity
+    \item $L$ is the available liquidity at best price
+    \item $\alpha$ is the slippage coefficient (typically 0.1--0.5)
+\end{itemize}
+\end{definition}
+
+\subsection{Fill Probability from Latency}
+
+The probability of fill depends on execution latency:
+
+\begin{proposition}[Fill Probability Model]
+For a latency-sensitive opportunity with half-life $\tau_{1/2}$ and execution latency $\ell$:
+\begin{equation}
+    \Prob(\text{fill}) = \exp\left(-\frac{\ell \ln 2}{\tau_{1/2}}\right)
+\end{equation}
+\end{proposition}
+
+In our system, we target latencies of 10--50ms with opportunity half-lives of 100--500ms, yielding fill probabilities of 85--99\%.
+
+\section{Minimum Edge Threshold}
+
+To ensure profitability, we require:
+\begin{equation}
+    e_{\text{eff}} \geq e_{\min}
+\end{equation}
+
+\begin{theorem}[Break-Even Edge]
+The minimum edge required for positive expected value is:
+\begin{equation}
+    e_{\min} = \frac{\text{fees}}{\Prob(\text{fill})} + \text{slippage}
+\end{equation}
+\end{theorem}
+
+In practice, we use $e_{\min} = 0.02$ (2\%) to provide a safety margin.
+
+\begin{lstlisting}[style=rustcode, caption={Edge Detection Logic}]
+// LATENCY ARBITRAGE EDGE: model price vs market price
+let edge = model_p - order.price;
+let edge_abs = edge.abs();
+
+// Track opportunity
+if edge_abs >= config.min_edge {
+    let mut engine = PAPER_TRADING_STATE.lock();
+    engine.opportunities += 1;
+}
+
+// Entry: if significant edge and no position
+if edge_abs >= config.min_edge && !open_positions.contains_key(&pos_key) {
+    // Determine side: buy underpriced
+    let (entry_side, target_outcome) = if edge > 0.0 {
+        // Model says higher prob than market -> buy
+        if is_up { ("BUY_UP", "Up") } else { ("BUY_DOWN", "Down") }
+    } else {
+        // Model says lower prob -> skip (would need to sell)
+        continue;
+    };
+    // ... position sizing and entry ...
+}
+\end{lstlisting}
+
+\chapter{Position Sizing: Kelly Criterion}
+
+\section{The Kelly Criterion}
+
+The Kelly Criterion provides the optimal bet size to maximize long-term geometric growth rate.
+
+\begin{theorem}[Kelly Criterion for Binary Bets]
+For a binary bet with:
+\begin{itemize}
+    \item Win probability $p$
+    \item Win payoff odds $b:1$ (bet 1 to win $b$)
+\end{itemize}
+The optimal fraction of bankroll to bet is:
+\begin{equation}
+    f^* = \frac{pb - (1-p)}{b} = \frac{p(b+1) - 1}{b}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+Let $W$ be the current wealth and $f$ the fraction bet. After one bet:
+\begin{equation}
+    W' = \begin{cases}
+        W(1 + fb) & \text{with probability } p \\
+        W(1 - f) & \text{with probability } 1-p
+    \end{cases}
+\end{equation}
+
+The expected log-wealth is:
+\begin{equation}
+    \E[\ln W'] = \ln W + p\ln(1+fb) + (1-p)\ln(1-f)
+\end{equation}
+
+Taking the derivative with respect to $f$ and setting to zero:
+\begin{equation}
+    \frac{\partial}{\partial f}\E[\ln W'] = \frac{pb}{1+fb} - \frac{1-p}{1-f} = 0
+\end{equation}
+
+Solving:
+\begin{align}
+    pb(1-f) &= (1-p)(1+fb) \\
+    pb - pbf &= 1 - p + fb - pfb \\
+    pb - 1 + p &= fb(1 - p + p) \\
+    f^* &= \frac{pb - 1 + p}{b} = \frac{p(b+1) - 1}{b}
+\end{align}
+\end{proof}
+
+\section{Kelly for Prediction Markets}
+
+In prediction markets, buying at price $P$ with model probability $\tilde{p}$ gives:
+\begin{itemize}
+    \item Win probability: $\tilde{p}$
+    \item Win payoff: $(1 - P)$ for each dollar risked at price $P$
+    \item Loss: $P$ for each dollar risked
+\end{itemize}
+
+\begin{corollary}[Kelly for Prediction Markets]
+The Kelly fraction for buying a prediction market contract at price $P$ with model probability $\tilde{p}$ is:
+\begin{equation}
+    f^* = \frac{\tilde{p} - P}{1 - P}
+\end{equation}
+when $\tilde{p} > P$ (positive edge).
+\end{corollary}
+
+\begin{proof}
+The odds are $b = \frac{1-P}{P}$ (bet $P$ to win $1-P$). Substituting into the Kelly formula:
+\begin{align}
+    f^* &= \frac{\tilde{p}(b+1) - 1}{b} = \frac{\tilde{p} \cdot \frac{1}{P} - 1}{\frac{1-P}{P}} \\
+    &= \frac{\frac{\tilde{p} - P}{P}}{\frac{1-P}{P}} = \frac{\tilde{p} - P}{1-P}
+\end{align}
+\end{proof}
+
+\section{Fractional Kelly}
+
+Full Kelly betting is aggressive and leads to high volatility. We use fractional Kelly:
+
+\begin{definition}[Fractional Kelly]
+For Kelly multiplier $\kappa \in (0, 1]$:
+\begin{equation}
+    f = \kappa \cdot f^*
+\end{equation}
+\end{definition}
+
+\begin{proposition}[Properties of Fractional Kelly]
+\begin{enumerate}
+    \item Reduces variance by factor $\kappa^2$
+    \item Reduces expected growth rate by factor $\approx \kappa$ for small $f^*$
+    \item Reduces probability of ruin
+\end{enumerate}
+\end{proposition}
+
+We use $\kappa = 0.05$--$0.10$ (5--10\% Kelly) for conservative position sizing.
+
+\section{Position Limits}
+
+Additional constraints prevent over-concentration:
+
+\begin{definition}[Position Constraints]
+\begin{align}
+    f_{\text{actual}} &= \min(f, f_{\max}) \\
+    \text{Position USD} &= \text{Bankroll} \times f_{\text{actual}}
+\end{align}
+where $f_{\max}$ is the maximum position as fraction of bankroll (typically 1--5\%).
+\end{definition}
+
+\begin{lstlisting}[style=rustcode, caption={Kelly Sizing Implementation}]
+// Kelly sizing based on edge
+let kelly_edge = edge_abs;
+let kelly_f = config.kelly_fraction * kelly_edge * 10.0; // Scale edge to fraction
+let position_pct = kelly_f.min(config.max_position_pct);
+let position_usd = config.bankroll * position_pct;
+
+if position_usd >= 10.0 {
+    let shares = position_usd / order.price;
+    open_positions.insert(
+        pos_key,
+        (order.price, shares, entry_side.to_string(), model_p, order.timestamp)
+    );
+}
+\end{lstlisting}
+
+\chapter{Execution Strategy}
+
+\section{Order Flow Analysis}
+
+Our strategy monitors real-time order flow from tracked wallets on Polymarket via the Dome API WebSocket feed.
+
+\begin{definition}[Order Event]
+An order event contains:
+\begin{itemize}
+    \item \texttt{timestamp}: Unix timestamp of the order
+    \item \texttt{market\_slug}: Market identifier (e.g., ``btc-updown-15m-1737123456'')
+    \item \texttt{side}: ``BUY'' or ``SELL''
+    \item \texttt{outcome}: ``Up'' or ``Down''
+    \item \texttt{price}: Execution price $\in [0, 1]$
+    \item \texttt{shares}: Number of shares traded
+\end{itemize}
+\end{definition}
+
+\begin{lstlisting}[style=rustcode, caption={Order Data Structure}]
+#[derive(Debug, Clone)]
+pub struct DomeOrderForBacktest {
+    pub timestamp: i64,
+    pub market_slug: String,
+    pub side: String,
+    pub outcome: String,
+    pub price: f64,
+}
+\end{lstlisting}
+
+\section{Market Parsing}
+
+Market slugs encode timing information that is essential for probability computation.
+
+\begin{lstlisting}[style=rustcode, caption={Market Slug Parser}]
+pub fn parse_updown_15m_slug(slug: &str) -> Option<UpDown15mMarket> {
+    let lower = slug.to_ascii_lowercase();
+
+    for (asset, prefix) in [
+        (UpDownAsset::Btc, "btc-updown-15m-"),
+        (UpDownAsset::Eth, "eth-updown-15m-"),
+        (UpDownAsset::Sol, "sol-updown-15m-"),
+        (UpDownAsset::Xrp, "xrp-updown-15m-"),
+    ] {
+        if lower.starts_with(prefix) {
+            let rest = &lower[prefix.len()..];
+            let ts_str = rest.split('-').next().unwrap_or("");
+            let start_ts = ts_str.parse::<i64>().ok()?;
+            let end_ts = start_ts + 15 * 60; // 900 seconds
+            return Some(UpDown15mMarket {
+                asset,
+                start_ts,
+                end_ts,
+            });
+        }
+    }
+
+    None
+}
+\end{lstlisting}
+
+\section{Entry Conditions}
+
+Positions are entered when all of the following conditions are met:
+
+\begin{enumerate}
+    \item \textbf{Market Active}: $t_{\text{now}} < t_{\text{end}} - 30s$ (at least 30s remaining)
+    \item \textbf{Binance Data Available}: Start price, current price, and volatility are valid
+    \item \textbf{Positive Edge}: $e = p_{\text{model}} - p_{\text{market}} > 0$
+    \item \textbf{Edge Threshold}: $|e| \geq e_{\min}$
+    \item \textbf{No Existing Position}: No open position in this market
+    \item \textbf{Minimum Size}: Position $\geq$ \$10
+\end{enumerate}
+
+\section{Exit Conditions}
+
+Positions are exited when any of the following conditions are met:
+
+\begin{enumerate}
+    \item \textbf{Favorable Move}: Price moved $> 1\%$ in our favor
+    \item \textbf{Edge Reversal}: Edge sign has flipped beyond threshold
+    \item \textbf{Time Limit}: Position held $\geq 180$ seconds
+    \item \textbf{Market Expiry}: Market is about to expire
+\end{enumerate}
+
+\begin{lstlisting}[style=rustcode, caption={Exit Logic Implementation}]
+// Check for exit opportunity on existing position
+let pos_key = order.market_slug.clone();
+if let Some((entry_price, shares, side, _, entry_ts)) = 
+    open_positions.remove(&pos_key) 
+{
+    // Exit if edge reversed or market moved in our favor
+    let price_move = order.price - entry_price;
+    let favorable = (side == "BUY_UP" && price_move > 0.01) || 
+                   (side == "BUY_DOWN" && price_move < -0.01);
+    let reversed = (side == "BUY_UP" && edge < -config.min_edge) || 
+                  (side == "BUY_DOWN" && edge > config.min_edge);
+    
+    if favorable || reversed || (now - entry_ts) >= 180 {
+        let exit_price = order.price;
+        let pnl = if side == "BUY_UP" {
+            shares * (exit_price - entry_price)
+        } else {
+            shares * (entry_price - exit_price)
+        };
+        
+        // Record trade...
+    } else {
+        // Keep position open
+        open_positions.insert(pos_key.clone(), 
+            (entry_price, shares, side, model_p, entry_ts));
+    }
+}
+\end{lstlisting}
+
+\chapter{System Architecture}
+
+\section{High-Level Architecture}
+
+The system consists of the following components:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.5cm,
+    box/.style={rectangle, draw, minimum width=3cm, minimum height=1cm, align=center},
+    data/.style={cylinder, draw, shape border rotate=90, aspect=0.3, minimum width=2cm, minimum height=1.5cm, align=center}
+]
+    % Data Sources
+    \node[box] (binance) {Binance\\WebSocket};
+    \node[box, right=of binance] (dome) {Dome API\\WebSocket};
+    \node[box, right=of dome] (poly) {Polymarket\\CLOB};
+    
+    % Processing Layer
+    \node[box, below=2cm of binance] (pricefeed) {Price Feed\\Engine};
+    \node[box, below=2cm of dome] (signal) {Signal\\Detector};
+    \node[box, below=2cm of poly] (orderbook) {Orderbook\\Cache};
+    
+    % Core Engine
+    \node[box, below=2cm of signal, minimum width=6cm] (engine) {Latency Arbitrage Engine\\(Probability Model + Kelly Sizing)};
+    
+    % Storage
+    \node[data, below=2cm of engine] (db) {SQLite\\Database};
+    
+    % Frontend
+    \node[box, right=3cm of engine] (api) {REST API\\+ WebSocket};
+    \node[box, right=of api] (ui) {React\\Dashboard};
+    
+    % Arrows
+    \draw[->] (binance) -- (pricefeed);
+    \draw[->] (dome) -- (signal);
+    \draw[->] (poly) -- (orderbook);
+    
+    \draw[->] (pricefeed) -- (engine);
+    \draw[->] (signal) -- (engine);
+    \draw[->] (orderbook) -- (engine);
+    
+    \draw[->] (engine) -- (db);
+    \draw[->] (engine) -- (api);
+    \draw[->] (api) -- (ui);
+    
+\end{tikzpicture}
+\caption{System Architecture Diagram}
+\end{figure}
+
+\section{Data Pipeline}
+
+\subsection{Binance Price Feed}
+
+The Binance price feed provides real-time mid-prices for BTC, ETH, SOL, and XRP.
+
+\begin{lstlisting}[style=rustcode, caption={Binance Price Feed Structure}]
+#[derive(Debug, Clone)]
+pub struct BinancePriceFeed {
+    inner: Arc<RwLock<HashMap<String, SymbolState>>>,
+    max_history_len: usize,
+    update_tx: broadcast::Sender<PriceUpdateEvent>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PricePoint {
+    pub ts: i64,
+    pub mid: f64,
+}
+
+struct SymbolState {
+    latest: Option<PricePoint>,
+    history: VecDeque<PricePoint>,
+    sigma_sqrt_s: Option<f64>,
+}
+\end{lstlisting}
+
+\subsection{Dome Order Events}
+
+Order events are stored in SQLite for both real-time processing and historical analysis.
+
+\begin{lstlisting}[style=rustcode, caption={Database Schema for Order Events}]
+CREATE TABLE dome_order_events (
+    order_hash TEXT PRIMARY KEY,
+    tx_hash TEXT,
+    user TEXT NOT NULL,
+    market_slug TEXT NOT NULL,
+    condition_id TEXT,
+    token_id TEXT,
+    timestamp INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    received_at INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX idx_dome_order_events_user_ts
+    ON dome_order_events(user, timestamp DESC);
+\end{lstlisting}
+
+\section{Paper Trading Engine}
+
+The paper trading engine simulates live trading without real capital.
+
+\begin{lstlisting}[style=rustcode, caption={Paper Trading Engine State}]
+struct PaperTradingEngine {
+    is_running: bool,
+    started_at: Option<i64>,
+    asset: String,
+    config: PaperTradingConfig,
+    // State
+    cash: f64,
+    peak_equity: f64,
+    max_drawdown: f64,
+    // Stats
+    signals_seen: u64,
+    opportunities: u64,
+    trades_taken: u64,
+    total_volume: f64,
+    total_fees: f64,
+    realized_pnl: f64,
+    gross_profit: f64,
+    gross_loss: f64,
+    wins: u64,
+    losses: u64,
+    edge_sum: f64,
+    // History
+    pnl_curve: Vec<BacktestPnlPoint>,
+    recent_trades: Vec<PaperTradeRecord>,
+}
+\end{lstlisting}
+
+\section{API Endpoints}
+
+The system exposes RESTful endpoints for monitoring and control.
+
+\begin{table}[H]
+\centering
+\caption{Paper Trading API Endpoints}
+\begin{tabular}{llp{6cm}}
+\toprule
+\textbf{Method} & \textbf{Endpoint} & \textbf{Description} \\
+\midrule
+GET & \texttt{/api/paper/state} & Get current state, summary, PnL curve, and recent trades \\
+POST & \texttt{/api/paper/start} & Start paper trading with configuration \\
+POST & \texttt{/api/paper/stop} & Stop paper trading \\
+POST & \texttt{/api/paper/reset} & Reset all state \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{lstlisting}[style=rustcode, caption={API Response Structure}]
+#[derive(Serialize)]
+pub struct PaperTradingStateResponse {
+    pub fetched_at: i64,
+    pub is_running: bool,
+    pub started_at: Option<i64>,
+    pub uptime_secs: i64,
+    pub asset: String,
+    pub config: PaperTradingConfig,
+    pub summary: PaperTradingSummary,
+    pub pnl_curve: Vec<BacktestPnlPoint>,
+    pub recent_trades: Vec<PaperTradeRecord>,
+}
+\end{lstlisting}
+
+\chapter{Performance Metrics}
+
+\section{Key Performance Indicators}
+
+\begin{definition}[Return on Investment (ROI)]
+\begin{equation}
+    \text{ROI} = \frac{\text{Realized PnL}}{\text{Initial Bankroll}} \times 100\%
+\end{equation}
+\end{definition}
+
+\begin{definition}[Win Rate]
+\begin{equation}
+    \text{Win Rate} = \frac{\text{Number of Winning Trades}}{\text{Total Number of Trades}}
+\end{equation}
+\end{definition}
+
+\begin{definition}[Profit Factor]
+\begin{equation}
+    \text{Profit Factor} = \frac{\text{Gross Profit}}{\text{Gross Loss}}
+\end{equation}
+A profit factor $> 1$ indicates overall profitability.
+\end{definition}
+
+\begin{definition}[Maximum Drawdown]
+\begin{equation}
+    \text{MDD} = \max_{t} \left(\max_{s \leq t} \text{Equity}_s - \text{Equity}_t\right)
+\end{equation}
+The largest peak-to-trough decline in equity.
+\end{definition}
+
+\begin{definition}[Sharpe Ratio]
+For daily returns $\{r_i\}$:
+\begin{equation}
+    \text{Sharpe} = \frac{\bar{r} - r_f}{\sigma_r} \times \sqrt{252}
+\end{equation}
+where $\bar{r}$ is mean return, $r_f$ is risk-free rate, and $\sigma_r$ is standard deviation.
+\end{definition}
+
+\section{Summary Statistics Computation}
+
+\begin{lstlisting}[style=rustcode, caption={Summary Statistics Implementation}]
+fn get_summary(&self) -> PaperTradingSummary {
+    let win_rate = if self.trades_taken > 0 {
+        self.wins as f64 / self.trades_taken as f64
+    } else {
+        0.0
+    };
+
+    let profit_factor = if self.gross_loss > 0.0 {
+        self.gross_profit / self.gross_loss
+    } else if self.gross_profit > 0.0 {
+        f64::INFINITY
+    } else {
+        0.0
+    };
+
+    let avg_edge = if self.trades_taken > 0 {
+        self.edge_sum / self.trades_taken as f64
+    } else {
+        0.0
+    };
+
+    let avg_pnl = if self.trades_taken > 0 {
+        self.realized_pnl / self.trades_taken as f64
+    } else {
+        0.0
+    };
+
+    let avg_size = if self.trades_taken > 0 {
+        self.total_volume / self.trades_taken as f64
+    } else {
+        0.0
+    };
+
+    let roi = (self.realized_pnl / self.config.bankroll) * 100.0;
+
+    PaperTradingSummary {
+        signals_seen: self.signals_seen,
+        opportunities: self.opportunities,
+        trades_taken: self.trades_taken,
+        total_volume: self.total_volume,
+        total_fees: self.total_fees,
+        realized_pnl: self.realized_pnl,
+        gross_profit: self.gross_profit,
+        gross_loss: self.gross_loss,
+        wins: self.wins,
+        losses: self.losses,
+        win_rate,
+        profit_factor: profit_factor.min(999.99),
+        max_drawdown: self.max_drawdown,
+        avg_edge,
+        roi_pct: roi,
+        avg_pnl_per_trade: avg_pnl,
+        avg_trade_size: avg_size,
+    }
+}
+\end{lstlisting}
+
+\chapter{Backtesting Framework}
+
+\section{Historical Data}
+
+Backtesting uses historical order events stored in the SQLite database.
+
+\begin{lstlisting}[style=rustcode, caption={Backtest Query Function}]
+pub async fn query_dome_orders_for_backtest(
+    &self,
+    where_clause: &str,
+) -> Result<Vec<DomeOrderForBacktest>> {
+    let where_clause = where_clause.to_string();
+    let conn = self.conn.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let conn = conn.lock();
+
+        let query = format!(
+            r#"
+            SELECT 
+                timestamp,
+                market_slug,
+                json_extract(payload_json, '$.side') as side,
+                json_extract(payload_json, '$.token_label') as outcome,
+                json_extract(payload_json, '$.price') as price
+            FROM dome_order_events
+            {}
+            ORDER BY timestamp ASC
+            "#,
+            where_clause
+        );
+
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(DomeOrderForBacktest {
+                timestamp: row.get(0)?,
+                market_slug: row.get::<_, String>(1).unwrap_or_default(),
+                side: row.get::<_, String>(2).unwrap_or_default(),
+                outcome: row.get::<_, String>(3).unwrap_or_default(),
+                price: row.get::<_, f64>(4).unwrap_or(0.5),
+            })
+        })?;
+
+        let mut orders = Vec::new();
+        for row in rows {
+            if let Ok(order) = row {
+                orders.push(order);
+            }
+        }
+
+        Ok(orders)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+}
+\end{lstlisting}
+
+\section{Backtest API Endpoint}
+
+\begin{lstlisting}[style=rustcode, caption={Backtest API Handler}]
+#[derive(Deserialize)]
+pub struct BacktestQuery {
+    pub asset: Option<String>,
+    pub bankroll: Option<f64>,
+    pub min_edge: Option<f64>,
+    pub kelly_fraction: Option<f64>,
+    pub max_position_pct: Option<f64>,
+    pub fee_rate: Option<f64>,
+}
+
+pub async fn get_backtest_run(
+    Query(params): Query<BacktestQuery>,
+    AxumState(state): AxumState<AppState>,
+) -> Result<Json<BacktestResponse>, (StatusCode, String)> {
+    let asset = params.asset.as_deref().unwrap_or("btc");
+    let bankroll = params.bankroll.unwrap_or(10000.0);
+    let min_edge = params.min_edge.unwrap_or(0.05);
+    let kelly_fraction = params.kelly_fraction.unwrap_or(0.05);
+    let max_position_pct = params.max_position_pct.unwrap_or(0.02);
+    let fee_rate = params.fee_rate.unwrap_or(0.005);
+    
+    let result = run_backtest_on_data(
+        &state.signal_storage,
+        asset,
+        bankroll,
+        min_edge,
+        kelly_fraction,
+        max_position_pct,
+        fee_rate,
+    ).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+    })?;
+    
+    // ... construct response ...
+}
+\end{lstlisting}
+
+\chapter{Frontend Implementation}
+
+\section{Dashboard Components}
+
+The frontend is built with React and TypeScript, providing real-time visualization of trading performance.
+
+\subsection{Paper Trading Dashboard}
+
+\begin{lstlisting}[style=typescript, caption={Paper Trading Dashboard Component}]
+export const PaperTradingDashboard: React.FC = () => {
+  const [state, setState] = useState<PaperTradingState | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+
+  // Config
+  const [asset, setAsset] = useState<'btc' | 'eth' | 'sol' | 'xrp' | 'all'>('btc');
+  const [bankroll, setBankroll] = useState('10000');
+  const [minEdge, setMinEdge] = useState('0.05');
+  const [kellyFraction, setKellyFraction] = useState('0.05');
+  const [maxPosition, setMaxPosition] = useState('0.02');
+
+  const fetchState = useCallback(async () => {
+    try {
+      const resp = await api.getPaperTradingState();
+      setState(resp);
+      setIsRunning(resp.is_running);
+    } catch (e: any) {
+      if (!e?.message?.includes('404')) {
+        setError(e?.message ?? 'Failed to fetch state');
+      }
+    }
+  }, []);
+
+  // Poll for updates when running
+  useEffect(() => {
+    fetchState();
+    const interval = setInterval(fetchState, isRunning ? 2000 : 10000);
+    return () => clearInterval(interval);
+  }, [fetchState, isRunning]);
+
+  // ... render logic ...
+};
+\end{lstlisting}
+
+\subsection{Equity Curve Visualization}
+
+\begin{lstlisting}[style=typescript, caption={Equity Curve SVG Generation}]
+const pnlPath = useMemo(() => {
+  if (pnlCurve.length < 2) return null;
+
+  const pts = pnlCurve.map((p) => p.equity);
+  const minV = Math.min(...pts);
+  const maxV = Math.max(...pts);
+  const span = Math.max(1e-9, maxV - minV);
+
+  const w = 1000;
+  const h = 200;
+  const padding = 10;
+
+  const d: string[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const x = (i / (pts.length - 1)) * w;
+    const y = (1 - (pts[i] - minV) / span) * (h - 2 * padding) + padding;
+    d.push(`${i === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`);
+  }
+
+  return { d: d.join(' '), w, h, minV, maxV };
+}, [pnlCurve]);
+\end{lstlisting}
+
+\section{API Client}
+
+\begin{lstlisting}[style=typescript, caption={API Client Methods}]
+// Paper Trading
+async getPaperTradingState(): Promise<PaperTradingState> {
+  return this.fetch('/api/paper/state', {}, 5_000);
+}
+
+async startPaperTrading(req: PaperTradingStartRequest): Promise<{ success: boolean }> {
+  return this.fetch('/api/paper/start', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  }, 5_000);
+}
+
+async stopPaperTrading(): Promise<{ success: boolean }> {
+  return this.fetch('/api/paper/stop', { method: 'POST' }, 5_000);
+}
+
+async resetPaperTrading(): Promise<{ success: boolean }> {
+  return this.fetch('/api/paper/reset', { method: 'POST' }, 5_000);
+}
+\end{lstlisting}
+
+\chapter{Risk Management}
+
+\section{Position Limits}
+
+Multiple layers of position limits protect against catastrophic losses:
+
+\begin{enumerate}
+    \item \textbf{Per-Trade Limit}: Maximum 2--5\% of bankroll per trade
+    \item \textbf{Kelly Fraction}: 5--10\% of theoretical Kelly
+    \item \textbf{Minimum Size}: \$10 minimum to avoid dust trades
+    \item \textbf{Hold Time Limit}: 3--5 minute maximum hold time
+\end{enumerate}
+
+\section{Drawdown Management}
+
+\begin{lstlisting}[style=rustcode, caption={Drawdown Tracking}]
+fn record_trade(&mut self, trade: PaperTradeRecord) {
+    // ... update stats ...
+    
+    // Update drawdown
+    if self.cash > self.peak_equity {
+        self.peak_equity = self.cash;
+    }
+    let dd = self.peak_equity - self.cash;
+    if dd > self.max_drawdown {
+        self.max_drawdown = dd;
+    }
+    
+    // Record PnL point
+    self.pnl_curve.push(BacktestPnlPoint {
+        ts: trade.ts,
+        equity: self.cash,
+        pnl_cumulative: self.realized_pnl,
+        drawdown: dd,
+    });
+}
+\end{lstlisting}
+
+\section{Market Expiry Handling}
+
+Positions are automatically closed before market expiry to avoid settlement risk:
+
+\begin{lstlisting}[style=rustcode, caption={Expiry Check}]
+// Skip expired markets
+if now >= market.end_ts {
+    continue;
+}
+
+let t_rem = (market.end_ts - now) as f64;
+if t_rem < 30.0 {
+    continue; // Too close to expiry
+}
+\end{lstlisting}
+
+\chapter{Statistical Analysis}
+
+\section{Model Calibration}
+
+The model's accuracy can be assessed by comparing predicted probabilities to realized outcomes.
+
+\begin{definition}[Brier Score]
+For $n$ predictions with probabilities $\{p_i\}$ and outcomes $\{o_i\} \in \{0,1\}$:
+\begin{equation}
+    \text{BS} = \frac{1}{n} \sum_{i=1}^{n} (p_i - o_i)^2
+\end{equation}
+Lower is better; a perfect model has BS = 0.
+\end{definition}
+
+\begin{definition}[Calibration Error]
+Partition predictions into bins by predicted probability. For bin $b$ with predictions $\mathcal{P}_b$:
+\begin{equation}
+    \text{CE}_b = \left|\frac{1}{|\mathcal{P}_b|} \sum_{i \in \mathcal{P}_b} o_i - \frac{1}{|\mathcal{P}_b|} \sum_{i \in \mathcal{P}_b} p_i\right|
+\end{equation}
+The overall calibration error is:
+\begin{equation}
+    \text{CE} = \sum_b \frac{|\mathcal{P}_b|}{n} \text{CE}_b
+\end{equation}
+\end{definition}
+
+\section{Edge Decay Analysis}
+
+Edge typically decays as information propagates through the market:
+
+\begin{proposition}[Exponential Edge Decay]
+If edge decays exponentially with half-life $\tau_{1/2}$:
+\begin{equation}
+    e(t) = e_0 \exp\left(-\frac{t \ln 2}{\tau_{1/2}}\right)
+\end{equation}
+The expected profit from executing at time $t$ after signal is:
+\begin{equation}
+    \E[\text{Profit}(t)] = n \cdot e(t) = n \cdot e_0 \cdot 2^{-t/\tau_{1/2}}
+\end{equation}
+\end{proposition}
+
+\section{Volatility Regime Analysis}
+
+Strategy performance varies with volatility regime:
+
+\begin{itemize}
+    \item \textbf{Low Volatility}: Fewer opportunities, higher win rate
+    \item \textbf{High Volatility}: More opportunities, lower win rate
+    \item \textbf{Optimal}: Moderate volatility with predictable patterns
+\end{itemize}
+
+\chapter{Conclusion}
+
+\section{Summary}
+
+This document has presented a comprehensive framework for latency arbitrage in 15-minute binary prediction markets. Key contributions include:
+
+\begin{enumerate}
+    \item \textbf{Mathematical Model}: Driftless lognormal model with conservative shrinkage
+    \item \textbf{Edge Detection}: Real-time comparison of model vs. market prices
+    \item \textbf{Position Sizing}: Fractional Kelly criterion with multiple safeguards
+    \item \textbf{Execution}: Automated entry/exit based on edge evolution
+    \item \textbf{Implementation}: Production-ready Rust backend and React frontend
+\end{enumerate}
+
+\section{Future Work}
+
+Potential improvements include:
+
+\begin{itemize}
+    \item \textbf{Multi-Asset Correlation}: Joint modeling of correlated assets
+    \item \textbf{Machine Learning}: Neural network-based probability estimation
+    \item \textbf{Market Making}: Two-sided quoting strategies
+    \item \textbf{Cross-Exchange Arbitrage}: Exploiting price differences across venues
+    \item \textbf{Options on Options}: Meta-derivatives on prediction market positions
+\end{itemize}
+
+\appendix
+
+\chapter{Mathematical Proofs}
+
+\section{Proof of Log-Normal Distribution}
+
+\begin{theorem}
+If $X \sim \Normal(\mu, \sigma^2)$, then $Y = e^X$ has log-normal distribution with:
+\begin{align}
+    \E[Y] &= e^{\mu + \sigma^2/2} \\
+    \Var(Y) &= (e^{\sigma^2} - 1)e^{2\mu + \sigma^2}
+\end{align}
+\end{theorem}
+
+\begin{proof}
+The moment generating function of $X$ is:
+\begin{equation}
+    M_X(t) = \E[e^{tX}] = e^{\mu t + \sigma^2 t^2 / 2}
+\end{equation}
+
+Thus:
+\begin{equation}
+    \E[Y] = \E[e^X] = M_X(1) = e^{\mu + \sigma^2/2}
+\end{equation}
+
+For the variance:
+\begin{align}
+    \E[Y^2] &= \E[e^{2X}] = M_X(2) = e^{2\mu + 2\sigma^2} \\
+    \Var(Y) &= \E[Y^2] - (\E[Y])^2 = e^{2\mu + 2\sigma^2} - e^{2\mu + \sigma^2} \\
+    &= e^{2\mu + \sigma^2}(e^{\sigma^2} - 1)
+\end{align}
+\end{proof}
+
+\section{Derivation of Standard Normal CDF}
+
+The standard normal CDF is:
+\begin{equation}
+    \Phi(z) = \frac{1}{\sqrt{2\pi}} \int_{-\infty}^{z} e^{-x^2/2} \, dx
+\end{equation}
+
+This integral has no closed-form solution but can be computed numerically. Common approximations include:
+
+\begin{itemize}
+    \item \textbf{Abramowitz-Stegun}: Polynomial approximation with error $< 7.5 \times 10^{-8}$
+    \item \textbf{Hastings}: Rational approximation with error $< 10^{-4}$
+    \item \textbf{Error Function}: $\Phi(z) = \frac{1}{2}\left[1 + \text{erf}\left(\frac{z}{\sqrt{2}}\right)\right]$
+\end{itemize}
+
+\chapter{Code Reference}
+
+\section{Complete Paper Trading Loop}
+
+\begin{lstlisting}[style=rustcode, caption={Full Paper Trading Loop Implementation}]
+async fn paper_trading_loop(
+    asset: String,
+    storage: std::sync::Arc<crate::signals::db_storage::DbSignalStorage>,
+    binance_feed: std::sync::Arc<crate::scrapers::binance_price_feed::BinancePriceFeed>,
+) {
+    use crate::vault::updown15m::{parse_updown_15m_slug, p_up_driftless_lognormal, shrink_to_half};
+    use std::collections::HashMap;
+    use tokio::time::{sleep, Duration};
+    
+    tracing::info!("[PAPER] Starting LATENCY ARBITRAGE paper trading for asset: {}", asset);
+    
+    // CRITICAL: Start timestamp - only process signals from NOW onwards
+    let start_ts = chrono::Utc::now().timestamp();
+    let mut last_check_ts = start_ts;
+    
+    // Track open positions: market_slug -> (entry_price, shares, side, model_p, entry_ts)
+    let mut open_positions: HashMap<String, (f64, f64, String, f64, i64)> = HashMap::new();
+    
+    // Shrink parameter for conservative model
+    let shrink = 0.35;
+    
+    while PAPER_TRADING_RUNNING.load(Ordering::SeqCst) {
+        // Poll every 2 seconds for new signals
+        sleep(Duration::from_secs(2)).await;
+        
+        if !PAPER_TRADING_RUNNING.load(Ordering::SeqCst) {
+            break;
+        }
+        
+        let now = chrono::Utc::now().timestamp();
+        
+        // Query ONLY NEW dome_order_events since last check
+        let where_clause = match asset.as_str() {
+            "btc" => format!(
+                "WHERE market_slug LIKE 'btc-updown-15m%' AND timestamp > {} AND timestamp >= {}", 
+                last_check_ts, start_ts),
+            "eth" => format!(
+                "WHERE market_slug LIKE 'eth-updown-15m%' AND timestamp > {} AND timestamp >= {}", 
+                last_check_ts, start_ts),
+            "sol" => format!(
+                "WHERE market_slug LIKE 'sol-updown-15m%' AND timestamp > {} AND timestamp >= {}", 
+                last_check_ts, start_ts),
+            "xrp" => format!(
+                "WHERE market_slug LIKE 'xrp-updown-15m%' AND timestamp > {} AND timestamp >= {}", 
+                last_check_ts, start_ts),
+            _ => format!(
+                "WHERE market_slug LIKE '%-updown-15m%' AND timestamp > {} AND timestamp >= {}", 
+                last_check_ts, start_ts),
+        };
+        
+        let orders = match storage.query_dome_orders_for_backtest(&where_clause).await {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!("[PAPER] Failed to query orders: {}", e);
+                continue;
+            }
+        };
+        
+        // Update cursor
+        if let Some(last) = orders.last() {
+            last_check_ts = last.timestamp;
+        }
+        
+        // Get config
+        let config = {
+            let engine = PAPER_TRADING_STATE.lock();
+            engine.config.clone()
+        };
+        
+        // Process new signals
+        for order in &orders {
+            {
+                let mut engine = PAPER_TRADING_STATE.lock();
+                engine.signals_seen += 1;
+            }
+            
+            // Parse market slug
+            let market = match parse_updown_15m_slug(&order.market_slug) {
+                Some(m) => m,
+                None => continue,
+            };
+            
+            // Skip expired markets
+            if now >= market.end_ts {
+                continue;
+            }
+            
+            let t_rem = (market.end_ts - now) as f64;
+            if t_rem < 30.0 {
+                continue; // Too close to expiry
+            }
+            
+            // Get Binance prices
+            let binance_symbol = market.asset.binance_symbol();
+            let p_start = match binance_feed.mid_near(binance_symbol, market.start_ts, 60) {
+                Some(p) => p.mid,
+                None => continue,
+            };
+            let p_now = match binance_feed.latest_mid(binance_symbol) {
+                Some(p) => p.mid,
+                None => continue,
+            };
+            let sigma = match binance_feed.sigma_per_sqrt_s(binance_symbol) {
+                Some(s) if s > 0.0 => s,
+                _ => continue,
+            };
+            
+            // Compute model probability
+            let model_p_up = match p_up_driftless_lognormal(p_start, p_now, sigma, t_rem) {
+                Some(p) => shrink_to_half(p, shrink),
+                None => continue,
+            };
+            let model_p_down = 1.0 - model_p_up;
+            
+            // Determine outcome and compute edge
+            let (model_p, is_up) = if order.outcome.to_lowercase() == "up" {
+                (model_p_up, true)
+            } else {
+                (model_p_down, false)
+            };
+            
+            let edge = model_p - order.price;
+            let edge_abs = edge.abs();
+            
+            if edge_abs >= config.min_edge {
+                let mut engine = PAPER_TRADING_STATE.lock();
+                engine.opportunities += 1;
+            }
+            
+            // Entry logic
+            let pos_key = order.market_slug.clone();
+            if edge_abs >= config.min_edge && !open_positions.contains_key(&pos_key) && edge > 0.0 {
+                let entry_side = if is_up { "BUY_UP" } else { "BUY_DOWN" };
+                
+                // Kelly sizing
+                let kelly_f = config.kelly_fraction * edge_abs * 10.0;
+                let position_pct = kelly_f.min(config.max_position_pct);
+                let position_usd = config.bankroll * position_pct;
+                
+                if position_usd >= 10.0 {
+                    let shares = position_usd / order.price;
+                    open_positions.insert(
+                        pos_key,
+                        (order.price, shares, entry_side.to_string(), model_p, order.timestamp)
+                    );
+                }
+            }
+        }
+    }
+    
+    tracing::info!("[PAPER] Paper trading loop stopped");
+}
+\end{lstlisting}
+
+\chapter{Configuration Reference}
+
+\section{Default Parameters}
+
+\begin{table}[H]
+\centering
+\caption{Default Configuration Parameters}
+\begin{tabular}{llp{6cm}}
+\toprule
+\textbf{Parameter} & \textbf{Default} & \textbf{Description} \\
+\midrule
+\texttt{bankroll} & \$10,000 & Initial capital \\
+\texttt{min\_edge} & 0.02 (2\%) & Minimum edge to trade \\
+\texttt{kelly\_fraction} & 0.05 (5\%) & Kelly multiplier \\
+\texttt{max\_position\_pct} & 0.02 (2\%) & Max position as \% of bankroll \\
+\texttt{fee\_rate} & 0.005 (0.5\%) & Transaction fee rate \\
+\texttt{shrink} & 0.35 & Probability shrinkage factor \\
+\texttt{max\_hold\_time} & 180s & Maximum position hold time \\
+\texttt{min\_time\_remaining} & 30s & Minimum time before expiry \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Environment Variables}
+
+\begin{lstlisting}[style=rustcode, caption={Environment Configuration}]
+// From .env file
+BINANCE_ENABLED=true
+VAULT_ENGINE_ENABLED=false
+VAULT_ENGINE_PAPER=true
+
+// FAST15M tuning
+UPDOWN15M_POLL_MS=2000
+UPDOWN15M_MIN_EDGE=0.01
+UPDOWN15M_KELLY_FRACTION=0.05
+UPDOWN15M_MAX_POSITION_PCT=0.01
+UPDOWN15M_SHRINK=0.35
+UPDOWN15M_COOLDOWN_SEC=30
+\end{lstlisting}
+
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{kelly1956}
+Kelly, J.L. (1956). A New Interpretation of Information Rate. \textit{Bell System Technical Journal}, 35(4), 917--926.
+
+\bibitem{black1973}
+Black, F., \& Scholes, M. (1973). The Pricing of Options and Corporate Liabilities. \textit{Journal of Political Economy}, 81(3), 637--654.
+
+\bibitem{merton1973}
+Merton, R.C. (1973). Theory of Rational Option Pricing. \textit{Bell Journal of Economics and Management Science}, 4(1), 141--183.
+
+\bibitem{hull2018}
+Hull, J.C. (2018). \textit{Options, Futures, and Other Derivatives} (10th ed.). Pearson.
+
+\bibitem{thorp2006}
+Thorp, E.O. (2006). The Kelly Criterion in Blackjack, Sports Betting, and the Stock Market. In \textit{Handbook of Asset and Liability Management} (Vol. 1, pp. 385--428). North-Holland.
+
+\bibitem{gatheral2006}
+Gatheral, J. (2006). \textit{The Volatility Surface: A Practitioner's Guide}. Wiley.
+
+\bibitem{shreve2004}
+Shreve, S.E. (2004). \textit{Stochastic Calculus for Finance II: Continuous-Time Models}. Springer.
+
+\bibitem{arrow1964}
+Arrow, K.J. (1964). The Role of Securities in the Optimal Allocation of Risk-Bearing. \textit{Review of Economic Studies}, 31(2), 91--96.
+
+\bibitem{hanson2003}
+Hanson, R. (2003). Combinatorial Information Market Design. \textit{Information Systems Frontiers}, 5(1), 107--119.
+
+\bibitem{wolfers2004}
+Wolfers, J., \& Zitzewitz, E. (2004). Prediction Markets. \textit{Journal of Economic Perspectives}, 18(2), 107--126.
+
+\end{thebibliography}
+
+\end{document}

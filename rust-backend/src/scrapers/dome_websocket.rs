@@ -11,6 +11,7 @@
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -107,6 +108,7 @@ impl DomeWebSocketClient {
         let max_reconnect_delay = Duration::from_secs(60);
 
         loop {
+            let connect_start = Instant::now();
             match self.connect_and_stream().await {
                 Ok(_) => {
                     info!("WebSocket connection closed gracefully");
@@ -115,6 +117,16 @@ impl DomeWebSocketClient {
                 Err(e) => {
                     error!("WebSocket error: {}", e);
                     warn!("Reconnecting in {:?}...", reconnect_delay);
+
+                    // Record failure/reconnect
+                    let recovery_us = connect_start.elapsed().as_micros() as u64;
+                    crate::latency::global_comprehensive()
+                        .failures
+                        .record_reconnect("dome_ws", recovery_us);
+                    crate::latency::global_comprehensive()
+                        .md_integrity
+                        .record_recovery("dome_ws", recovery_us);
+
                     sleep(reconnect_delay).await;
 
                     // Exponential backoff up to 60 seconds
@@ -182,24 +194,71 @@ impl DomeWebSocketClient {
 
         // Process incoming messages
         while let Some(message) = read.next().await {
+            // Start latency measurement immediately on message receipt
+            let msg_received = Instant::now();
+
             match message {
                 Ok(Message::Text(text)) => {
                     debug!("Received message: {}", &text[..text.len().min(200)]);
 
                     // Parse order update
+                    // Track message for MD integrity (decode time)
+                    let decode_start = Instant::now();
                     match serde_json::from_str::<WsOrderUpdate>(&text) {
                         Ok(update) => {
                             let order = &update.data;
 
+                            // Record decode time for serialization metrics
+                            let decode_us = decode_start.elapsed().as_micros() as u64;
+                            crate::latency::global_comprehensive()
+                                .serialization
+                                .record_decode("dome_ws_order", decode_us, text.len() as u64);
+
+                            // Record MD integrity (message count, timestamp for clock skew)
+                            crate::latency::global_comprehensive()
+                                .md_integrity
+                                .record_message(
+                                    "dome_ws",
+                                    None, // No sequence number available from Dome
+                                    Some(order.timestamp as u64 * 1_000_000), // Convert to microseconds
+                                );
+
+                            // Record Dome WS latency
+                            let latency_us = msg_received.elapsed().as_micros() as u64;
+                            crate::latency::global_registry().record_span(
+                                crate::latency::LatencySpan::new(
+                                    crate::latency::SpanType::DomeWs,
+                                    latency_us,
+                                )
+                                .with_metadata(format!(
+                                    "{}:{}",
+                                    &order.user[..10.min(order.user.len())],
+                                    &order.market_slug
+                                )),
+                            );
+
+                            // Record to performance profiler
+                            crate::performance::global_profiler()
+                                .pipeline
+                                .record_dome_ws(latency_us);
+                            crate::performance::global_profiler()
+                                .throughput
+                                .record_dome_ws_event();
+                            // Record to CPU profiler for hot path tracking
+                            crate::performance::global_profiler()
+                                .cpu
+                                .record_span("dome_ws_process", latency_us);
+
                             info!(
-                                "🔔 REALTIME ORDER: {} [{}] {} {} @ ${:.3} | {} | {}",
+                                "🔔 REALTIME ORDER: {} [{}] {} {} @ ${:.3} | {} | {} ({}μs)",
                                 &order.user[..10],
                                 order.side,
                                 order.shares_normalized,
                                 &order.market_slug,
                                 order.price,
                                 order.title,
-                                update.subscription_id
+                                update.subscription_id,
+                                latency_us
                             );
 
                             // Send to processing channel

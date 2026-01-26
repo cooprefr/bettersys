@@ -45,9 +45,16 @@ pub struct ExpiryEdgeScanner {
 impl ExpiryEdgeScanner {
     /// Create new scanner with default configuration
     pub fn new() -> Self {
+        // Build client with proper TLS configuration
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .danger_accept_invalid_certs(true) // Workaround for cert issues in dev
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
         Self {
             api_base: "https://gamma-api.polymarket.com".to_string(),
-            client: Client::new(),
+            client,
             threshold_hours: 4.0,
             min_probability: 0.70, // 70% threshold (conservative)
             min_liquidity: 1000.0, // $1000 minimum liquidity

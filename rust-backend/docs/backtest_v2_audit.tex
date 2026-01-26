@@ -1,0 +1,659 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{enumitem}
+
+\definecolor{pass}{rgb}{0.0,0.5,0.0}
+\definecolor{partial}{rgb}{0.8,0.6,0.0}
+\definecolor{fail}{rgb}{0.7,0.0,0.0}
+\definecolor{codebg}{rgb}{0.95,0.95,0.95}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  breaklines=true,
+  columns=fullflexible
+}
+
+\newcommand{\PASS}{\textcolor{pass}{\textbf{PASS}}}
+\newcommand{\PARTIAL}{\textcolor{partial}{\textbf{PARTIAL}}}
+\newcommand{\FAIL}{\textcolor{fail}{\textbf{FAIL}}}
+
+\title{Polymarket 15-Minute Up/Down Backtester\\Critical Audit Report}
+\author{Automated Code Audit}
+\date{January 2026}
+
+\begin{document}
+\maketitle
+
+% =============================================================================
+% VERDICT
+% =============================================================================
+\section*{Verdict: \texttt{Near-Production}}
+
+The Polymarket 15-minute up/down backtesting system in \texttt{rust-backend/src/backtest\_v2/} demonstrates \textbf{exceptional architectural rigor} for a research backtester, but falls short of full production-grade status due to several critical gaps.
+
+\textbf{Justification (code-backed):}
+
+\begin{enumerate}[label=\arabic*.]
+    \item \textbf{Strong}: Comprehensive visibility semantics with \texttt{source\_time}, \texttt{arrival\_time}, \texttt{decision\_time} separation (\texttt{visibility.rs:VisibilityWatermark}, lines 189--280). Strict mode panics on first look-ahead violation via global \texttt{STRICT\_MODE} atomic flag (line 27).
+    
+    \item \textbf{Strong}: Production-grade OMS parity with \texttt{OmsParityMode::Full} enforcing rate limiting, validation, and state machine correctness (\texttt{sim\_adapter.rs:OmsParityMode}, \texttt{oms.rs:OrderState} enum with New$\to$PendingAck$\to$Live$\to$Done lifecycle).
+    
+    \item \textbf{Strong}: Mandatory invariant framework (\texttt{invariants.rs}) with Hard mode abort-on-first-violation and deterministic causal dumps. 332 tests pass in the module.
+    
+    \item \textbf{Gap}: Data contract admits \texttt{PeriodicL2Snapshots} rather than requiring \texttt{FullIncrementalL2DeltasWithExchangeSeq} (\texttt{data\_contract.rs:polymarket\_15m\_updown\_hybrid\_snapshots\_and\_trades()}, line 39). The validator explicitly downgrades to \texttt{BacktestMode::Approximate} when snapshots are used (lines 67--72).
+    
+    \item \textbf{Gap}: Settlement engine exists (\texttt{settlement.rs}) but integration with \texttt{BacktestOrchestrator} is incomplete---\texttt{BacktestResults} has \texttt{settlement\_model: SettlementModel::None} as default (line 248). Actual settlement processing in the event loop is not wired.
+\end{enumerate}
+
+% =============================================================================
+% SECTION A: DATA PROVENANCE
+% =============================================================================
+\section{A. Data Provenance and Dataset Fidelity}
+
+\subsection{Production-Grade Requirement}
+For Polymarket 15m up/down markets, production-grade backtesting requires:
+\begin{itemize}
+    \item Full incremental L2 order book deltas with exchange sequence numbers
+    \item Trade prints with trade IDs for deduplication
+    \item Authoritative Binance spot mid-price for settlement reference
+    \item Arrival timestamps distinct from source timestamps
+\end{itemize}
+
+\subsection{Implementation}
+
+The system defines an explicit \texttt{HistoricalDataContract} (\texttt{data\_contract.rs}, lines 12--44):
+
+\begin{lstlisting}
+pub enum OrderBookHistory {
+    FullIncrementalL2DeltasWithExchangeSeq,
+    PeriodicL2Snapshots,
+    TopOfBookPolling { interval_ns: Nanos },
+    None,
+}
+\end{lstlisting}
+
+The default contract for Polymarket 15m is \texttt{PeriodicL2Snapshots} + \texttt{TradePrints} (\texttt{polymarket\_15m\_updown\_hybrid\_snapshots\_and\_trades()}, line 39), which the \texttt{DataQualitySummary} explicitly downgrades to \texttt{BacktestMode::Approximate} (lines 67--72).
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{data\_contract.rs:DataContractValidator::observe()} validates \texttt{source\_time >= 0}, \texttt{arrival\_time >= source\_time} (lines 102--113)
+    \item Sequence gap detection: \texttt{exchange\_seq > prev + 1} triggers downgrade (lines 128--134)
+    \item \texttt{TimestampedEvent} carries both \texttt{time} (arrival) and \texttt{source\_time} (\texttt{events.rs}, lines 275--290)
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Insufficient for production}. The default data contract accepts periodic snapshots, which cannot reconstruct true queue position. The code correctly identifies this and marks results as approximate, but does not enforce full deltas.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item Queue position estimation from snapshots is fundamentally unreliable
+    \item Missing deltas between snapshots mean intermediate trades are invisible
+    \item Sequence gaps in snapshots (detected but not fatal) allow silent data loss
+\end{itemize}
+
+\noindent\textbf{Status:} \PARTIAL \quad \textbf{Confidence:} High
+
+% =============================================================================
+% SECTION B: TIME SEMANTICS
+% =============================================================================
+\section{B. Time Semantics and Look-Ahead Prevention}
+
+\subsection{Production-Grade Requirement}
+Strategy decisions must be based only on information that has ``arrived'' at or before the decision time. This requires:
+\begin{itemize}
+    \item Strict separation of \texttt{source\_time} (upstream timestamp) and \texttt{arrival\_time} (when our system sees it)
+    \item \texttt{decision\_time} (SimClock) as the sole reference for visibility
+    \item Hard abort on any \texttt{arrival\_time > decision\_time} read
+\end{itemize}
+
+\subsection{Implementation}
+
+The system implements a comprehensive visibility model (\texttt{visibility.rs}):
+
+\begin{lstlisting}
+pub struct VisibilityWatermark {
+    decision_time: Nanos,
+    latest_applied_arrival: Nanos,
+    violations: Vec<VisibilityViolation>,
+}
+\end{lstlisting}
+
+\textbf{Key functions:}
+\begin{itemize}
+    \item \texttt{is\_visible(event)} $\to$ \texttt{event.time <= decision\_time} (line 235)
+    \item \texttt{record\_applied(event)} panics in strict mode if \texttt{event.time > decision\_time} (lines 258--271)
+    \item Global \texttt{STRICT\_MODE} atomic flag enables panic-on-violation (lines 25--40)
+    \item \texttt{SimArrivalPolicy} enum with \texttt{RecordedArrival} (best), \texttt{SimulatedLatency} (adds latency model), \texttt{Unusable} (blocks production claims) (lines 47--68)
+\end{itemize}
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{visibility.rs:enable\_strict\_mode()} sets global flag (line 30)
+    \item \texttt{orchestrator.rs:BacktestOrchestrator::new()} enables strict mode from config (line 322)
+    \item 17 visibility-specific tests in \texttt{visibility\_tests.rs}
+    \item \texttt{test\_strict\_mode\_panics\_on\_violation} verifies panic behavior
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Sufficient when strict mode is enabled}. The invariant is structurally enforced via panic. However, strict mode is \textbf{not enabled by default} (\texttt{config.strict\_mode = false}, \texttt{orchestrator.rs} line 131).
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item Default non-strict mode logs violations but continues, allowing silent look-ahead
+    \item \texttt{Unusable} policy is checked but only blocks at summary generation, not at event processing
+\end{itemize}
+
+\noindent\textbf{Status:} \PASS \quad \textbf{Confidence:} High (when strict mode enabled)
+
+% =============================================================================
+% SECTION C: MARKET RECONSTRUCTION
+% =============================================================================
+\section{C. Market Reconstruction and Integrity}
+
+\subsection{Production-Grade Requirement}
+\begin{itemize}
+    \item Deterministic handling of duplicates, gaps, and out-of-order events
+    \item Explicit policy (halt/resync/drop) for each pathology
+    \item Identical behavior in backtest and live paths
+\end{itemize}
+
+\subsection{Implementation}
+
+\texttt{integrity.rs} implements \texttt{StreamIntegrityGuard} with configurable policies:
+
+\begin{lstlisting}
+pub enum DuplicatePolicy { Drop, Halt }
+pub enum GapPolicy { Halt, Resync }
+pub enum OutOfOrderPolicy { Drop, Reorder, Halt }
+\end{lstlisting}
+
+\texttt{PathologyPolicy::strict()} (line 86) halts on any gap or out-of-order, drops duplicates. \texttt{PathologyPolicy::resilient()} (line 95) allows small gaps and reordering.
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{integrity.rs:StreamIntegrityGuard::process()} returns \texttt{IntegrityResult} enum (Forward/Dropped/Reordered/NeedResync/Halted), lines 320--450
+    \item Per-token \texttt{TokenState} tracks \texttt{last\_seq}, \texttt{expected\_seq}, dedup hash set, reorder buffer (lines 169--195)
+    \item \texttt{PathologyCounters} tracks all detected pathologies (lines 109--145)
+    \item 8 tests in \texttt{integrity\_tests.rs}
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Sufficient}. The guard is deterministic, configurable, and produces observable counters. However, the default policy in \texttt{BacktestConfig} is \texttt{PathologyPolicy::default()} which is strict---but this is not verified to match live behavior.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item Reorder buffer overflow with \texttt{Reorder} policy can still cause halt
+    \item Resync requires snapshot arrival; if no snapshot arrives, stream stays in \texttt{NeedSnapshot} state indefinitely
+\end{itemize}
+
+\noindent\textbf{Status:} \PASS \quad \textbf{Confidence:} High
+
+% =============================================================================
+% SECTION D: EXECUTION SIMULATION
+% =============================================================================
+\section{D. Execution Simulation Realism}
+
+\subsection{Production-Grade Requirement}
+\begin{itemize}
+    \item FIFO matching with explicit queue position tracking
+    \item Maker/taker fee distinction
+    \item Self-trade prevention
+    \item Cancel-fill race handling
+    \item Price discretization to tick size
+\end{itemize}
+
+\subsection{Implementation}
+
+\textbf{Matching Engine} (\texttt{matching.rs}):
+\begin{itemize}
+    \item \texttt{LimitOrderBook} uses \texttt{BTreeMap<PriceTicks, PriceLevel>} for deterministic ordering (line 240)
+    \item \texttt{price\_to\_ticks()} converts to discrete ticks (line 28)
+    \item \texttt{FeeConfig} with separate \texttt{maker\_fee\_rate}, \texttt{taker\_fee\_rate} (lines 45--56)
+    \item \texttt{SelfTradeMode} enum: CancelNewest/CancelOldest/CancelBoth/DecrementAndCancel (lines 73--82)
+\end{itemize}
+
+\textbf{Queue Position Model} (\texttt{queue\_model.rs}):
+\begin{itemize}
+    \item \texttt{QueuePositionModel} tracks per-level FIFO queues (lines 115--140)
+    \item \texttt{QueuePosition} struct with \texttt{position}, \texttt{size\_ahead}, \texttt{our\_size} (lines 12--23)
+    \item \texttt{RaceResult} enum: CancelWon/FillWon/Partial (lines 168--182)
+\end{itemize}
+
+\textbf{Maker Fill Model} (\texttt{orchestrator.rs}):
+\begin{lstlisting}
+pub enum MakerFillModel {
+    ExplicitQueue,   // Production-grade
+    MakerDisabled,   // Taker-only (valid)
+    Optimistic,      // INVALID
+}
+\end{lstlisting}
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{matching.rs:match\_order()} implements FIFO matching with STP (lines 420--520)
+    \item \texttt{queue\_model.rs:LevelQueue::reduce\_front()} properly decrements queue (lines 62--78)
+    \item Tests verify partial fill, STP, post-only rejection (lines 680--780)
+    \item 15 tests in \texttt{queue\_model\_tests.rs}
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Sufficient for taker strategies}. Queue position model exists for maker strategies, but integration with actual fill generation in \texttt{BacktestOrchestrator} event loop is partial---the \texttt{queue\_model} field exists (line 346) but is not fully wired to gate fills.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item \texttt{MakerFillModel::Optimistic} is allowed (marks results invalid but doesn't prevent use)
+    \item Queue position from snapshot-only data is estimated, not exact
+    \item Cancel-fill race logic exists in model but not fully integrated with \texttt{pending\_cancels} in orchestrator
+\end{itemize}
+
+\noindent\textbf{Status:} \PARTIAL \quad \textbf{Confidence:} Medium
+
+% =============================================================================
+% SECTION E: OMS PARITY
+% =============================================================================
+\section{E. OMS Parity with Live Trading}
+
+\subsection{Production-Grade Requirement}
+\begin{itemize}
+    \item Identical order state machine
+    \item Rate limiting enforced
+    \item Market status gating (halt/resolve)
+    \item Validation (size, price, tick size) matches live venue
+\end{itemize}
+
+\subsection{Implementation}
+
+\texttt{oms.rs} implements a full \texttt{OrderManagementSystem}:
+
+\begin{lstlisting}
+pub enum OrderState {
+    New, PendingAck, Live, PartiallyFilled, PendingCancel, Done
+}
+\end{lstlisting}
+
+\texttt{VenueConstraints} (lines 190--230) encodes Polymarket-specific limits:
+\begin{itemize}
+    \item \texttt{min\_order\_size: 1.0}, \texttt{max\_order\_size: 100\_000.0}
+    \item \texttt{tick\_size: 0.01}, \texttt{min\_price: 0.01}, \texttt{max\_price: 0.99}
+    \item \texttt{max\_orders\_per\_second: 5}, \texttt{max\_cancels\_per\_second: 10}
+\end{itemize}
+
+\texttt{OmsParityMode} (\texttt{sim\_adapter.rs}, lines 14--35):
+\begin{lstlisting}
+pub enum OmsParityMode {
+    Full,     // Production-valid
+    Relaxed,  // Logs but doesn't block
+    Bypass,   // Legacy, no validation
+}
+\end{lstlisting}
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{sim\_adapter.rs:send\_order()} validates through OMS before matching (lines 260--310)
+    \item \texttt{oms.rs:RateLimiter} with sliding window (lines 320--370)
+    \item \texttt{oms.rs:set\_market\_status()} terminates open orders on halt (lines 440--460)
+    \item \texttt{OmsParityStats} tracks would-be rejections in relaxed mode (lines 50--72)
+    \item 18 tests in \texttt{oms\_parity\_tests.rs}
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Sufficient when \texttt{OmsParityMode::Full} is used}. Default is Full, and validation failures abort order submission. Stats are recorded even in relaxed mode.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item Bypass mode completely skips OMS (for legacy tests)
+    \item Rate limiter uses simulated time, not wall clock---may behave differently under time jumps
+    \item Out-of-order fills are buffered (\texttt{pending\_messages}), but live venue may not do this
+\end{itemize}
+
+\noindent\textbf{Status:} \PASS \quad \textbf{Confidence:} High
+
+% =============================================================================
+% SECTION F: SETTLEMENT
+% =============================================================================
+\section{F. Settlement and 15-Minute Boundary Correctness}
+
+\subsection{Production-Grade Requirement}
+\begin{itemize}
+    \item Explicit window start/end parsing from market slug
+    \item Reference price rule (Binance mid) with arrival-time visibility
+    \item Tie rule (No wins on tie)
+    \item Outcome only knowable after reference price event arrives
+\end{itemize}
+
+\subsection{Implementation}
+
+\texttt{settlement.rs} provides a comprehensive \texttt{SettlementSpec} and \texttt{SettlementEngine}:
+
+\begin{lstlisting}
+pub fn polymarket_15m_updown() -> Self {
+    Self {
+        window_duration_ns: 15 * 60 * NS_PER_SEC,
+        reference_price_rule: ReferencePriceRule::MidPrice,
+        tie_rule: TieRule::NoWins,
+        outcome_knowable_rule: OutcomeKnowableRule::OnReferenceArrival,
+        ...
+    }
+}
+\end{lstlisting}
+
+\textbf{Key features:}
+\begin{itemize}
+    \item \texttt{parse\_window\_start()} extracts timestamp from slug ``btc-updown-15m-1768533300'' (lines 125--135)
+    \item \texttt{determine\_outcome()} applies rounding and tie rule (lines 145--180)
+    \item \texttt{try\_settle()} checks \texttt{OutcomeKnowableRule::OnReferenceArrival} (lines 335--380)
+    \item \texttt{SettlementState} enum: Pending$\to$AwaitingStartPrice$\to$Active$\to$Resolvable$\to$Resolved (lines 190--240)
+\end{itemize}
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{settlement.rs:observe\_price()} respects arrival vs source time (lines 295--330)
+    \item \texttt{test\_outcome\_not\_knowable\_before\_arrival} verifies visibility enforcement
+    \item \texttt{test\_boundary\_exactly} and \texttt{test\_boundary\_minus\_epsilon} test edge cases
+    \item 12 tests in \texttt{settlement\_tests.rs}
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Insufficient}. The \texttt{SettlementEngine} is well-designed but \textbf{not integrated} with \texttt{BacktestOrchestrator}. The default \texttt{BacktestResults.settlement\_model} is \texttt{SettlementModel::None} (line 248), and there is no code in the event loop that calls \texttt{engine.try\_settle()}.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item PnL computed without settlement is unrealized and may misstate actual outcome
+    \item Position valuation at market close uses last mid, not settlement price
+    \item Markets that resolve during the backtest window are not processed
+\end{itemize}
+
+\noindent\textbf{Status:} \FAIL \quad \textbf{Confidence:} High
+
+% =============================================================================
+% SECTION G: ACCOUNTING
+% =============================================================================
+\section{G. Accounting Correctness}
+
+\subsection{Production-Grade Requirement}
+\begin{itemize}
+    \item Double-entry ledger with balanced entries
+    \item Fixed-point arithmetic to avoid floating-point errors
+    \item Hard abort on first unbalanced entry or negative cash
+    \item Equity identity: $\text{Cash} + \text{MTM}(\text{Positions}) = \text{Capital} + \text{RealizedPnL} - \text{Fees}$
+\end{itemize}
+
+\subsection{Implementation}
+
+\texttt{ledger.rs} implements a canonical double-entry system:
+
+\begin{lstlisting}
+pub type Amount = i128;
+pub const AMOUNT_SCALE: i128 = 100_000_000;  // 8 decimal places
+\end{lstlisting}
+
+\textbf{Account types:}
+\begin{itemize}
+    \item Cash, CostBasis, FeesPaid, Capital, RealizedPnL, SettlementReceivable/Payable
+\end{itemize}
+
+\texttt{LedgerEntry} with \texttt{is\_balanced()} check (line 230), \texttt{total\_debits()}, \texttt{total\_credits()} (lines 235--245).
+
+\texttt{AccountingViolation} enum (lines 255--305) enumerates:
+\begin{itemize}
+    \item UnbalancedEntry, NegativeCash, NegativePosition, DuplicatePosting, EquityMismatch, CostBasisMismatch
+\end{itemize}
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{ledger.rs:CausalTrace::format\_compact()} produces debugging output (lines 350--400)
+    \item \texttt{invariants.rs} includes accounting category with \texttt{check\_accounting\_balance()} (lines 1140--1180)
+    \item 45 tests in \texttt{ledger\_tests.rs}
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Partial}. The ledger infrastructure exists and is tested, but \texttt{BacktestResults} shows \texttt{accounting\_mode: AccountingMode::Legacy} as default (line 253) and \texttt{strict\_accounting\_enabled: false}. The \texttt{InvariantEnforcer} accounting checks exist but are not wired into the main event loop.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item Legacy mode uses float arithmetic, not fixed-point
+    \item Without strict accounting, unbalanced entries silently accumulate
+    \item Ledger exists but fill events are processed in \texttt{sim\_adapter.rs:process\_fill()} using direct float updates, not ledger postings
+\end{itemize}
+
+\noindent\textbf{Status:} \PARTIAL \quad \textbf{Confidence:} Medium
+
+% =============================================================================
+% SECTION H: INVARIANTS AND DETERMINISM
+% =============================================================================
+\section{H. Invariants, Determinism, and Reproducibility}
+
+\subsection{Production-Grade Requirement}
+\begin{itemize}
+    \item Hard mode invariant enforcement with abort on first violation
+    \item Deterministic event ordering: $(time, priority, source, seq)$
+    \item Seeded RNG only (no system time, no HashMap iteration order)
+    \item Bit-for-bit reproducibility across runs
+\end{itemize}
+
+\subsection{Implementation}
+
+\texttt{invariants.rs} provides \texttt{InvariantEnforcer} with categories Time, Book, OMS, Fills, Accounting:
+
+\begin{lstlisting}
+pub enum InvariantMode { Off, Soft, Hard }
+pub fn production() -> InvariantConfig {
+    InvariantConfig {
+        mode: InvariantMode::Hard,
+        categories: CategoryFlags::all(),
+        ...
+    }
+}
+\end{lstlisting}
+
+\texttt{CausalDump} (lines 320--380) provides deterministic text dump on violation.
+
+\textbf{Event ordering} (\texttt{events.rs}, lines 308--320):
+\begin{lstlisting}
+impl Ord for TimestampedEvent {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.time.cmp(&other.time)
+            .then_with(|| self.event.priority().cmp(...))
+            .then_with(|| self.source.cmp(&other.source))
+            .then_with(|| self.seq.cmp(&other.seq))
+    }
+}
+\end{lstlisting}
+
+\textbf{Seeding} (\texttt{validation.rs:DeterministicSeed}, lines 20--50) derives sub-seeds for latency, fill probability, queue position.
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{validation.rs:ReproducibilityValidator} with checkpoint fingerprinting (lines 120--180)
+    \item \texttt{StateFingerprint} hashes positions and book state (lines 60--110)
+    \item 41 tests in \texttt{invariant\_tests.rs}
+    \item \texttt{test\_causal\_dump\_deterministic()} verifies identical dumps
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Sufficient infrastructure, partial integration}. The invariant framework is comprehensive and tested. However, \texttt{BacktestOrchestrator} does not instantiate an \texttt{InvariantEnforcer} and does not call check methods during the event loop.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item HashMap used for \texttt{positions}, \texttt{open\_orders}, \texttt{last\_mid} in orchestrator---iteration order is nondeterministic (Rust HashMap is not ordered)
+    \item \texttt{ReproducibilityValidator} exists but is not called by orchestrator
+\end{itemize}
+
+\noindent\textbf{Status:} \PARTIAL \quad \textbf{Confidence:} Medium
+
+% =============================================================================
+% SECTION I: ADVERSARIAL GATING
+% =============================================================================
+\section{I. Adversarial Gating}
+
+\subsection{Production-Grade Requirement}
+\begin{itemize}
+    \item Zero-edge test: $p_{theory} = p_{market}$ should yield PnL $\approx 0$ before fees
+    \item Martingale price path: random walk should not produce systematic profit
+    \item Signal inversion: original and inverted signals should not both be profitable
+    \item Mandatory gate pass before trusting positive results
+\end{itemize}
+
+\subsection{Implementation}
+
+\texttt{gate\_suite.rs} implements \texttt{GateSuite} with configurable tolerances:
+
+\begin{lstlisting}
+pub struct GateTolerances {
+    pub max_mean_pnl_before_fees: f64,      // $0.50
+    pub max_positive_pnl_probability: f64,  // 0.55
+    pub min_trades_for_validity: u64,       // 10
+}
+\end{lstlisting}
+
+\texttt{TrustLevel} enum: Trusted, Untrusted, Unknown, Bypassed (lines 200--210).
+
+\texttt{ZeroEdgeWrapper<S>} wraps a strategy to force zero edge (lines 280--340).
+
+\texttt{SyntheticPriceGenerator} creates martingale price paths (lines 230--280).
+
+\textbf{Sensitivity analysis} (\texttt{sensitivity.rs}):
+\begin{itemize}
+    \item \texttt{LatencySweepConfig} with canonical values [0, 10, 25, 50, 100, 250, 500, 1000]ms
+    \item \texttt{QueueModelAssumption} sweep: ExplicitFifo, Optimistic, Conservative, MakerDisabled
+    \item \texttt{FragilityDetector} with automatic threshold-based detection
+\end{itemize}
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{gate\_suite.rs:GateSuiteReport::format\_summary()} produces audit output (lines 170--200)
+    \item \texttt{BacktestResults.trust\_level} and \texttt{gate\_suite\_passed} fields (lines 255--260)
+    \item 65 tests in \texttt{gate\_suite\_tests.rs}
+    \item 46 tests in \texttt{sensitivity\_tests.rs}
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Sufficient infrastructure}. The gate suite is comprehensive and the tolerances are quantitatively specified. However, \texttt{GateMode} defaults to \texttt{Optional} (\texttt{orchestrator.rs} line 118), not \texttt{Mandatory}. Results are not automatically gated.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item Gate suite must be explicitly run; it is not invoked by \texttt{BacktestOrchestrator::run()}
+    \item Sensitivity report in results is default empty unless explicitly populated
+\end{itemize}
+
+\noindent\textbf{Status:} \PARTIAL \quad \textbf{Confidence:} High
+
+% =============================================================================
+% SECTION J: OBSERVABILITY
+% =============================================================================
+\section{J. Observability and Debugability}
+
+\subsection{Production-Grade Requirement}
+\begin{itemize}
+    \item DecisionProof for every strategy invocation
+    \item Causal dump on violation with bounded recent events
+    \item Ability to reproduce any fill from trace
+\end{itemize}
+
+\subsection{Implementation}
+
+\texttt{visibility.rs:DecisionProofBuffer} (lines 380--440):
+\begin{lstlisting}
+pub struct DecisionProof {
+    pub decision_id: u64,
+    pub decision_time: Nanos,
+    pub input_events: Vec<InputEventRecord>,
+    pub proof_hash: u64,
+}
+\end{lstlisting}
+
+\texttt{invariants.rs:CausalDump} (lines 320--380) includes:
+\begin{itemize}
+    \item \texttt{recent\_events} (bounded to \texttt{event\_dump\_depth})
+    \item \texttt{oms\_transitions}
+    \item \texttt{ledger\_entries}
+    \item \texttt{state\_snapshot}
+    \item \texttt{fingerprint\_at\_abort}
+\end{itemize}
+
+\texttt{validation.rs:EventTracer} (lines 500--600) records \texttt{TracedEvent} and \texttt{OrderTraceEvent}.
+
+\textbf{Evidence:}
+\begin{itemize}
+    \item \texttt{orchestrator.rs} creates \texttt{decision\_proofs: DecisionProofBuffer::new(1000)} (line 334)
+    \item \texttt{current\_proof} is started before strategy callbacks (lines 360--365)
+    \item \texttt{visibility.rs:DecisionProofBuffer::dump\_on\_failure()} for debugging (lines 430--450)
+\end{itemize}
+
+\subsection{Sufficiency}
+\textbf{Sufficient}. Decision proofs are recorded in the orchestrator. Causal dumps are produced by invariant enforcer (though enforcer not integrated). Event tracer exists for detailed replay.
+
+\subsection{Failure Modes}
+\begin{itemize}
+    \item \texttt{current\_proof.add\_input\_event()} is called but the integration appears incomplete in the event loop
+    \item Order trace events may not capture all state transitions if OMS parity is bypassed
+\end{itemize}
+
+\noindent\textbf{Status:} \PASS \quad \textbf{Confidence:} Medium
+
+% =============================================================================
+% GAP REGISTER
+% =============================================================================
+\newpage
+\section*{Gap Register}
+
+\begin{enumerate}[label=\textbf{G\arabic*.}]
+    \item \textbf{Settlement integration not wired} \\
+    \textit{Severity:} Critical \\
+    \textit{Statement:} The \texttt{SettlementEngine} is not invoked in \texttt{BacktestOrchestrator::run()} event loop; \texttt{BacktestResults.settlement\_model} defaults to \texttt{None}. \\
+    \textit{Impact:} PnL for markets that resolve during backtest is computed incorrectly; final position value uses last mid, not settlement price. \\
+    \textit{Location:} \texttt{orchestrator.rs:BacktestResults}, line 248; missing call to \texttt{settlement.try\_settle()} in event loop.
+
+    \item \textbf{InvariantEnforcer not integrated with orchestrator} \\
+    \textit{Severity:} Major \\
+    \textit{Statement:} \texttt{BacktestOrchestrator} does not instantiate \texttt{InvariantEnforcer}; no invariant checks are called during event processing. \\
+    \textit{Impact:} Invariant violations (time, book, OMS, fills, accounting) are not detected at runtime. \\
+    \textit{Location:} \texttt{orchestrator.rs:BacktestOrchestrator} struct (lines 290--350) has no \texttt{invariant\_enforcer} field.
+
+    \item \textbf{Default data contract accepts periodic snapshots} \\
+    \textit{Severity:} Major \\
+    \textit{Statement:} \texttt{HistoricalDataContract::polymarket\_15m\_updown\_hybrid\_snapshots\_and\_trades()} uses \texttt{PeriodicL2Snapshots}, not \texttt{FullIncrementalL2DeltasWithExchangeSeq}. \\
+    \textit{Impact:} Queue position estimation is unreliable; results are marked approximate but production runs may proceed. \\
+    \textit{Location:} \texttt{data\_contract.rs}, line 39.
+
+    \item \textbf{Ledger not wired to fill processing} \\
+    \textit{Severity:} Major \\
+    \textit{Statement:} \texttt{sim\_adapter.rs:process\_fill()} updates positions using float arithmetic directly, not via \texttt{Ledger} postings. \\
+    \textit{Impact:} No double-entry audit trail for fills; accounting invariants are not enforced. \\
+    \textit{Location:} \texttt{sim\_adapter.rs:process\_fill()}, lines 240--280.
+
+    \item \textbf{Strict mode disabled by default} \\
+    \textit{Severity:} Minor \\
+    \textit{Statement:} \texttt{BacktestConfig.strict\_mode} defaults to \texttt{false} (\texttt{orchestrator.rs}, line 131). \\
+    \textit{Impact:} Visibility violations are logged but do not abort; look-ahead bias can silently occur. \\
+    \textit{Location:} \texttt{orchestrator.rs:BacktestConfig::default()}, line 131.
+
+    \item \textbf{GateMode defaults to Optional} \\
+    \textit{Severity:} Minor \\
+    \textit{Statement:} \texttt{BacktestConfig.gate\_mode} defaults to \texttt{GateMode::Optional}. \\
+    \textit{Impact:} Positive backtest results can be trusted without passing adversarial gates. \\
+    \textit{Location:} \texttt{orchestrator.rs:BacktestConfig::default()}, line 118 (uses \texttt{GateMode::default()}).
+
+    \item \textbf{HashMap iteration order nondeterminism} \\
+    \textit{Severity:} Minor \\
+    \textit{Statement:} \texttt{positions: HashMap}, \texttt{open\_orders: HashMap}, \texttt{last\_mid: HashMap} in \texttt{BacktestOrchestrator} use nondeterministic iteration order. \\
+    \textit{Impact:} If iteration order affects logic (unlikely but possible), runs may not be bit-for-bit reproducible. \\
+    \textit{Location:} \texttt{orchestrator.rs}, lines 340--345.
+
+    \item \textbf{Queue model partial integration} \\
+    \textit{Severity:} Minor \\
+    \textit{Statement:} \texttt{QueuePositionModel} is instantiated (\texttt{orchestrator.rs}, line 346) but its \texttt{add\_order()}, \texttt{remove\_order()}, and \texttt{reduce\_front()} are not called in the event loop to gate maker fills. \\
+    \textit{Impact:} \texttt{MakerFillModel::ExplicitQueue} is claimed but actual queue enforcement is incomplete. \\
+    \textit{Location:} \texttt{orchestrator.rs:run()} event loop (lines 380--650).
+\end{enumerate}
+
+\end{document}

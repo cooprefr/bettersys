@@ -186,6 +186,73 @@ pub fn kelly_for_signal(
     calculate_kelly_position(signal_confidence, signal_price, &params)
 }
 
+/// Kelly with belief volatility adjustment
+///
+/// Higher sigma_b means more uncertainty about our edge, so we reduce position size.
+/// The adjustment is based on comparing our edge to the expected movement in probability
+/// over the holding period.
+///
+/// # Arguments
+/// * `confidence` - Our confidence in the outcome (0.0 to 1.0)
+/// * `market_price` - Current market price (implied probability)
+/// * `sigma_b` - Belief volatility (annualized, in log-odds space)
+/// * `t_years` - Time to expiry in years
+/// * `params` - Kelly calculation parameters
+///
+/// # Returns
+/// * `KellyResult` - Contains position size adjusted for volatility
+pub fn kelly_with_belief_vol(
+    confidence: f64,
+    market_price: f64,
+    sigma_b: f64,
+    t_years: f64,
+    params: &KellyParams,
+) -> KellyResult {
+    // First calculate standard Kelly
+    let mut result = calculate_kelly_position(confidence, market_price, params);
+
+    if !result.should_trade {
+        return result;
+    }
+
+    // Apply volatility penalty
+    // Expected movement in p over holding period
+    // In probability space: Δp ≈ σ_b × √t × p(1-p)
+    let p = market_price.clamp(0.01, 0.99);
+    let sensitivity = p * (1.0 - p);
+    let expected_p_move = sigma_b * t_years.sqrt() * sensitivity;
+
+    // If expected movement is large relative to edge, reduce position
+    // edge_safety_ratio = edge / expected_volatility
+    let edge_safety_ratio = result.edge / (expected_p_move + 0.001);
+
+    let vol_multiplier = if edge_safety_ratio < 1.0 {
+        // Edge is smaller than expected vol - very risky, scale down aggressively
+        edge_safety_ratio.max(0.1)
+    } else if edge_safety_ratio < 2.0 {
+        // Edge is 1-2x expected vol - reduce somewhat
+        // Linear interpolation from 0.75 at ratio=1 to 1.0 at ratio=2
+        0.5 + 0.25 * edge_safety_ratio
+    } else {
+        // Edge is 2x+ expected vol - full position
+        1.0
+    };
+
+    result.position_size_usd *= vol_multiplier;
+    result.actual_fraction *= vol_multiplier;
+
+    // Re-check minimum
+    if result.position_size_usd < params.min_position_usd {
+        result.should_trade = false;
+        result.skip_reason = Some(format!(
+            "Vol-adjusted position ${:.2} below min (vol_mult={:.2})",
+            result.position_size_usd, vol_multiplier
+        ));
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +305,130 @@ mod tests {
         assert!(result.should_trade);
         assert!(result.position_size_usd <= params.bankroll * params.max_position_pct);
         println!("High conf position: ${:.2}", result.position_size_usd);
+    }
+
+    // ========================================================================
+    // Vol-Adjusted Kelly Tests
+    // ========================================================================
+
+    #[test]
+    fn test_vol_adjusted_kelly_reduces_position() {
+        let params = KellyParams {
+            bankroll: 10000.0,
+            kelly_fraction: 0.25,
+            max_position_pct: 0.10,
+            min_position_usd: 1.0,
+        };
+
+        // Same inputs, different sigma_b
+        // t_years for 15 minutes = 15 / (365.25 * 24 * 60) ≈ 0.0000285
+        let t_years = 15.0 / (365.25 * 24.0 * 60.0);
+
+        let low_vol = kelly_with_belief_vol(0.60, 0.50, 1.0, t_years, &params);
+        let high_vol = kelly_with_belief_vol(0.60, 0.50, 10.0, t_years, &params);
+
+        // Higher vol should result in smaller or equal position
+        assert!(
+            high_vol.position_size_usd <= low_vol.position_size_usd,
+            "High vol ${:.2} should be <= low vol ${:.2}",
+            high_vol.position_size_usd,
+            low_vol.position_size_usd
+        );
+    }
+
+    #[test]
+    fn test_vol_adjusted_kelly_preserves_no_edge() {
+        let params = KellyParams {
+            bankroll: 10000.0,
+            kelly_fraction: 0.25,
+            max_position_pct: 0.10,
+            min_position_usd: 1.0,
+        };
+
+        // No edge case - should still not trade
+        let t_years = 15.0 / (365.25 * 24.0 * 60.0);
+        let result = kelly_with_belief_vol(0.40, 0.50, 2.0, t_years, &params);
+
+        assert!(!result.should_trade);
+        assert!(result.edge < 0.0);
+    }
+
+    #[test]
+    fn test_vol_adjusted_kelly_can_skip_trade() {
+        let params = KellyParams {
+            bankroll: 1000.0,
+            kelly_fraction: 0.25,
+            max_position_pct: 0.10,
+            min_position_usd: 10.0,
+        };
+
+        // Small edge with high volatility - may skip
+        let t_years = 15.0 / (365.25 * 24.0 * 60.0);
+        let result = kelly_with_belief_vol(0.52, 0.50, 20.0, t_years, &params);
+
+        // If vol-adjusted position is below minimum, should skip
+        if result.position_size_usd < params.min_position_usd {
+            assert!(!result.should_trade);
+            assert!(result.skip_reason.is_some());
+        }
+    }
+
+    #[test]
+    fn test_vol_adjusted_kelly_full_position_large_edge() {
+        let params = KellyParams {
+            bankroll: 10000.0,
+            kelly_fraction: 0.25,
+            max_position_pct: 0.10,
+            min_position_usd: 1.0,
+        };
+
+        // Large edge with moderate vol - should get close to full position
+        let t_years = 15.0 / (365.25 * 24.0 * 60.0);
+        let result_vol = kelly_with_belief_vol(0.80, 0.50, 2.0, t_years, &params);
+        let result_std = calculate_kelly_position(0.80, 0.50, &params);
+
+        // With large edge relative to vol, positions should be similar
+        assert!(result_vol.should_trade);
+        // Vol-adjusted should be at least 50% of standard (generous threshold)
+        assert!(
+            result_vol.position_size_usd >= result_std.position_size_usd * 0.5,
+            "Vol-adjusted ${:.2} should be >= 50% of standard ${:.2}",
+            result_vol.position_size_usd,
+            result_std.position_size_usd
+        );
+    }
+
+    #[test]
+    fn test_vol_adjusted_kelly_edge_safety_ratio() {
+        let params = KellyParams {
+            bankroll: 10000.0,
+            kelly_fraction: 0.25,
+            max_position_pct: 0.10,
+            min_position_usd: 1.0,
+        };
+
+        let t_years = 15.0 / (365.25 * 24.0 * 60.0);
+
+        // Test three regimes:
+        // 1. Low sigma_b = high edge safety ratio = full position
+        let low_sigma = kelly_with_belief_vol(0.60, 0.50, 0.5, t_years, &params);
+        // 2. Medium sigma_b = medium ratio = partial reduction
+        let med_sigma = kelly_with_belief_vol(0.60, 0.50, 5.0, t_years, &params);
+        // 3. High sigma_b = low ratio = significant reduction
+        let high_sigma = kelly_with_belief_vol(0.60, 0.50, 20.0, t_years, &params);
+
+        // Positions should be ordered: low_sigma >= med_sigma >= high_sigma
+        assert!(
+            low_sigma.position_size_usd >= med_sigma.position_size_usd,
+            "low >= med: ${:.2} >= ${:.2}",
+            low_sigma.position_size_usd,
+            med_sigma.position_size_usd
+        );
+        assert!(
+            med_sigma.position_size_usd >= high_sigma.position_size_usd,
+            "med >= high: ${:.2} >= ${:.2}",
+            med_sigma.position_size_usd,
+            high_sigma.position_size_usd
+        );
     }
 }

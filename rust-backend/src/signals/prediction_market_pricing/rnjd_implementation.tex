@@ -1,0 +1,360 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+\title{Risk-Neutral Jump-Diffusion Kernel for 15-Minute Prediction Markets\\[0.5em]\large Implementation Documentation}
+\author{BetterBot Trading System}
+\date{January 2026}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  language=Rust
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document describes the implementation of a Risk-Neutral Jump-Diffusion (RN-JD) pricing kernel for short-term cryptocurrency prediction markets. The system estimates belief volatility in log-odds space, applies risk-neutral drift corrections, and adjusts position sizing based on volatility regimes. The implementation is integrated into the FAST15M trading engine for BTC/ETH/SOL/XRP 15-minute Up/Down markets on Polymarket.
+\end{abstract}
+
+\section{Introduction and Motivation}
+
+Prediction markets for short-term price movements (e.g., ``Will BTC be higher in 15 minutes?'') exhibit unique dynamics that standard option pricing models fail to capture. The key challenges are:
+
+\begin{enumerate}
+    \item \textbf{Bounded outcomes}: Prices $p_t \in (0,1)$ cannot be modeled with unbounded diffusions
+    \item \textbf{Martingale constraint}: Risk-neutral pricing requires $\mathbb{E}^Q[p_T] = p_0$
+    \item \textbf{News-driven jumps}: Information shocks cause discontinuous price movements
+    \item \textbf{Short horizons}: 15-minute windows demand real-time volatility estimation
+\end{enumerate}
+
+Our implementation follows the theoretical framework of ``Toward Black-Scholes for Prediction Markets'' (arXiv:2510.15205), adapting it for production trading with emphasis on computational efficiency and robustness.
+
+\section{Mathematical Foundation}
+
+\subsection{Log-Odds Transformation}
+
+The core insight is to transform the bounded probability space to unbounded log-odds:
+
+\begin{definition}[Logit Transform]
+For probability $p \in (0,1)$, define:
+\begin{equation}
+x = \text{logit}(p) = \ln\left(\frac{p}{1-p}\right) \in \mathbb{R}
+\end{equation}
+with inverse $p = \sigma(x) = \frac{1}{1+e^{-x}}$ (sigmoid function).
+\end{definition}
+
+The Jacobian of this transformation is:
+\begin{equation}
+\frac{dp}{dx} = \sigma'(x) = p(1-p)
+\end{equation}
+
+This maps the constrained probability dynamics to an unconstrained diffusion in $x$-space.
+
+\subsection{Risk-Neutral Dynamics}
+
+Under the risk-neutral measure $\mathbb{Q}$, we model log-odds as:
+\begin{equation}
+dx_t = \mu(p_t)\,dt + \sigma_b\,dW_t^Q
+\end{equation}
+
+where $\sigma_b$ is the \emph{belief volatility} (annualized standard deviation in log-odds space).
+
+\begin{proposition}[Martingale Drift]
+For the probability process $p_t = \sigma(x_t)$ to be a $\mathbb{Q}$-martingale, the drift must satisfy:
+\begin{equation}
+\mu(p) = -\frac{1}{2}\sigma_b^2(1 - 2p)
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Apply It\^{o}'s lemma to $p_t = \sigma(x_t)$:
+\begin{align}
+dp_t &= \sigma'(x_t)\,dx_t + \frac{1}{2}\sigma''(x_t)\,(dx_t)^2 \\
+&= p(1-p)\left[\mu\,dt + \sigma_b\,dW_t\right] + \frac{1}{2}p(1-p)(1-2p)\sigma_b^2\,dt
+\end{align}
+Setting $\mathbb{E}^Q[dp_t] = 0$ yields the result.
+\end{proof}
+
+\subsection{Jump Extension}
+
+To handle news-driven discontinuities, we extend to a jump-diffusion:
+\begin{equation}
+dx_t = \mu(p_t)\,dt + \sigma_b\,dW_t^Q + J_t\,dN_t
+\end{equation}
+
+where $N_t$ is a Poisson process with intensity $\lambda$ and $J_t \sim \mathcal{N}(\mu_J, \sigma_J^2)$. Moves exceeding $3\sigma_b\sqrt{\Delta t}$ are classified as jumps.
+
+\section{Implementation Architecture}
+
+The RN-JD kernel is implemented across four Rust modules:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Purpose} \\
+\midrule
+\texttt{belief\_vol} & \texttt{vault/belief\_vol.rs} & Volatility estimation \\
+\texttt{rnjd} & \texttt{vault/rnjd.rs} & Drift \& $p_{up}$ calculation \\
+\texttt{kelly} & \texttt{vault/kelly.rs} & Vol-adjusted sizing \\
+\texttt{engine} & \texttt{vault/engine.rs} & Integration point \\
+\bottomrule
+\end{tabular}
+\caption{Module organization}
+\end{table}
+
+\subsection{Belief Volatility Estimation}
+
+The \texttt{BeliefVolTracker} maintains per-market estimates using exponential moving average (EMA) of squared log-odds increments.
+
+\begin{algorithm}[H]
+\caption{Belief Volatility Update}
+\begin{algorithmic}[1]
+\Procedure{RecordObservation}{$\text{slug}, p_{\text{now}}, t_{\text{now}}$}
+    \State $x_{\text{now}} \gets \text{logit}(p_{\text{now}})$
+    \If{history[slug] not empty}
+        \State $(x_{\text{prev}}, t_{\text{prev}}) \gets$ last entry
+        \State $\Delta t \gets t_{\text{now}} - t_{\text{prev}}$ \Comment{seconds}
+        \If{$1 \leq \Delta t \leq 3600$}
+            \State $\Delta x \gets x_{\text{now}} - x_{\text{prev}}$
+            \State $\Delta t_y \gets \Delta t / (365.25 \times 24 \times 3600)$ \Comment{years}
+            \State $v_{\text{ann}} \gets (\Delta x)^2 / \Delta t_y$ \Comment{annualized variance}
+            \State \Call{UpdateEMA}{slug, $v_{\text{ann}}$}
+        \EndIf
+    \EndIf
+    \State Append $(x_{\text{now}}, t_{\text{now}})$ to history[slug]
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+The EMA update uses smoothing factor $\alpha = 0.1$ (configurable):
+\begin{equation}
+\hat{\sigma}_b^2 \gets (1-\alpha)\hat{\sigma}_b^2 + \alpha \cdot v_{\text{ann}}, \quad \sigma_b = \sqrt{\hat{\sigma}_b^2}
+\end{equation}
+
+A floor of $\sigma_b \geq 0.01$ prevents numerical instability.
+
+\subsection{Enhanced $p_{up}$ Estimation}
+
+The core pricing function combines underlying asset dynamics with RN-JD correction:
+
+\begin{algorithm}[H]
+\caption{Enhanced $p_{up}$ Estimation}
+\begin{algorithmic}[1]
+\Procedure{EstimatePupEnhanced}{$p_{\text{start}}, p_{\text{now}}, \sigma_{\text{price}}, t_{\text{rem}}, \text{tracker}$}
+    \State $\sigma_b \gets$ tracker.get\_sigma\_b(market) \Comment{or prior 2.0}
+    \State $t_y \gets t_{\text{rem}} / (365.25 \times 24 \times 3600)$
+    \State \Comment{Raw probability from price return distribution}
+    \State $\text{log\_return} \gets \ln(p_{\text{now}} / p_{\text{start}})$
+    \State $z \gets \text{log\_return} / (\sigma_{\text{price}} \sqrt{t_y})$
+    \State $p_{\text{raw}} \gets \Phi(z)$ \Comment{standard normal CDF}
+    \State \Comment{RN drift correction in logit space}
+    \State $p_{\text{clamp}} \gets \text{clamp}(p_{\text{raw}}, 0.01, 0.99)$
+    \State $\mu \gets -\frac{1}{2}\sigma_b^2(1 - 2p_{\text{clamp}})$
+    \State $x \gets \text{logit}(p_{\text{clamp}})$
+    \State $x_{\text{adj}} \gets x + \mu \cdot t_y$
+    \State $p_{\text{adj}} \gets \sigma(x_{\text{adj}})$
+    \State \Return $p_{\text{adj}}$
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+The drift correction is small for short horizons but ensures theoretical consistency with arbitrage-free pricing.
+
+\section{Position Sizing with Volatility Adjustment}
+
+Standard Kelly criterion computes optimal fraction:
+\begin{equation}
+f^* = \frac{p \cdot b - q}{b} = \frac{\text{edge}}{\text{odds}}
+\end{equation}
+
+where $p$ is our probability estimate, $q = 1-p$, and $b = (1/\text{price}) - 1$.
+
+\subsection{Vol-Adjusted Kelly}
+
+We introduce a volatility penalty based on the ratio of edge to expected price movement:
+
+\begin{definition}[Edge Safety Ratio]
+\begin{equation}
+R = \frac{\text{edge}}{\sigma_b \sqrt{t} \cdot p(1-p)}
+\end{equation}
+where the denominator is the expected probability movement over holding period $t$.
+\end{definition}
+
+The position multiplier is:
+\begin{equation}
+m(R) = \begin{cases}
+\max(R, 0.1) & R < 1 \text{ (edge < expected vol)} \\
+0.5 + 0.25R & 1 \leq R < 2 \\
+1.0 & R \geq 2 \text{ (edge >> expected vol)}
+\end{cases}
+\end{equation}
+
+Final position: $\text{size} = f^* \times m(R) \times \text{bankroll}$
+
+\subsection{Jump Regime Handling}
+
+During elevated jump risk (detected by $\geq 2$ jumps in 5 minutes or within 60s cooldown), we require $2\times$ minimum edge:
+
+\begin{lstlisting}
+if est.jump_regime {
+    let required_edge = min_edge * 2.0;
+    if edge < required_edge {
+        debug!("Skip: jump regime, edge {} < {}", edge, required_edge);
+        return Ok(None);
+    }
+}
+\end{lstlisting}
+
+\section{Integration and Data Flow}
+
+\subsection{Event-Driven Architecture}
+
+The FAST15M engine uses a \emph{reactive} WebSocket-based architecture rather than polling. This reduces latency and computational overhead by only evaluating when meaningful price changes occur.
+
+\begin{enumerate}
+    \item \textbf{Binance WebSocket}: The \texttt{barter-data} library maintains persistent WebSocket connections to Binance, streaming L1 orderbook updates (best bid/ask) for BTC, ETH, SOL, XRP
+    \item \textbf{Price computation}: \texttt{BinancePriceFeed} computes mid prices from the WebSocket stream and publishes \texttt{PriceUpdateEvent} via internal \texttt{tokio::sync::broadcast} channel
+    \item \textbf{Engine subscription}: FAST15M engine subscribes to the broadcast channel, receiving price updates with sub-millisecond latency
+    \item \textbf{Threshold gating}: Evaluation triggers only when price movement exceeds configurable threshold (avoids spurious recalculations)
+    \item \textbf{Window awareness}: 
+    \begin{itemize}
+        \item First 60s: Aggressive evaluation (market formation)
+        \item Middle period: Standard reactive evaluation
+        \item Last 60s: Reduced activity (near-expiry risk)
+    \end{itemize}
+\end{enumerate}
+
+The Polymarket orderbook is also accessed via WebSocket cache when available (\texttt{polymarket\_market\_ws}), with REST fallback for cache misses.
+
+\subsection{Trade Execution Flow}
+
+On each qualifying price update:
+
+\begin{enumerate}
+    \item Receive \texttt{PriceUpdateEvent} with nanosecond timestamp
+    \item For each active 15m Up/Down market matching the asset:
+    \begin{enumerate}
+        \item Fetch market mid from Polymarket orderbook (WS cache preferred)
+        \item Record observation: \texttt{tracker.record\_observation(slug, mid, now)}
+        \item Calculate $p_{up}$ via \texttt{estimate\_p\_up\_enhanced()}
+        \item Apply shrink-to-half conservatism: $p \to 0.5 + 0.35(p - 0.5)$
+        \item Check jump regime; if active, require $2\times$ edge
+        \item Compute vol-adjusted Kelly position
+        \item If position $\geq$ minimum, submit order
+    \end{enumerate}
+    \item Record latency span for monitoring
+\end{enumerate}
+
+\subsection{API Endpoints}
+
+Three endpoints expose RN-JD state for monitoring:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Endpoint} & \textbf{Returns} \\
+\midrule
+\texttt{GET /api/belief-vol/stats} & Per-market $\sigma_b$ estimates \\
+\texttt{GET /api/backtest/stats} & Brier scores (RN-JD vs legacy) \\
+\texttt{GET /api/ab-test/summary} & A/B test P\&L by variant \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Configuration}
+
+Key environment variables:
+
+\begin{lstlisting}
+UPDOWN15M_MIN_EDGE=0.01      # Minimum edge to trade
+UPDOWN15M_KELLY_FRACTION=0.05 # Fractional Kelly (5%)
+UPDOWN15M_MAX_POSITION_PCT=0.01 # Max position (1% of bankroll)
+UPDOWN15M_SHRINK=0.35        # Shrink-to-half factor
+UPDOWN15M_COOLDOWN_SEC=30    # Cooldown between trades per market
+AB_TEST_ENABLED=false        # Enable A/B testing
+AB_TEST_RNJD_PROB=0.5        # RN-JD assignment probability
+\end{lstlisting}
+
+\section{Performance Characteristics}
+
+\subsection{Computational Complexity}
+
+\begin{itemize}
+    \item \textbf{Observation recording}: $O(1)$ amortized (hash map lookup + deque append)
+    \item \textbf{Volatility estimation}: $O(1)$ (EMA update)
+    \item \textbf{$p_{up}$ calculation}: $O(1)$ (fixed arithmetic operations)
+    \item \textbf{Memory}: $O(M \times H)$ where $M$ = markets, $H$ = history depth (default 1000)
+\end{itemize}
+
+\subsection{Latency Budget}
+
+Target: $<50$ms from price update to order submission. Typical breakdown:
+\begin{itemize}
+    \item Price event propagation: $<1$ms (in-process broadcast)
+    \item Polymarket orderbook: 1-5ms (WS cache hit) / 10-50ms (REST fallback)
+    \item RN-JD computation: $<100\mu$s
+    \item Kelly sizing: $<100\mu$s
+    \item Order submission: 10-40ms (network bound)
+\end{itemize}
+
+The reactive architecture eliminates polling jitter, ensuring consistent low-latency response to price movements.
+
+\section{Conclusion}
+
+The RN-JD kernel provides a theoretically grounded approach to pricing short-term prediction markets. Key innovations:
+
+\begin{enumerate}
+    \item \textbf{Log-odds transformation} enables standard diffusion modeling
+    \item \textbf{Martingale-consistent drift} ensures arbitrage-free prices
+    \item \textbf{Real-time $\sigma_b$ estimation} adapts to changing market conditions
+    \item \textbf{Vol-adjusted Kelly} reduces exposure during high uncertainty
+    \item \textbf{Jump regime detection} provides additional risk protection
+\end{enumerate}
+
+The implementation maintains sub-100ms latency while providing robust edge estimation for the FAST15M trading strategy.
+
+\appendix
+\section{Module Reference}
+
+\begin{lstlisting}[caption={Key type signatures}]
+// belief_vol.rs
+pub fn logit(p: f64) -> f64;
+pub fn sigmoid(x: f64) -> f64;
+pub struct BeliefVolTracker { ... }
+impl BeliefVolTracker {
+    pub fn record_observation(&mut self, slug: &str, p: f64, ts: i64);
+    pub fn get_sigma_b(&self, slug: &str) -> f64;
+    pub fn detect_recent_jump(&self, slug: &str, threshold: f64) 
+        -> Option<JumpDetectionResult>;
+}
+
+// rnjd.rs
+pub fn rn_drift(p: f64, params: &RnjdParams) -> f64;
+pub fn estimate_p_up_enhanced(
+    p_start: f64, p_now: f64, sigma_price: f64,
+    t_rem_secs: f64, tracker: Option<&BeliefVolTracker>
+) -> RnjdEstimate;
+
+// kelly.rs
+pub fn kelly_with_belief_vol(
+    confidence: f64, market_price: f64,
+    sigma_b: f64, t_years: f64, params: &KellyParams
+) -> KellyResult;
+\end{lstlisting}
+
+\end{document}

@@ -5,7 +5,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: '0.0.0.0',
     port: 5173,
+    strictPort: true,
     proxy: {
       '/api': {
         target: 'http://localhost:3000',
@@ -17,6 +19,8 @@ export default defineConfig({
       },
     },
   },
+  // Enable SPA fallback for client-side routing (e.g., /runs/{run_id})
+  appType: 'spa',
   build: {
     outDir: 'dist',
     sourcemap: true,

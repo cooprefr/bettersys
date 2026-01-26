@@ -7,20 +7,17 @@ export default {
   theme: {
     extend: {
       colors: {
-        // BETTER Brand Palette (per brandbook)
-        'void': '#000000',              // Dark-Hole
-        'surface': '#0A0A0A',           // Neutral near-black surface for cards
-        'better-blue': '#0026FF',       // Better Blue
-        'better-blue-light': '#8A94C5', // UI-friendly light blue/steel
-        // High-contrast metadata tint: near-white with a lavender infusion.
+        'void': 'rgb(var(--c-bg) / <alpha-value>)',
+        'surface': 'rgb(var(--c-surface) / <alpha-value>)',
+        'fg': 'rgb(var(--c-fg) / <alpha-value>)',
+        'better-blue': 'rgb(var(--c-accent) / <alpha-value>)',
+        'better-blue-light': '#8A94C5',
         'better-blue-lavender': '#E7E4FF',
-        'grey': '#4C526F',              // Brey
-        'dark-code': '#101010',      // Alternative dark
-        // Semantic colors
-        'success': '#00FF00',        // Pure green for BUY
-        'danger': '#FF0000',         // Pure red for SELL
-        'warning': '#FFAA00',        // Amber warning
-        // Legacy mappings for gradual migration
+        'grey': 'rgb(var(--c-grey) / <alpha-value>)',
+        'dark-code': '#101010',
+        'success': 'rgb(var(--c-success) / <alpha-value>)',
+        'danger': 'rgb(var(--c-danger) / <alpha-value>)',
+        'warning': 'rgb(var(--c-warning) / <alpha-value>)',
         'lavender': {
           DEFAULT: '#DFDFDF',
           dim: '#808080',

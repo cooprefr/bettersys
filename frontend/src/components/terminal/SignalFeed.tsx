@@ -648,7 +648,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
       {/* Header */}
       <div className="border-b border-grey/20 bg-surface px-4 md:px-6 py-5 flex justify-between items-center">
         <div className="flex items-center gap-4">
-          <h2 className="text-[16px] font-mono text-white font-semibold">
+          <h2 className="text-[16px] font-mono text-fg font-semibold">
             SIGNAL FEED
           </h2>
           <div className="text-better-blue-lavender font-mono text-[13px]">
@@ -659,7 +659,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
               : `LIVE (${totalSignals.toLocaleString()} TOTAL)`}
           </div>
           {(filters.hideUpDown || filters.whaleOnly || filters.minConfidence > 0) && (
-            <div className="text-grey/80 font-mono text-[13px]">
+            <div className="text-fg/90 font-mono text-[13px]">
               ({filteredSignals.length} SHOWN)
             </div>
           )}
@@ -669,7 +669,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
           <button
             onClick={() => setAutoScroll(!autoScroll)}
             className={`border border-grey/30 px-3 py-1 text-[11px] font-mono transition-colors duration-150 ${
-              autoScroll ? 'bg-white text-black' : 'text-grey/80 hover:text-white'
+              autoScroll ? 'bg-fg text-void' : 'text-fg/90 hover:text-fg'
             }`}
           >
             AUTO-SCROLL: {autoScroll ? 'ON' : 'OFF'}
@@ -721,7 +721,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
                   onOpenInspector={(tab) => openInspector(signal.id, tab)}
                 />
               ))}
-              <div className="px-4 md:px-6 py-3 text-center text-[11px] font-mono text-grey/60">
+              <div className="px-4 md:px-6 py-3 text-center text-[11px] font-mono text-fg/70">
                 {isSearchActive
                   ? searchMode === 'server'
                     ? searchComplete
@@ -748,7 +748,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
           ) : (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
-                <div className="text-xl font-mono text-grey/80 mb-2">
+                <div className="text-xl font-mono text-fg/90 mb-2">
                   {isSearchActive
                     ? searchMode === 'server' && isSearching
                       ? 'SEARCHING...'
@@ -767,7 +767,7 @@ export const SignalFeed: React.FC<SignalFeedProps> = ({ signals, stats, error })
                         ? 'ERROR'
                         : 'SCANNING...'}
                 </div>
-                <div className="text-xs font-mono text-grey/60 max-w-md whitespace-pre-wrap">
+                <div className="text-xs font-mono text-fg/70 max-w-md whitespace-pre-wrap">
                   {isSearchActive
                     ? searchError
                       ? searchError

@@ -1,0 +1,981 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{longtable}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    filecolor=magenta,
+    urlcolor=cyan,
+    pdftitle={Backtest V2 Backend Architecture},
+    pdfauthor={},
+}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{rust}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{codepurple},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codegreen},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    language=C,
+    morekeywords={pub, struct, enum, impl, fn, let, mut, self, Self, use, mod, trait, where, async, await, match, if, else, for, while, loop, return, type, const, static, dyn, Box, Vec, Option, Result, Some, None, Ok, Err, String, u64, u128, i64, i128, f64, bool, usize, Nanos}
+}
+
+\lstset{style=rust}
+
+\title{Backtest V2 Backend Architecture\\{\large Structural Documentation}}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+% =============================================================================
+\section{Purpose and Scope}
+\label{sec:purpose}
+% =============================================================================
+
+This document describes the structural architecture of the \texttt{backtest\_v2} backend module, a deterministic backtesting engine for Polymarket CLOB (Central Limit Order Book) markets, with specific support for 15-minute Up/Down binary outcome markets.
+
+The backtester simulates order execution against historical market data while enforcing visibility semantics to prevent look-ahead bias. It supports both taker (aggressive) and maker (passive) execution simulation, with explicit queue position modeling for maker fills.
+
+\subsection{In Scope}
+
+\begin{itemize}[noitemsep]
+    \item All Rust modules under \texttt{rust-backend/src/backtest\_v2/}
+    \item The orchestrator control flow (\texttt{orchestrator.rs})
+    \item Event model and canonical types (\texttt{events.rs})
+    \item Data contract and dataset classification (\texttt{data\_contract.rs})
+    \item Book reconstruction and integrity (\texttt{book.rs}, \texttt{integrity.rs})
+    \item Strategy interface (\texttt{strategy.rs})
+    \item Order management system (\texttt{oms.rs})
+    \item Matching and execution simulation (\texttt{matching.rs}, \texttt{queue\_model.rs})
+    \item Settlement engine (\texttt{settlement.rs}, \texttt{oracle/})
+    \item Accounting and ledger (\texttt{ledger.rs}, \texttt{portfolio.rs})
+    \item Invariant framework (\texttt{invariants.rs})
+    \item Gate suites and sensitivity analysis (\texttt{gate\_suite.rs}, \texttt{sensitivity.rs})
+\end{itemize}
+
+\subsection{Out of Scope}
+
+\begin{itemize}[noitemsep]
+    \item Frontend React/TypeScript code
+    \item Live trading adapters (Dome, execution)
+    \item Signal detection pipelines
+    \item Vault and pool accounting
+    \item API endpoints and HTTP handlers
+\end{itemize}
+
+% =============================================================================
+\section{Repository and Module Map}
+\label{sec:module-map}
+% =============================================================================
+
+The \texttt{backtest\_v2} module is located at:
+\begin{verbatim}
+rust-backend/src/backtest_v2/
+\end{verbatim}
+
+\subsection{Module Declarations}
+
+The module root (\texttt{mod.rs}, lines 1--276) declares 53 submodules:
+
+\begin{longtable}{ll}
+\toprule
+\textbf{Module} & \textbf{Responsibility} \\
+\midrule
+\endhead
+\texttt{orchestrator} & Main backtest loop and control flow \\
+\texttt{events} & Canonical event types (L2 snapshots, deltas, trades, fills) \\
+\texttt{data\_contract} & Dataset classification and readiness gating \\
+\texttt{book} & In-memory order book representation \\
+\texttt{strategy} & Strategy trait and context interface \\
+\texttt{oms} & Order management system state machine \\
+\texttt{matching} & Limit order book simulator \\
+\texttt{queue\_model} & FIFO queue position tracking \\
+\texttt{maker\_fill\_gate} & Single choke point for maker fill validation \\
+\texttt{settlement} & 15-minute window resolution logic \\
+\texttt{oracle} & Chainlink integration (submodule) \\
+\texttt{ledger} & Double-entry accounting ledger \\
+\texttt{portfolio} & Position and PnL tracking \\
+\texttt{invariants} & Mandatory invariant framework \\
+\texttt{integrity} & Stream integrity guard (duplicates, gaps, out-of-order) \\
+\texttt{visibility} & Look-ahead prevention and arrival time mapping \\
+\texttt{gate\_suite} & Adversarial zero-edge gate tests \\
+\texttt{sensitivity} & Latency/sampling/execution sensitivity sweeps \\
+\texttt{clock} & Simulation clock (nanosecond precision) \\
+\texttt{queue} & Event queue with deterministic ordering \\
+\texttt{feed} & Market data feed trait \\
+\texttt{latency} & Latency distribution modeling \\
+\texttt{metrics} & Backtest metrics and reporting \\
+\texttt{risk} & Kelly criterion position sizing \\
+\texttt{validation} & Reproducibility and determinism checks \\
+\texttt{normalize} & Raw data normalization \\
+\texttt{sim\_adapter} & OMS parity adapter \\
+\texttt{perf} & Performance benchmarking \\
+\texttt{accounting\_enforcer} & Strict accounting mode enforcement \\
+\texttt{data\_pipeline} & Live recording and replay validation \\
+\texttt{basis\_signal} & Basis tracking (Binance vs Chainlink) \\
+\texttt{pre\_trade\_risk} & Pre-trade risk controller \\
+\texttt{strategy\_certification} & Strategy result certification \\
+\texttt{maker\_validation} & Maker strategy survival testing \\
+\texttt{snapshot\_sufficiency} & Snapshot frequency analysis \\
+\texttt{book\_recorder} & Async book snapshot recording \\
+\texttt{trade\_recorder} & Trade print recording \\
+\texttt{delta\_recorder} & L2 delta recording \\
+\texttt{unified\_recorder} & Multi-stream unified recorder \\
+\bottomrule
+\end{longtable}
+
+\subsection{Key Entrypoints}
+
+\begin{itemize}[noitemsep]
+    \item \texttt{BacktestOrchestrator::new(config)} --- Create orchestrator instance \\
+          (\texttt{orchestrator.rs:BacktestOrchestrator::new}, line 1110)
+    \item \texttt{BacktestOrchestrator::run(strategy)} --- Execute backtest loop \\
+          (\texttt{orchestrator.rs:BacktestOrchestrator::run}, line 1220)
+    \item \texttt{BacktestOrchestrator::load\_feed(feed)} --- Load events from data feed \\
+          (\texttt{orchestrator.rs:BacktestOrchestrator::load\_feed}, line 1195)
+\end{itemize}
+
+\subsection{Configuration Surface}
+
+The primary configuration structure is \texttt{BacktestConfig} (\texttt{orchestrator.rs}, lines 305--395):
+
+\begin{lstlisting}
+pub struct BacktestConfig {
+    pub matching: MatchingConfig,
+    pub latency: LatencyConfig,
+    pub strategy_params: StrategyParams,
+    pub trader_id: String,
+    pub seed: u64,
+    pub data_contract: HistoricalDataContract,
+    pub arrival_policy: SimArrivalPolicy,
+    pub strict_mode: bool,
+    pub maker_fill_model: MakerFillModel,
+    pub oms_parity_mode: OmsParityMode,
+    pub gate_mode: GateMode,
+    pub integrity_policy: PathologyPolicy,
+    pub sensitivity: SensitivityConfig,
+    pub production_grade: bool,
+    pub settlement_spec: Option<SettlementSpec>,
+    pub ledger_config: Option<LedgerConfig>,
+    pub invariant_config: Option<InvariantConfig>,
+    pub strict_accounting: bool,
+}
+\end{lstlisting}
+
+The \texttt{production\_grade} flag forces all strict requirements: Hard invariants, strict accounting, ExplicitQueue maker model, and Full OMS parity.
+
+% =============================================================================
+\section{Data Contract and Dataset Semantics}
+\label{sec:data-contract}
+% =============================================================================
+
+\subsection{HistoricalDataContract}
+
+The \texttt{HistoricalDataContract} structure (\texttt{data\_contract.rs}, lines 1--60) declares what data is available:
+
+\begin{lstlisting}
+pub struct HistoricalDataContract {
+    pub venue: String,
+    pub market: String,
+    pub orderbook: OrderBookHistory,
+    pub trades: TradeHistory,
+    pub arrival_time: ArrivalTimeSemantics,
+}
+\end{lstlisting}
+
+\subsection{OrderBookHistory Variants}
+
+\begin{itemize}[noitemsep]
+    \item \texttt{FullIncrementalL2DeltasWithExchangeSeq} --- Full incremental deltas with sequence numbers
+    \item \texttt{PeriodicL2Snapshots} --- Periodic full snapshots (no deltas)
+    \item \texttt{TopOfBookPolling \{ interval\_ns \}} --- Best bid/ask only
+    \item \texttt{None} --- No orderbook history
+\end{itemize}
+
+\subsection{Dataset Classification}
+
+The \texttt{DatasetClassification} enum (\texttt{data\_contract.rs}, lines 165--200) classifies datasets:
+
+\begin{itemize}[noitemsep]
+    \item \texttt{FullIncremental} --- Full L2 deltas + trade prints; supports queue modeling
+    \item \texttt{SnapshotOnly} --- Periodic snapshots; taker-only execution valid
+    \item \texttt{Incomplete} --- Missing orderbook or trades; indicative results only
+\end{itemize}
+
+\subsection{Dataset Readiness}
+
+The \texttt{DatasetReadiness} enum (\texttt{data\_contract.rs}) gates execution modes:
+
+\begin{itemize}[noitemsep]
+    \item \texttt{MakerViable} --- Full incremental data; maker execution paths enabled
+    \item \texttt{TakerViable} --- Snapshots + trades; taker-only execution
+    \item \texttt{NonRepresentative} --- Insufficient data; backtest aborts
+\end{itemize}
+
+\subsection{Time Semantics}
+
+Three distinct timestamps are tracked:
+
+\begin{description}[noitemsep]
+    \item[\texttt{source\_time}] Timestamp from upstream feed (may be missing or untrusted)
+    \item[\texttt{arrival\_time}] Time when the simulation ``sees'' the event (visibility boundary)
+    \item[\texttt{decision\_time}] Current SimClock time when strategy is invoked
+\end{description}
+
+The \texttt{ArrivalTimeSemantics} enum controls how arrival times are determined:
+\begin{itemize}[noitemsep]
+    \item \texttt{RecordedArrival} --- Use recorded arrival timestamps
+    \item \texttt{SimulatedLatency} --- Derive from source\_time + latency distribution
+    \item \texttt{Unusable} --- No valid timestamps available
+\end{itemize}
+
+% =============================================================================
+\section{Event Model and Canonical Types}
+\label{sec:events}
+% =============================================================================
+
+\subsection{Canonical Event Types}
+
+The \texttt{Event} enum (\texttt{events.rs}, lines 120--280) defines all event types:
+
+\begin{lstlisting}
+pub enum Event {
+    L2BookSnapshot { token_id, bids, asks, exchange_seq },
+    L2Delta { token_id, bid_updates, ask_updates, exchange_seq },
+    L2BookDelta { token_id, side, price, new_size, seq_hash },
+    TradePrint { token_id, price, size, aggressor_side, trade_id },
+    OrderAck { order_id, client_order_id },
+    OrderReject { order_id, reason },
+    Fill { order_id, price, size, is_maker, leaves_qty, fee },
+    CancelAck { order_id, cancelled_qty },
+    MarketStatusChange { token_id, status },
+    MarketResolution { token_id, resolution },
+}
+\end{lstlisting}
+
+\subsection{TimestampedEvent}
+
+Events are wrapped in \texttt{TimestampedEvent} for queue ordering:
+
+\begin{lstlisting}
+pub struct TimestampedEvent {
+    pub time: Nanos,        // Primary ordering key (arrival_time)
+    pub source_time: Nanos, // Original feed timestamp
+    pub seq: u64,           // Tie-breaking sequence number
+    pub source: u8,         // Stream source for priority
+    pub event: Event,
+}
+\end{lstlisting}
+
+\subsection{Event Priority}
+
+The \texttt{EventPriority} enum (\texttt{events.rs}, lines 115--135) defines processing order within same timestamp:
+
+\begin{enumerate}[noitemsep]
+    \item System (halts, resolutions)
+    \item BookSnapshot
+    \item BookDelta
+    \item TradePrint
+    \item OrderAck
+    \item Fill
+    \item OrderReject
+    \item CancelAck
+    \item Signal
+\end{enumerate}
+
+\subsection{Ordering Enforcement}
+
+The \texttt{EventQueue} (\texttt{queue.rs}) maintains deterministic ordering by:
+\begin{enumerate}[noitemsep]
+    \item Timestamp (nanoseconds, ascending)
+    \item Event priority
+    \item Source stream
+    \item Sequence number (insertion order)
+\end{enumerate}
+
+% =============================================================================
+\section{Orchestrator and Control Flow}
+\label{sec:orchestrator}
+% =============================================================================
+
+\subsection{Orchestrator State}
+
+The \texttt{BacktestOrchestrator} (\texttt{orchestrator.rs}, lines 1053--1108) owns:
+
+\begin{lstlisting}
+pub struct BacktestOrchestrator {
+    config: BacktestConfig,
+    clock: SimClock,
+    event_queue: EventQueue,
+    adapter: SimulatedOrderSender,
+    visibility: VisibilityWatermark,
+    decision_proofs: DecisionProofBuffer,
+    queue_model: QueuePositionModel,
+    settlement_engine: Option<SettlementEngine>,
+    ledger: Option<Ledger>,
+    invariant_enforcer: InvariantEnforcer,
+    maker_fill_gate: MakerFillGate,
+    // ... additional state
+}
+\end{lstlisting}
+
+\subsection{Main Event Loop}
+
+The \texttt{run()} method (\texttt{orchestrator.rs}, lines 1220--1550) follows this flow:
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{Classification}: Determine \texttt{BacktestOperatingMode} from config and data contract
+    \item \textbf{Gating}: Abort if data is NonRepresentative or maker requested without queue-capable data
+    \item \textbf{Initialize}: Set clock, visibility watermark, settlement engine, ledger
+    \item \textbf{Call \texttt{strategy.on\_start()}}
+    \item \textbf{Event Loop}:
+    \begin{enumerate}[noitemsep]
+        \item Pop event from queue
+        \item Advance clock to event time
+        \item Update visibility watermark
+        \item Dispatch event by type (book, trade, fill, etc.)
+        \item Invoke strategy callbacks
+        \item Process pending orders and cancels
+        \item Check invariants
+    \end{enumerate}
+    \item \textbf{Finalize}: Call \texttt{strategy.on\_stop()}, compute results, generate truthfulness certificate
+\end{enumerate}
+
+\subsection{Operating Mode Determination}
+
+The \texttt{determine\_operating\_mode()} function (\texttt{orchestrator.rs}, lines 185--250) returns:
+
+\begin{itemize}[noitemsep]
+    \item \texttt{ProductionGrade} --- All requirements met (FullIncremental + ExplicitQueue + strict)
+    \item \texttt{TakerOnly} --- MakerDisabled or data doesn't support queue modeling
+    \item \texttt{ResearchGrade} --- Optimistic maker model or partial requirements
+\end{itemize}
+
+\subsection{Call Graph Narrative}
+
+\begin{verbatim}
+main
+  -> BacktestOrchestrator::new(config)
+     -> SimulatedOrderSender::with_oms_parity()
+     -> SettlementEngine::new()
+     -> Ledger::new()
+     -> InvariantEnforcer::new()
+     -> MakerFillGate::new()
+  -> orchestrator.load_feed(feed)
+     -> DataContractValidator::observe(event)
+     -> EventQueue::push_timestamped(event)
+  -> orchestrator.run(strategy)
+     -> determine_operating_mode()
+     -> DatasetReadinessClassifier::classify()
+     -> strategy.on_start(ctx)
+     -> [event loop]
+        -> event_queue.pop()
+        -> clock.advance_to(event.time)
+        -> visibility.advance_to(event.time)
+        -> dispatch_event(event)
+           -> on_book_snapshot() -> BookManager::apply_snapshot()
+           -> on_trade_print() -> QueuePositionModel::consume_trade()
+           -> on_fill() -> process_fill() -> ledger.record_fill()
+        -> strategy.on_book_update() / on_fill() / on_trade()
+        -> adapter.process_pending()
+        -> invariant_enforcer.check_*()
+     -> strategy.on_stop(ctx)
+     -> compute_results()
+     -> TruthfulnessSummary::from_results()
+\end{verbatim}
+
+% =============================================================================
+\section{Market State: Book Reconstruction and Integrity}
+\label{sec:book}
+% =============================================================================
+
+\subsection{OrderBook Representation}
+
+The \texttt{OrderBook} struct (\texttt{book.rs}, lines 1--100) uses \texttt{BTreeMap} for sorted price levels:
+
+\begin{lstlisting}
+pub struct OrderBook {
+    pub token_id: String,
+    bids: BTreeMap<OrderedPrice, BookLevel>,  // Best bid first
+    asks: BTreeMap<OrderedPrice, BookLevel>,  // Best ask first
+    pub last_seq: u64,
+    pub last_update: Nanos,
+    pub update_count: u64,
+}
+\end{lstlisting}
+
+\subsection{Snapshot Application}
+
+\texttt{apply\_snapshot()} (\texttt{book.rs}, lines 70--100):
+\begin{enumerate}[noitemsep]
+    \item Clear all existing levels
+    \item Insert bid levels (size > 0)
+    \item Insert ask levels (size > 0)
+    \item Update sequence and timestamp
+\end{enumerate}
+
+\subsection{Delta Application}
+
+\texttt{apply\_delta()} (\texttt{book.rs}, lines 110--160):
+\begin{enumerate}[noitemsep]
+    \item Check sequence continuity (detect gaps)
+    \item For each update: insert if size > 0, remove if size = 0
+    \item Track levels added/removed/updated
+    \item Return \texttt{DeltaResult} with sequence gap info
+\end{enumerate}
+
+\subsection{Stream Integrity Guard}
+
+The \texttt{StreamIntegrityGuard} (\texttt{integrity.rs}, lines 1--150) enforces:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Duplicates}: \texttt{DuplicatePolicy::Drop} or \texttt{Halt}
+    \item \textbf{Gaps}: \texttt{GapPolicy::Halt} or \texttt{Resync}
+    \item \textbf{Out-of-order}: \texttt{OutOfOrderPolicy::Drop}, \texttt{Reorder}, or \texttt{Halt}
+\end{itemize}
+
+The \texttt{PathologyPolicy::strict()} configuration halts on any pathology.
+
+% =============================================================================
+\section{Strategy Interface Boundary}
+\label{sec:strategy}
+% =============================================================================
+
+\subsection{Strategy Trait}
+
+The \texttt{Strategy} trait (\texttt{strategy.rs}, lines 200--250) defines callbacks:
+
+\begin{lstlisting}
+pub trait Strategy: Send {
+    fn on_start(&mut self, ctx: &mut StrategyContext);
+    fn on_stop(&mut self, ctx: &mut StrategyContext);
+    fn on_book_update(&mut self, ctx: &mut StrategyContext, book: &BookSnapshot);
+    fn on_trade(&mut self, ctx: &mut StrategyContext, trade: &TradePrint);
+    fn on_fill(&mut self, ctx: &mut StrategyContext, fill: &FillNotification);
+    fn on_order_ack(&mut self, ctx: &mut StrategyContext, ack: &OrderAck);
+    fn on_order_reject(&mut self, ctx: &mut StrategyContext, reject: &OrderReject);
+    fn on_cancel_ack(&mut self, ctx: &mut StrategyContext, ack: &CancelAck);
+    fn on_timer(&mut self, ctx: &mut StrategyContext, timer: &TimerEvent);
+}
+\end{lstlisting}
+
+\subsection{StrategyContext}
+
+The \texttt{StrategyContext} (\texttt{strategy.rs}, lines 280--300) provides:
+
+\begin{lstlisting}
+pub struct StrategyContext<'a> {
+    pub orders: &'a mut dyn OrderSender,
+    pub timestamp: Nanos,
+    pub params: &'a StrategyParams,
+}
+\end{lstlisting}
+
+\subsection{OrderSender Interface}
+
+The \texttt{OrderSender} trait (\texttt{strategy.rs}, lines 165--195) allows:
+
+\begin{itemize}[noitemsep]
+    \item \texttt{send\_order(order)} --- Submit new order
+    \item \texttt{send\_cancel(cancel)} --- Cancel existing order
+    \item \texttt{cancel\_all(token\_id)} --- Cancel all orders for token
+    \item \texttt{get\_position(token\_id)} --- Get current position
+    \item \texttt{get\_open\_orders()} --- Get all open orders
+    \item \texttt{schedule\_timer(delay, payload)} --- Schedule callback
+\end{itemize}
+
+\subsection{Visibility Gating}
+
+All data provided to strategy callbacks is gated by visibility. The strategy can only observe events with \texttt{arrival\_time <= decision\_time}. This is enforced by \texttt{VisibilityWatermark} (\texttt{visibility.rs}).
+
+% =============================================================================
+\section{OMS, Rate Limits, and Order Lifecycle}
+\label{sec:oms}
+% =============================================================================
+
+\subsection{OMS State Machine}
+
+The \texttt{OrderState} enum (\texttt{oms.rs}, lines 15--35) defines states:
+
+\begin{lstlisting}
+pub enum OrderState {
+    New,             // Created but not sent
+    PendingAck,      // Sent, awaiting venue ack
+    Live,            // Acknowledged, on book
+    PartiallyFilled, // Partially filled, still live
+    PendingCancel,   // Cancel sent, awaiting ack
+    Done,            // Terminal (filled/cancelled/rejected)
+}
+\end{lstlisting}
+
+\subsection{State Transitions}
+
+Valid transitions:
+\begin{itemize}[noitemsep]
+    \item \texttt{New} $\to$ \texttt{PendingAck} (on send)
+    \item \texttt{PendingAck} $\to$ \texttt{Live} (on ack) or \texttt{Done} (on reject)
+    \item \texttt{Live} $\to$ \texttt{PartiallyFilled} (on partial fill) or \texttt{Done} (on full fill)
+    \item \texttt{Live} $\to$ \texttt{PendingCancel} (on cancel request)
+    \item \texttt{PendingCancel} $\to$ \texttt{Done} (on cancel ack or fill)
+\end{itemize}
+
+\subsection{OmsOrder Structure}
+
+The \texttt{OmsOrder} struct (\texttt{oms.rs}, lines 50--95) tracks:
+
+\begin{lstlisting}
+pub struct OmsOrder {
+    pub order_id: OrderId,
+    pub client_order_id: String,
+    pub token_id: String,
+    pub side: Side,
+    pub price: Price,
+    pub original_qty: Size,
+    pub filled_qty: Size,
+    pub remaining_qty: Size,
+    pub state: OrderState,
+    pub terminal_reason: Option<TerminalReason>,
+    pub created_at: Nanos,
+    pub sent_at: Option<Nanos>,
+    pub acked_at: Option<Nanos>,
+    // ...
+}
+\end{lstlisting}
+
+\subsection{Rate Limiting}
+
+The \texttt{RateLimiter} (\texttt{oms.rs}) enforces venue constraints:
+\begin{itemize}[noitemsep]
+    \item Maximum orders per second
+    \item Maximum cancels per second
+    \item Minimum order interval
+\end{itemize}
+
+\subsection{OMS Parity Mode}
+
+The \texttt{OmsParityMode} enum controls validation strictness:
+\begin{itemize}[noitemsep]
+    \item \texttt{Full} --- All state transitions verified
+    \item \texttt{Relaxed} --- Warnings only
+    \item \texttt{Off} --- No validation
+\end{itemize}
+
+% =============================================================================
+\section{Execution Simulation: Matching, Queue Model, Cancel--Fill Races}
+\label{sec:execution}
+% =============================================================================
+
+\subsection{Matching Engine}
+
+The \texttt{MatchingEngine} (\texttt{matching.rs}) simulates CLOB execution:
+
+\begin{lstlisting}
+pub struct MatchingConfig {
+    pub tick_size: f64,       // 0.01 for Polymarket
+    pub fees: FeeConfig,
+    pub self_trade_prevention: bool,
+    pub stp_mode: SelfTradeMode,
+    pub min_order_size: f64,
+    pub max_order_size: f64,
+    pub ack_latency_ns: Nanos,
+}
+\end{lstlisting}
+
+\subsection{Maker vs Taker Paths}
+
+\begin{description}[noitemsep]
+    \item[Taker (aggressive)] Orders that cross the spread are filled immediately against resting liquidity.
+    \item[Maker (passive)] Orders that rest on the book are filled when trades consume queue ahead.
+\end{description}
+
+\subsection{Queue Position Model}
+
+The \texttt{QueuePositionModel} (\texttt{queue\_model.rs}, lines 1--150) tracks FIFO position:
+
+\begin{lstlisting}
+pub struct QueuePosition {
+    pub order_id: OrderId,
+    pub position: usize,      // Position in queue (0 = front)
+    pub size_ahead: Size,     // Size ahead in queue
+    pub our_size: Size,
+    pub joined_at: Nanos,
+}
+\end{lstlisting}
+
+Queue is updated by:
+\begin{enumerate}[noitemsep]
+    \item \texttt{on\_order\_placed()} --- Add to back of queue
+    \item \texttt{on\_trade\_print()} --- Consume size from front
+    \item \texttt{on\_cancel()} --- Remove from queue
+\end{enumerate}
+
+\subsection{Maker Fill Gate}
+
+The \texttt{MakerFillGate} (\texttt{maker\_fill\_gate.rs}) validates all maker fills:
+
+\begin{lstlisting}
+pub struct MakerFillCandidate {
+    pub order_id: OrderId,
+    pub queue_proof: Option<QueueProof>,
+    pub cancel_race_proof: Option<CancelRaceProof>,
+    pub fill_price: Price,
+    pub fill_size: Size,
+    pub fill_time_ns: Nanos,
+}
+\end{lstlisting}
+
+A fill is admissible only if:
+\begin{itemize}[noitemsep]
+    \item \texttt{QueueProof} validates: \texttt{remaining\_queue\_ahead <= 0}
+    \item \texttt{CancelRaceProof} validates: order was live at fill time
+\end{itemize}
+
+\subsection{Cancel--Fill Races}
+
+The \texttt{CancelRaceProof} (\texttt{maker\_fill\_gate.rs}, lines 100--150) determines if order was live:
+
+\begin{lstlisting}
+pub enum CancelRaceRationale {
+    NoCancelRequested,        // Order is live
+    FillBeforeCancelArrival,  // Fill wins
+    CancelBeforeFill,         // Cancel wins
+    RaceCondition,            // Ambiguous
+}
+\end{lstlisting}
+
+% =============================================================================
+\section{Settlement Engine for 15-Minute Up/Down}
+\label{sec:settlement}
+% =============================================================================
+
+\subsection{Settlement Specification}
+
+The \texttt{SettlementSpec} (\texttt{settlement.rs}, lines 60--120) defines market semantics:
+
+\begin{lstlisting}
+pub struct SettlementSpec {
+    pub market_type: String,
+    pub window_duration_ns: Nanos,
+    pub window_start_rule: WindowStartRule,
+    pub reference_price_rule: ReferencePriceRule,
+    pub reference_source: String,
+    pub rounding_rule: RoundingRule,
+    pub tie_rule: TieRule,
+    pub outcome_knowable_rule: OutcomeKnowableRule,
+}
+\end{lstlisting}
+
+\subsection{Reference Price Rules}
+
+The \texttt{ReferencePriceRule} (\texttt{settlement.rs}, lines 30--50):
+\begin{itemize}[noitemsep]
+    \item \texttt{LastTrade} --- Last trade at or before cutoff
+    \item \texttt{MidPrice} --- Mid-price at cutoff
+    \item \texttt{OracleIndex} --- Chainlink oracle price
+    \item \texttt{VwapLastNSec} --- VWAP over window
+\end{itemize}
+
+\subsection{Chainlink Integration}
+
+The \texttt{ChainlinkSettlementSource} (\texttt{oracle/settlement\_source.rs}) implements \texttt{SettlementReferenceSource}:
+
+\begin{lstlisting}
+pub trait SettlementReferenceSource: Send + Sync {
+    fn reference_price(
+        &self,
+        cutoff_time_unix_sec: u64,
+        rule: SettlementReferenceRule,
+    ) -> Option<OraclePricePoint>;
+    
+    fn is_outcome_knowable(
+        &self,
+        decision_time_ns: u64,
+        cutoff_unix_sec: u64,
+        rule: SettlementReferenceRule,
+    ) -> bool;
+}
+\end{lstlisting}
+
+\subsection{Outcome Knowability}
+
+Settlement outcome is NOT knowable at cutoff time. It becomes knowable when:
+\begin{equation}
+\texttt{arrival\_time}(\text{reference\_price}) \leq \texttt{decision\_time}
+\end{equation}
+
+This prevents look-ahead bias in settlement.
+
+\subsection{Outcome Determination}
+
+For Polymarket 15m Up/Down (\texttt{settlement.rs}):
+\begin{itemize}[noitemsep]
+    \item \textbf{Up wins}: \texttt{end\_price > start\_price}
+    \item \textbf{Down wins}: \texttt{end\_price <= start\_price} (tie goes to Down)
+\end{itemize}
+
+% =============================================================================
+\section{Accounting and Results}
+\label{sec:accounting}
+% =============================================================================
+
+\subsection{Portfolio}
+
+The \texttt{Portfolio} (\texttt{portfolio.rs}) tracks positions:
+
+\begin{lstlisting}
+pub struct TokenPosition {
+    pub token_id: TokenId,
+    pub shares: Size,
+    pub cost_basis: f64,
+    pub avg_entry_price: Price,
+    pub realized_pnl: f64,
+    pub total_fees: f64,
+}
+\end{lstlisting}
+
+\subsection{Fee Model}
+
+\texttt{FeeConfig} (\texttt{matching.rs}):
+\begin{lstlisting}
+pub struct FeeConfig {
+    pub maker_fee_rate: f64,  // Typically 0 for Polymarket
+    pub taker_fee_rate: f64,  // Typically 0.001 (10 bps)
+}
+\end{lstlisting}
+
+\subsection{Double-Entry Ledger}
+
+The \texttt{Ledger} (\texttt{ledger.rs}, lines 1--200) implements double-entry accounting:
+
+\begin{lstlisting}
+pub enum LedgerAccount {
+    Cash,
+    CostBasis { market_id, outcome },
+    FeesPaid,
+    Capital,
+    RealizedPnL,
+    SettlementReceivable { market_id },
+    SettlementPayable { market_id },
+}
+\end{lstlisting}
+
+Every entry consists of balanced postings:
+\begin{equation}
+\sum \text{debits} = \sum \text{credits}
+\end{equation}
+
+\subsection{Strict Accounting Mode}
+
+When \texttt{strict\_accounting = true}:
+\begin{itemize}[noitemsep]
+    \item Ledger is the ONLY pathway for economic state changes
+    \item All fills, fees, and settlements route through ledger
+    \item First accounting violation aborts immediately
+\end{itemize}
+
+\subsection{BacktestResults}
+
+The \texttt{BacktestResults} (\texttt{orchestrator.rs}, lines 552--650) includes:
+
+\begin{lstlisting}
+pub struct BacktestResults {
+    pub operating_mode: BacktestOperatingMode,
+    pub events_processed: u64,
+    pub final_pnl: f64,
+    pub sharpe_ratio: Option<f64>,
+    pub max_drawdown: f64,
+    pub data_quality: DataQualitySummary,
+    pub maker_fills_valid: bool,
+    pub settlement_stats: Option<SettlementStats>,
+    pub truthfulness: TruthfulnessSummary,
+    pub dataset_readiness: DatasetReadiness,
+    // ...
+}
+\end{lstlisting}
+
+\subsection{Truthfulness Certificate}
+
+The \texttt{TruthfulnessSummary} (\texttt{orchestrator.rs}, lines 700--900) determines trust:
+
+\begin{lstlisting}
+pub enum TrustVerdict {
+    Trusted,      // All requirements satisfied
+    Untrusted,    // Critical requirements failed
+    Inconclusive, // Insufficient validation
+}
+\end{lstlisting}
+
+% =============================================================================
+\section{Invariants, Determinism, and Reproducibility}
+\label{sec:invariants}
+% =============================================================================
+
+\subsection{Invariant Framework}
+
+The \texttt{InvariantEnforcer} (\texttt{invariants.rs}, lines 1--200) checks:
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Time}: Decision time monotonicity, visibility semantics
+    \item \textbf{Book}: Crossed book detection, price validity
+    \item \textbf{OMS}: Order lifecycle correctness, illegal state transitions
+    \item \textbf{Fills}: Plausibility checks, overfill prevention
+    \item \textbf{Accounting}: Double-entry balance, cash non-negativity
+\end{itemize}
+
+\subsection{Invariant Modes}
+
+\begin{lstlisting}
+pub enum InvariantMode {
+    Off,  // No checking (INVALID for production)
+    Soft, // Log violations, continue
+    Hard, // Abort on first violation
+}
+\end{lstlisting}
+
+\subsection{Abort Behavior}
+
+In \texttt{Hard} mode, violations trigger \texttt{InvariantAbort} with:
+\begin{itemize}[noitemsep]
+    \item Violation details (category, type, message)
+    \item Causal dump (recent events, state snapshot)
+    \item Deterministic hash for reproduction
+\end{itemize}
+
+\subsection{Determinism Controls}
+
+\begin{itemize}[noitemsep]
+    \item \textbf{Clock}: \texttt{SimClock} never calls system time
+    \item \textbf{RNG}: Seeded \texttt{ChaCha8Rng} only
+    \item \textbf{Event ordering}: Deterministic via \texttt{(time, priority, source, seq)}
+    \item \textbf{Seed}: Configurable via \texttt{BacktestConfig::seed}
+\end{itemize}
+
+\subsection{Run Fingerprint}
+
+UNKNOWN: Explicit run fingerprint construction is not documented in the examined code.
+
+% =============================================================================
+\section{Operational Modes and Tooling}
+\label{sec:modes}
+% =============================================================================
+
+\subsection{Production-Grade Mode}
+
+\texttt{BacktestConfig::production\_grade\_15m\_updown()} (\texttt{orchestrator.rs}, lines 410--450) enforces:
+
+\begin{itemize}[noitemsep]
+    \item \texttt{strict\_mode = true}
+    \item \texttt{invariant\_mode = Hard}
+    \item \texttt{integrity\_policy = strict()}
+    \item \texttt{oms\_parity\_mode = Full}
+    \item \texttt{maker\_fill\_model = ExplicitQueue}
+    \item \texttt{gate\_mode = Strict}
+    \item \texttt{sensitivity.enabled = true}
+    \item \texttt{strict\_accounting = true}
+    \item Settlement spec required
+    \item Ledger config required
+\end{itemize}
+
+\subsection{Gate Suite}
+
+The \texttt{GateSuite} (\texttt{gate\_suite.rs}, lines 1--150) runs adversarial tests:
+
+\begin{description}[noitemsep]
+    \item[Gate A: Zero-Edge Matching] Expected PnL $\approx 0$ when $p_{theory} = p_{market}$
+    \item[Gate B: Martingale Price Path] No systematic profit on random walk prices
+    \item[Gate C: Signal Inversion] Inverted signals should not both be profitable
+\end{description}
+
+\subsection{Sensitivity Sweeps}
+
+The \texttt{SensitivityConfig} (\texttt{sensitivity.rs}) sweeps:
+
+\begin{description}[noitemsep]
+    \item[Latency Sweep] Tests latency values: 0, 10, 25, 50, 100, 250, 500 ms
+    \item[Sampling Sweep] Tests snapshot frequencies
+    \item[Execution Sweep] Tests queue model assumptions
+\end{description}
+
+Fragility flags:
+\begin{lstlisting}
+pub struct FragilityFlags {
+    pub latency_fragile: bool,
+    pub sampling_fragile: bool,
+    pub execution_fragile: bool,
+    pub requires_optimistic_assumptions: bool,
+}
+\end{lstlisting}
+
+\subsection{Basis Diagnostics}
+
+The \texttt{BasisDiagnostics} (\texttt{oracle/basis\_diagnostics.rs}) tracks:
+\begin{itemize}[noitemsep]
+    \item Binance mid vs Chainlink reference
+    \item Basis statistics (mean, std dev, autocorrelation)
+    \item Regime classification (Stable, Premium, Volatile, Trending)
+\end{itemize}
+
+% =============================================================================
+\section{Structural Summary}
+\label{sec:summary}
+% =============================================================================
+
+The \texttt{backtest\_v2} backend is a deterministic backtesting engine structured as follows:
+
+\begin{enumerate}[noitemsep]
+    \item \textbf{Data Layer}: \texttt{HistoricalDataContract} declares data shape; \texttt{DatasetClassification} and \texttt{DatasetReadiness} gate execution modes.
+    
+    \item \textbf{Event Layer}: \texttt{Event} enum defines canonical types; \texttt{EventQueue} maintains deterministic ordering by \texttt{(arrival\_time, priority, source, seq)}.
+    
+    \item \textbf{Market State}: \texttt{OrderBook} uses \texttt{BTreeMap} for sorted levels; \texttt{StreamIntegrityGuard} detects pathologies.
+    
+    \item \textbf{Strategy Interface}: \texttt{Strategy} trait provides callbacks; \texttt{StrategyContext} exposes \texttt{OrderSender}; all data gated by \texttt{VisibilityWatermark}.
+    
+    \item \textbf{OMS}: \texttt{OrderManagementSystem} implements state machine; \texttt{RateLimiter} enforces venue constraints.
+    
+    \item \textbf{Execution}: \texttt{MatchingEngine} simulates CLOB; \texttt{QueuePositionModel} tracks FIFO position; \texttt{MakerFillGate} validates all maker fills with \texttt{QueueProof} and \texttt{CancelRaceProof}.
+    
+    \item \textbf{Settlement}: \texttt{SettlementEngine} resolves 15-minute windows; \texttt{ChainlinkSettlementSource} provides reference prices with arrival-time visibility gating.
+    
+    \item \textbf{Accounting}: \texttt{Ledger} implements double-entry; \texttt{Portfolio} tracks positions; strict mode makes ledger the sole pathway.
+    
+    \item \textbf{Invariants}: \texttt{InvariantEnforcer} checks Time/Book/OMS/Fills/Accounting; Hard mode aborts on first violation.
+    
+    \item \textbf{Validation}: \texttt{GateSuite} runs zero-edge/martingale/inversion tests; \texttt{SensitivityConfig} sweeps latency/sampling/execution; \texttt{TruthfulnessSummary} determines trust verdict.
+\end{enumerate}
+
+Data flows from feed through event queue to orchestrator, which dispatches to book/OMS/strategy. Orders flow through matching engine; fills route through maker fill gate (if passive) and ledger (if strict accounting). Settlement resolves positions at window boundaries. Results aggregate into \texttt{BacktestResults} with \texttt{TruthfulnessSummary}.
+
+\end{document}

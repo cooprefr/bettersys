@@ -1,3 +1,15 @@
+//! Vault Trading Engine
+//!
+//! RN-JD Integration Checklist:
+//! [x] BeliefVolTracker initialized in AppState (main.rs)
+//! [x] Market observations recorded in evaluate_updown15m()
+//! [x] estimate_p_up_enhanced() called with RN-JD correction
+//! [x] Jump regime handling: 2x min edge requirement
+//! [x] Vol-adjusted Kelly: kelly_with_belief_vol() integrated
+//! [x] Backtest recording: BacktestCollector in AppState
+//! [x] A/B testing: ABTestTracker in AppState
+//! [x] API endpoints: /api/belief-vol/stats, /api/backtest/*, /api/ab-test/*
+
 use anyhow::Result;
 use chrono::Utc;
 use std::{
@@ -14,11 +26,11 @@ use crate::{
     models::{MarketSignal, SignalType, WsServerEvent},
     scrapers::{polymarket::OrderBook, polymarket_gamma},
     vault::{
-        calculate_kelly_position, p_up_driftless_lognormal, parse_decision_dsl,
-        parse_updown_15m_slug, shrink_to_half, DecisionAction, DomeExecutionAdapter,
+        calculate_kelly_position, estimate_p_up_enhanced, p_up_driftless_lognormal,
+        parse_decision_dsl, parse_updown_15m_slug, shrink_to_half, DecisionAction,
         ExecutionAdapter, KellyParams, OpenRouterClient, OrderRequest, OrderSide,
-        PaperExecutionAdapter, TimeInForce, UpDown15mMarket, UpDownAsset, VaultActivityRecord,
-        VaultNavSnapshotRecord,
+        PaperExecutionAdapter, PolymarketClobAdapter, TimeInForce, UpDown15mMarket, UpDownAsset,
+        VaultActivityRecord, VaultNavSnapshotRecord,
     },
     AppState,
 };
@@ -33,6 +45,11 @@ pub struct VaultEngineConfig {
     pub updown_max_position_pct: f64,
     pub updown_shrink_to_half: f64,
     pub updown_cooldown_sec: i64,
+
+    /// Maximum drawdown before halting trading (e.g., 0.30 = 30%)
+    pub max_drawdown_pct: f64,
+    /// Track initial bankroll for drawdown calculation
+    pub initial_bankroll: f64,
 
     pub long_enabled: bool,
     pub long_poll_ms: u64,
@@ -76,6 +93,9 @@ impl Default for VaultEngineConfig {
             updown_max_position_pct: 0.01,
             updown_shrink_to_half: 0.35,
             updown_cooldown_sec: 30,
+
+            max_drawdown_pct: 0.30,
+            initial_bankroll: 50.0,
 
             long_enabled: false,
             long_poll_ms: 5000,
@@ -499,7 +519,7 @@ async fn orderbook_snapshot(state: &AppState, token_id: &str) -> Result<Option<O
     let orderbook = state
         .http_client
         .get("https://clob.polymarket.com/book")
-        .timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(3))
         .query(&[("token_id", token_id)])
         .send()
         .await?
@@ -555,6 +575,18 @@ impl VaultEngineConfig {
             .and_then(|v| v.parse::<i64>().ok())
             .filter(|v| *v >= 0)
             .unwrap_or(cfg.updown_cooldown_sec);
+
+        cfg.max_drawdown_pct = env::var("VAULT_MAX_DRAWDOWN_PCT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1.0)
+            .unwrap_or(cfg.max_drawdown_pct);
+
+        cfg.initial_bankroll = env::var("INITIAL_BANKROLL")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(cfg.initial_bankroll);
 
         cfg.long_enabled = env::var("VAULT_LLM_ENABLED")
             .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
@@ -755,15 +787,19 @@ impl VaultEngine {
         }
 
         let exec: Arc<dyn ExecutionAdapter> = if cfg.paper {
-            Arc::new(PaperExecutionAdapter)
+            info!("vault engine running in PAPER mode");
+            Arc::new(PaperExecutionAdapter::default())
         } else {
-            match DomeExecutionAdapter::from_env() {
-                Some(dome) => Arc::new(dome),
+            match PolymarketClobAdapter::from_env() {
+                Some(clob) => {
+                    info!("vault engine running in LIVE mode (Polymarket CLOB)");
+                    Arc::new(clob)
+                }
                 None => {
                     warn!(
-                        "VAULT_ENGINE_PAPER=0 but Dome router env not set; falling back to paper"
+                        "VAULT_ENGINE_PAPER=0 but POLYMARKET_CLOB_* env vars not set; falling back to paper"
                     );
-                    Arc::new(PaperExecutionAdapter)
+                    Arc::new(PaperExecutionAdapter::default())
                 }
             }
         };
@@ -1047,7 +1083,12 @@ impl VaultEngine {
             let ack = self.exec.place_order(req).await?;
             let (cash_usdc, total_shares) = {
                 let mut ledger = self.state.vault.ledger.lock().await;
-                ledger.apply_sell(&token_id, ack.filled_price, ack.filled_notional_usdc);
+                ledger.apply_sell(
+                    &token_id,
+                    ack.filled_price,
+                    ack.filled_notional_usdc,
+                    ack.fees_usdc,
+                );
                 (
                     ledger.cash_usdc,
                     self.state.vault.shares.lock().await.total_shares,
@@ -1525,6 +1566,7 @@ impl VaultEngine {
                 req.outcome.as_deref().unwrap_or(""),
                 ack.filled_price,
                 ack.filled_notional_usdc,
+                ack.fees_usdc,
             );
             ledger.cash_usdc
         };
@@ -1710,10 +1752,34 @@ impl VaultEngine {
 
         let mut token_cache: HashMap<String, (String, String)> = HashMap::new();
         let mut last_trade_ts: HashMap<String, i64> = HashMap::new();
+        let mut halted = false;
 
         loop {
             interval.tick().await;
             let now = Utc::now().timestamp();
+
+            // === DRAWDOWN CIRCUIT BREAKER ===
+            if !halted {
+                let nav_usdc = {
+                    let ledger = self.state.vault.ledger.lock().await;
+                    crate::vault::approximate_nav_usdc(&ledger)
+                };
+                let drawdown = 1.0 - (nav_usdc / self.cfg.initial_bankroll);
+                if drawdown >= self.cfg.max_drawdown_pct {
+                    warn!(
+                        nav_usdc = %nav_usdc,
+                        initial = %self.cfg.initial_bankroll,
+                        drawdown_pct = %(drawdown * 100.0),
+                        max_drawdown_pct = %(self.cfg.max_drawdown_pct * 100.0),
+                        "DRAWDOWN CIRCUIT BREAKER TRIGGERED - HALTING ALL TRADING"
+                    );
+                    halted = true;
+                }
+            }
+            if halted {
+                // Engine is halted due to drawdown - skip all trading
+                continue;
+            }
             let start_ts = now - (now % (15 * 60));
             let end_ts = start_ts + 15 * 60;
 
@@ -1777,6 +1843,7 @@ impl VaultEngine {
                                 req.outcome.as_deref().unwrap_or(""),
                                 ack.filled_price,
                                 ack.filled_notional_usdc,
+                                ack.fees_usdc,
                             );
                             ledger.cash_usdc
                         };
@@ -1880,15 +1947,87 @@ impl VaultEngine {
             return Ok(None);
         };
 
-        let Some(p_up_raw) = p_up_driftless_lognormal(p_start, p_now, sigma, t_rem) else {
-            return Ok(None);
-        };
+        // === ORACLE LAG CHECK ===
+        // Polymarket settles using Chainlink, NOT Binance. During fast moves,
+        // Chainlink can lag Binance by seconds, flipping outcomes.
+        // If Chainlink feed is available, check for dangerous divergence.
+        if let Some(ref chainlink) = self.state.chainlink_feed {
+            let asset_str = market.asset.as_str();
+            if let Some(lag) = chainlink.analyze_lag(asset_str) {
+                if lag.should_skip_trade() {
+                    debug!(
+                        market_slug = %slug,
+                        divergence_bps = lag.divergence_bps,
+                        chainlink_age_ms = lag.chainlink_age_ms,
+                        is_stale = lag.is_stale,
+                        is_dangerous = lag.is_dangerous_regime,
+                        "Skipping trade due to oracle lag/divergence"
+                    );
+                    return Ok(None);
+                }
+            }
+            // Update Binance price in Chainlink tracker for divergence monitoring
+            chainlink.update_binance_price(asset_str, p_now);
+        }
 
-        let p_up = shrink_to_half(p_up_raw, self.cfg.updown_shrink_to_half);
-        let p_down = 1.0 - p_up;
-
+        // Get market mid price for RN-JD estimation
         let ask_up = best_ask(&self.state, token_up).await?;
         let ask_down = best_ask(&self.state, token_down).await?;
+        let market_mid = match (ask_up, ask_down) {
+            (Some(a), Some(b)) => 0.5 * (a + (1.0 - b)), // Average of Up ask and implied Down
+            (Some(a), None) => a,
+            (None, Some(b)) => 1.0 - b,
+            (None, None) => 0.5,
+        };
+
+        // Record observation for belief vol tracking
+        {
+            let mut tracker = self.state.belief_vol_tracker.write();
+            tracker.record_observation(slug, market_mid, now);
+        }
+
+        // Use RN-JD enhanced estimation
+        let est = match estimate_p_up_enhanced(
+            p_start,
+            p_now,
+            market_mid,
+            sigma,
+            t_rem,
+            Some(&*self.state.belief_vol_tracker.read()),
+            slug,
+            now,
+        ) {
+            Some(e) => e,
+            None => {
+                // Fallback to legacy estimation
+                let Some(p_up_raw) = p_up_driftless_lognormal(p_start, p_now, sigma, t_rem) else {
+                    return Ok(None);
+                };
+                debug!(market_slug = %slug, "RN-JD estimation failed, using legacy");
+                crate::vault::RnjdEstimate {
+                    p_up: p_up_raw,
+                    drift_correction: 0.0,
+                    p_up_raw,
+                    confidence: 0.5,
+                    jump_regime: false,
+                }
+            }
+        };
+
+        // Apply shrink (conservative adjustment)
+        let p_up = shrink_to_half(est.p_up, self.cfg.updown_shrink_to_half);
+        let p_down = 1.0 - p_up;
+
+        // Log RN-JD diagnostics
+        debug!(
+            market_slug = %slug,
+            p_up_rnjd = est.p_up,
+            p_up_raw = est.p_up_raw,
+            drift_correction = est.drift_correction,
+            jump_regime = est.jump_regime,
+            confidence = est.confidence,
+            "RN-JD estimate"
+        );
         let (side_token, side_outcome, side_price, side_conf) = match (ask_up, ask_down) {
             (Some(a_up), Some(a_down)) => {
                 let edge_up = p_up - a_up;
@@ -1905,7 +2044,23 @@ impl VaultEngine {
         };
 
         let edge = side_conf - side_price;
-        if edge < self.cfg.updown_min_edge {
+
+        // Jump regime handling: require 2x edge during elevated jump risk
+        let effective_min_edge = if est.jump_regime {
+            self.cfg.updown_min_edge * 2.0
+        } else {
+            self.cfg.updown_min_edge
+        };
+
+        if edge < effective_min_edge {
+            if est.jump_regime {
+                debug!(
+                    market_slug = %slug,
+                    edge = edge,
+                    effective_min_edge = effective_min_edge,
+                    "Edge below threshold during jump regime"
+                );
+            }
             return Ok(None);
         }
 
@@ -1920,8 +2075,29 @@ impl VaultEngine {
             max_position_pct: self.cfg.updown_max_position_pct,
             min_position_usd: 1.0,
         };
-        let kelly = calculate_kelly_position(side_conf, side_price, &kelly_params);
+
+        // Use vol-adjusted Kelly with belief volatility
+        let sigma_b = {
+            let tracker = self.state.belief_vol_tracker.read();
+            tracker.get_sigma_b(slug)
+        };
+        let t_years = t_rem / (365.25 * 24.0 * 3600.0);
+
+        let kelly = crate::vault::kelly_with_belief_vol(
+            side_conf,
+            side_price,
+            sigma_b,
+            t_years,
+            &kelly_params,
+        );
+
         if !kelly.should_trade {
+            debug!(
+                market_slug = %slug,
+                skip_reason = ?kelly.skip_reason,
+                sigma_b = sigma_b,
+                "Vol-adjusted Kelly skip"
+            );
             return Ok(None);
         }
 
@@ -1938,18 +2114,44 @@ impl VaultEngine {
     }
 }
 
-async fn best_ask(state: &AppState, token_id: &str) -> Result<Option<f64>> {
+/// Fetch best ask price from cache ONLY - returns None if should skip tick
+/// This is the HFT-grade function that NEVER blocks on REST.
+#[inline]
+pub fn best_ask_cached_hft(state: &AppState, token_id: &str, max_stale_ms: i64) -> Option<f64> {
+    state.polymarket_market_ws.request_subscribe(token_id);
+    state
+        .polymarket_market_ws
+        .get_orderbook(token_id, max_stale_ms)
+        .and_then(|book| book.asks.first().map(|o| o.price))
+}
+
+/// Fetch best bid price from cache ONLY - returns None if should skip tick
+#[inline]
+pub fn best_bid_cached_hft(state: &AppState, token_id: &str, max_stale_ms: i64) -> Option<f64> {
+    state.polymarket_market_ws.request_subscribe(token_id);
+    state
+        .polymarket_market_ws
+        .get_orderbook(token_id, max_stale_ms)
+        .and_then(|book| book.bids.first().map(|o| o.price))
+}
+
+/// Fetch best ask price for a token, preferring WS cache with REST fallback
+///
+/// DEPRECATED for HFT paths: Use `best_ask_cached_hft` instead which never blocks.
+/// This function should only be used in warmup phase or non-latency-critical paths.
+pub async fn best_ask(state: &AppState, token_id: &str) -> Result<Option<f64>> {
     // Prefer ultra-fast WS cache.
     state.polymarket_market_ws.request_subscribe(token_id);
     if let Some(book) = state.polymarket_market_ws.get_orderbook(token_id, 1500) {
         return Ok(book.asks.first().map(|o| o.price));
     }
 
-    // Fallback to REST snapshot.
+    // Fallback to REST snapshot - ONLY for non-HFT paths
+    // TODO: Consider removing this fallback entirely after warmup is implemented
     let mut orderbook = state
         .http_client
         .get("https://clob.polymarket.com/book")
-        .timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(3))
         .query(&[("token_id", token_id)])
         .send()
         .await?

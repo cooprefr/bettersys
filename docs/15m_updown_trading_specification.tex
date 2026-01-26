@@ -1,0 +1,504 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{bbm}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+\newtheorem{proposition}{Proposition}
+
+\DeclareMathOperator{\logit}{logit}
+\DeclareMathOperator{\sigmoid}{S}
+\DeclareMathOperator{\Var}{Var}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+\title{Trading Decision Rule for 15-Minute Up/Down Markets:\\A Mathematical Specification}
+\author{Reverse-Engineered from BetterBot Implementation}
+\date{January 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document provides a mathematically rigorous specification of the trading decision rule implemented in the BetterBot codebase for Polymarket 15-minute Up/Down binary outcome markets. The specification is derived exclusively from the implemented code and describes the exact decision pipeline, probability estimation, position sizing, and execution semantics. The market structure is that of a prediction market with bounded binary payoff tokens resolving at fixed expiry via an external oracle (Chainlink), with no dynamic hedging or self-financing replication.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Market Structure and State Space}
+
+\subsection{Market Definition}
+
+A 15-minute Up/Down market $\mathcal{M}$ on Polymarket is defined by the tuple
+\[
+\mathcal{M} = (\alpha, t_0, T, \omega^{\text{Up}}, \omega^{\text{Down}})
+\]
+where $\alpha \in \{\text{BTC}, \text{ETH}, \text{SOL}, \text{XRP}\}$ denotes the underlying asset, $t_0 \in \mathbb{Z}$ is the Unix epoch timestamp of market inception satisfying $t_0 \equiv 0 \pmod{900}$, $T = t_0 + 900$ is the expiry timestamp, and $\omega^{\text{Up}}, \omega^{\text{Down}}$ are the two outcome tokens.
+
+The market resolves via an external Chainlink oracle price feed. Let $P^{\text{CL}}_T$ denote the oracle-reported price at resolution. The payoff structure is:
+\[
+\pi(\omega^{\text{Up}}) = \mathbbm{1}_{\{P^{\text{CL}}_T > P^{\text{CL}}_{t_0}\}}, \quad
+\pi(\omega^{\text{Down}}) = \mathbbm{1}_{\{P^{\text{CL}}_T \leq P^{\text{CL}}_{t_0}\}}
+\]
+Each token pays $\$1$ if its condition is satisfied, $\$0$ otherwise.
+
+\subsection{Observable State}
+
+At decision time $t \in [t_0, T)$, the trading engine observes:
+\begin{itemize}
+\item $P^{\text{Bin}}_t$: Binance mid-price for asset $\alpha$ (via \texttt{barter-data} L1 WebSocket)
+\item $P^{\text{Bin}}_{t_0}$: Binance mid-price at market inception (from rolling history buffer)
+\item $\sigma$: EWMA volatility estimate (per-$\sqrt{\text{second}}$ units)
+\item $a^{\text{Up}}_t, a^{\text{Down}}_t$: Best ask prices for Up/Down tokens (from Polymarket WebSocket cache)
+\item $\tau = T - t$: Time remaining to expiry (seconds)
+\item $B_t$: Current cash balance (USDC in paper ledger)
+\end{itemize}
+
+\textit{Implementation reference:} The Binance feed is managed in \texttt{scrapers/binance\_price\_feed.rs}; the Polymarket orderbook cache is accessed via \texttt{polymarket\_market\_ws.get\_orderbook()} with a staleness threshold of 1500ms.
+
+\section{The Decision Operator}
+
+\subsection{Abstract Formulation}
+
+The trading decision at time $t$ is computed by a composition of operators:
+\[
+\mathcal{D}: \mathcal{O}_t \xrightarrow{\mathcal{G}} \{0,1\} \times \mathcal{O}_t \xrightarrow{\mathcal{P}} [0,1]^2 \xrightarrow{\mathcal{E}} \mathbb{R}^2 \xrightarrow{\mathcal{S}} [0, B_t] \xrightarrow{\mathcal{A}} \{\text{NO\_TRADE}\} \cup \mathcal{R}
+\]
+where $\mathcal{O}_t$ is the observation space, $\mathcal{G}$ is the gating operator, $\mathcal{P}$ is the probability estimator, $\mathcal{E}$ is the edge functional, $\mathcal{S}$ is the sizing operator, and $\mathcal{A}$ is the action selector producing either NO\_TRADE or an order request $\mathcal{R}$.
+
+\subsection{Gating Operator $\mathcal{G}$}
+
+The gating operator implements a sequence of skip conditions. Define indicator functions:
+\begin{align}
+g_1(t) &= \mathbbm{1}_{\{\tau \geq \tau_{\min}\}} \quad &&\text{(window-end check: } \tau_{\min} = 15\text{s)} \\
+g_2(t) &= \mathbbm{1}_{\{t - t_{\text{last}} \geq \Delta_{\text{cool}}\}} \quad &&\text{(cooldown: } \Delta_{\text{cool}} = 30\text{s)} \\
+g_3(t) &= \mathbbm{1}_{\{P^{\text{Bin}}_t \text{ is valid}\}} \quad &&\text{(price data available)} \\
+g_4(t) &= \mathbbm{1}_{\{P^{\text{Bin}}_{t_0} \text{ is valid}\}} \quad &&\text{(start price available)} \\
+g_5(t) &= \mathbbm{1}_{\{\sigma > 0, \sigma < \infty\}} \quad &&\text{(volatility valid)} \\
+g_6(t) &= \mathbbm{1}_{\{a^{\text{Up}}_t \text{ or } a^{\text{Down}}_t \text{ available}\}} \quad &&\text{(orderbook available)} \\
+g_7(t) &= \mathbbm{1}_{\{B_t > 0\}} \quad &&\text{(bankroll positive)} \\
+g_8(t) &= \mathbbm{1}_{\{1 - \text{NAV}_t/B_0 < \delta_{\max}\}} \quad &&\text{(drawdown circuit breaker: } \delta_{\max} = 0.30\text{)}
+\end{align}
+
+The gating output is:
+\[
+\mathcal{G}(\mathcal{O}_t) = \left(\prod_{i=1}^{8} g_i(t), \mathcal{O}_t\right)
+\]
+
+If the first component is 0, the decision pipeline terminates with NO\_TRADE.
+
+\textit{Implementation reference:} \texttt{vault/engine.rs::evaluate\_updown15m()} lines 1920--1950 for basic gates; \texttt{vault/engine.rs::run\_updown15m()} lines 1760--1790 for drawdown circuit breaker.
+
+\subsection{Oracle Lag Check (Optional Gate)}
+
+When the Chainlink price feed is available, an additional gate checks for oracle lag:
+\[
+g_9(t) = \mathbbm{1}_{\{\neg\text{should\_skip\_trade}(\text{LagAnalysis}_t)\}}
+\]
+where the lag analysis computes divergence in basis points between Binance and Chainlink prices and staleness of the Chainlink feed. The skip condition triggers when divergence exceeds a threshold or the Chainlink feed is stale, protecting against oracle-basis risk during fast moves.
+
+\textit{Implementation reference:} \texttt{vault/engine.rs} lines 1960--1980 (Chainlink lag check).
+
+\section{Probability Estimation}
+
+\subsection{The Driftless Lognormal Model}
+
+The core probability estimator uses a driftless lognormal model for the underlying price process. Let $S_t = P^{\text{Bin}}_t$ and $S_0 = P^{\text{Bin}}_{t_0}$. Under the risk-neutral measure $\mathbb{Q}$, we model:
+\[
+\frac{dS_t}{S_t} = \sigma \, dW_t
+\]
+where $W_t$ is a standard Brownian motion and $\sigma$ is the per-$\sqrt{\text{second}}$ volatility.
+
+\begin{proposition}[Raw Up Probability]
+Under the driftless lognormal model, the probability that $S_T > S_0$ given current state $(S_t, t)$ is:
+\[
+p^{\text{raw}}_{\text{up}} = \Phi\left(\frac{\log(S_t/S_0)}{\sigma\sqrt{\tau}}\right)
+\]
+where $\Phi$ is the standard normal CDF.
+\end{proposition}
+
+\begin{proof}
+Since $\log S_T - \log S_t \sim \mathcal{N}(-\frac{1}{2}\sigma^2\tau, \sigma^2\tau)$ under the driftless model, we have $\log S_T \sim \mathcal{N}(\log S_t - \frac{1}{2}\sigma^2\tau, \sigma^2\tau)$. The probability $\mathbb{P}(S_T > S_0) = \mathbb{P}(\log S_T > \log S_0)$ becomes:
+\[
+\mathbb{P}\left(Z > \frac{\log S_0 - \log S_t + \frac{1}{2}\sigma^2\tau}{\sigma\sqrt{\tau}}\right)
+\]
+In the implementation, the drift correction $-\frac{1}{2}\sigma^2\tau$ is omitted (driftless assumption), yielding the simpler $z$-score $x/(\sigma\sqrt{\tau})$ where $x = \log(S_t/S_0)$.
+\end{proof}
+
+\textit{Implementation reference:} \texttt{vault/updown15m.rs::p\_up\_driftless\_lognormal()}:
+\begin{verbatim}
+let x = (p_now / p_start).ln();
+let denom = sigma_per_sqrt_s * t_rem_sec.sqrt();
+let z = x / denom;
+let p = n.cdf(z);
+\end{verbatim}
+
+\subsection{Shrinkage Transform}
+
+The raw probability is adjusted via a shrinkage transform toward the uninformative prior $0.5$:
+\[
+p_{\text{up}} = \text{shrink}(p^{\text{raw}}_{\text{up}}; \lambda) = 0.5 + \lambda(p^{\text{raw}}_{\text{up}} - 0.5)
+\]
+where $\lambda \in (0, 1]$ is the shrinkage parameter (default $\lambda = 0.35$). This is a conservative bias that reduces overconfidence in the model.
+
+The output is clamped: $p_{\text{up}} \in [0.0001, 0.9999]$ to avoid numerical issues in downstream calculations.
+
+\textit{Implementation reference:} \texttt{vault/updown15m.rs::shrink\_to\_half()}:
+\begin{verbatim}
+(0.5 + s * (p - 0.5)).clamp(0.0001, 0.9999)
+\end{verbatim}
+
+\begin{remark}[Geometric Interpretation]
+The shrinkage transform contracts the probability simplex toward the barycenter. In log-odds space $x = \logit(p)$, this corresponds to a nonlinear damping: $\logit(\text{shrink}(p; \lambda)) \neq \lambda \cdot \logit(p)$ in general, but the effect is similar for $p$ near $0.5$.
+\end{remark}
+
+\subsection{Risk-Neutral Jump-Diffusion Enhancement (Optional)}
+
+The implementation includes an optional RN-JD enhancement that incorporates belief volatility tracking and jump regime detection. When enabled:
+
+\subsubsection{Log-Odds Transform and Belief Volatility}
+
+The traded probability $p_t$ is transformed to log-odds space:
+\[
+x_t = \logit(p_t) = \log\frac{p_t}{1 - p_t}
+\]
+The belief volatility $\sigma_b$ is estimated via exponential moving average of squared log-odds increments:
+\[
+\hat{\sigma}_b^2 = \alpha \cdot \frac{(\Delta x)^2}{\Delta t_{\text{years}}} + (1 - \alpha) \cdot \hat{\sigma}_{b,\text{prev}}^2
+\]
+with $\alpha = 0.1$ (EMA smoothing factor).
+
+\subsubsection{Risk-Neutral Drift}
+
+Under the martingale constraint, the drift in log-odds space is pinned:
+\[
+\mu(t, x) = -\frac{1}{2}\sigma_b^2 \frac{\sigmoid''(x)}{\sigmoid'(x)} = -\frac{1}{2}\sigma_b^2(1 - 2p)
+\]
+where $\sigmoid(x) = 1/(1 + e^{-x})$ is the logistic function, $\sigmoid'(x) = p(1-p)$, and $\sigmoid''(x) = p(1-p)(1-2p)$.
+
+\subsubsection{Jump Regime Detection}
+
+A jump regime is flagged when recent price moves exhibit $z$-scores exceeding a threshold (default 3.0):
+\[
+\text{JumpRegime} = \mathbbm{1}_{\left\{\sum_{\substack{s \in [t-300, t] \\ |\Delta x_s|/(\hat{\sigma}_b\sqrt{\Delta t_s}) > 3}} 1 \geq 2\right\}}
+\]
+During jump regimes, the minimum edge requirement is doubled.
+
+\textit{Implementation reference:} \texttt{vault/rnjd.rs} and \texttt{vault/belief\_vol.rs}; invoked in \texttt{vault/engine.rs::evaluate\_updown15m()} via \texttt{estimate\_p\_up\_enhanced()}.
+
+\section{Edge Computation}
+
+\subsection{Side Selection}
+
+Given probabilities $p_{\text{up}}, p_{\text{down}} = 1 - p_{\text{up}}$ and ask prices $a^{\text{Up}}_t, a^{\text{Down}}_t$, the edges are:
+\[
+e^{\text{Up}} = p_{\text{up}} - a^{\text{Up}}_t, \quad e^{\text{Down}} = p_{\text{down}} - a^{\text{Down}}_t
+\]
+
+The selected side and parameters are:
+\[
+(\text{side}^*, \text{token}^*, a^*, p^*) = \argmax_{s \in \{\text{Up}, \text{Down}\}} e^s
+\]
+with the convention that if only one ask is available, that side is selected.
+
+\textit{Implementation reference:} \texttt{vault/engine.rs} lines 2015--2035, \texttt{vault/fast15m\_reactive.rs} lines 500--520.
+
+\subsection{Edge Threshold}
+
+Define the effective minimum edge:
+\[
+e_{\min}^{\text{eff}} = \begin{cases}
+2 \cdot e_{\min} & \text{if JumpRegime} \\
+e_{\min} & \text{otherwise}
+\end{cases}
+\]
+where $e_{\min} = 0.01$ (1\%) by default.
+
+The edge gate is:
+\[
+\mathcal{E}(\mathcal{O}_t) = \begin{cases}
+(e^*, \text{side}^*, \text{token}^*, a^*, p^*) & \text{if } e^* \geq e_{\min}^{\text{eff}} \\
+\text{NO\_TRADE} & \text{otherwise}
+\end{cases}
+\]
+
+\textit{Implementation reference:} \texttt{vault/engine.rs} lines 2050--2065.
+
+\section{Position Sizing: Kelly Criterion}
+
+\subsection{Standard Kelly Formula}
+
+The Kelly criterion determines the optimal fraction of bankroll to bet. For a binary outcome with our probability estimate $p$ and market-implied probability (price) $q$:
+
+\begin{definition}[Full Kelly Fraction]
+\[
+f^* = \frac{p \cdot b - (1-p)}{b} = \frac{p(1-q) - (1-p)q}{1-q}
+\]
+where $b = (1/q) - 1$ is the decimal odds minus one.
+\end{definition}
+
+This simplifies to:
+\[
+f^* = \frac{p - q}{1 - q}
+\]
+
+\textit{Implementation reference:} \texttt{vault/kelly.rs::calculate\_kelly\_position()} lines 65--75:
+\begin{verbatim}
+let odds = (1.0 / market_price) - 1.0;
+let p = confidence;
+let q = 1.0 - p;
+let full_kelly = (p * odds - q) / odds;
+\end{verbatim}
+
+\subsection{Fractional Kelly with Constraints}
+
+The implemented position size is:
+\[
+\Delta = B_t \cdot \min\left(\kappa \cdot \max(f^*, 0), \phi_{\max}\right)
+\]
+where:
+\begin{itemize}
+\item $\kappa = 0.05$ is the fractional Kelly multiplier (5\% Kelly, very conservative)
+\item $\phi_{\max} = 0.01$ is the maximum single position as fraction of bankroll (1\%)
+\item $B_t$ is the current bankroll
+\end{itemize}
+
+Additionally, if $\Delta < \Delta_{\min}$ (default $\$1$), the trade is skipped.
+
+\textit{Implementation reference:} \texttt{vault/kelly.rs} lines 80--95 for capping; \texttt{vault/engine.rs::VaultEngineConfig} for parameter defaults.
+
+\subsection{Belief Volatility Adjustment}
+
+When RN-JD enhancement is active, Kelly sizing is adjusted for belief volatility:
+
+\begin{definition}[Edge Safety Ratio]
+\[
+\rho = \frac{e}{\sigma_b \sqrt{t_{\text{years}}} \cdot p(1-p)}
+\]
+where $e$ is the edge, $\sigma_b$ is belief volatility, and $p(1-p)$ is the probability sensitivity.
+\end{definition}
+
+The volatility multiplier is:
+\[
+m_{\text{vol}} = \begin{cases}
+\max(\rho, 0.1) & \text{if } \rho < 1 \\
+0.5 + 0.25\rho & \text{if } 1 \leq \rho < 2 \\
+1 & \text{if } \rho \geq 2
+\end{cases}
+\]
+
+The vol-adjusted position is $\Delta_{\text{adj}} = \Delta \cdot m_{\text{vol}}$.
+
+\textit{Implementation reference:} \texttt{vault/kelly.rs::kelly\_with\_belief\_vol()} lines 195--230.
+
+\section{Execution Semantics}
+
+\subsection{Order Request Construction}
+
+If all gates pass and $\Delta_{\text{adj}} \geq \Delta_{\min}$, an order request is constructed:
+\[
+\mathcal{R} = (\text{id}, \text{token}^*, \text{BUY}, a^*, \Delta_{\text{adj}}, \text{IOC}, \text{slug}, \text{outcome})
+\]
+where IOC (Immediate-Or-Cancel) is the time-in-force.
+
+\textit{Implementation reference:} \texttt{vault/engine.rs} lines 2080--2095.
+
+\subsection{Paper Execution Model}
+
+In paper trading mode, the execution adapter simulates realistic fills:
+
+\subsubsection{Latency Simulation}
+\[
+L = L_{\text{base}} + U(0, L_{\text{jitter}})
+\]
+where $L_{\text{base}} = 150$ms, $L_{\text{jitter}} = 200$ms.
+
+\subsubsection{Slippage Model}
+\[
+s = s_{\text{base}} + s_{\text{impact}} \cdot \frac{\Delta}{1000}
+\]
+where $s_{\text{base}} = 10$bps (half-spread) and $s_{\text{impact}} = 15$bps per \$1000 notional.
+
+The filled price is:
+\[
+a^*_{\text{filled}} = a^* \cdot (1 + s/10000)
+\]
+capped at 0.99.
+
+\subsubsection{Fees}
+\[
+\text{fees} = \Delta_{\text{filled}} \cdot r_{\text{fee}}
+\]
+where $r_{\text{fee}} = 0.005$ (0.5\% taker fee).
+
+\subsubsection{Partial Fills and Rejections}
+With probability $p_{\text{partial}} = 0.15$, only a fraction $\phi \sim U(0.4, 1)$ of the order fills. With probability $p_{\text{reject}} = 0.02$, the order is rejected entirely.
+
+\textit{Implementation reference:} \texttt{vault/execution.rs::PaperExecutionAdapter}.
+
+\subsection{Ledger Update}
+
+Upon fill acknowledgment, the paper ledger is updated:
+\[
+B_{t^+} = B_t - \Delta_{\text{filled}} - \text{fees}
+\]
+and the position is recorded with average price for potential future exit logic.
+
+\textit{Implementation reference:} \texttt{vault/paper\_ledger.rs::apply\_buy()}.
+
+\section{Reactive Architecture Variant}
+
+\subsection{Event-Driven Execution}
+
+The \texttt{ReactiveFast15mEngine} (in \texttt{vault/fast15m\_reactive.rs}) implements an event-driven variant that subscribes to Binance price updates via a broadcast channel and evaluates opportunities on each tick rather than polling.
+
+\subsubsection{Adaptive Gating}
+
+Additional gates for the reactive variant:
+\begin{align}
+g_{\text{edge-change}}(t) &= \mathbbm{1}_{\{|e_t - e_{\text{last}}| \geq \theta_e \text{ or } t_{\text{elapsed}} < 60\}} \\
+g_{\text{rate-limit}}(t) &= \mathbbm{1}_{\{t - t_{\text{last-eval}} \geq \Delta_{\text{eval}}\}}
+\end{align}
+where $\theta_e = 0.005$ (0.5\% edge change threshold) and $\Delta_{\text{eval}} = 50$ms minimum between evaluations per asset (outside the aggressive first-60-seconds window).
+
+\subsubsection{Window-Aware Behavior}
+
+The reactive engine is aggressive in the first 60 seconds of the window (evaluates on every tick) and idle in the last 60 seconds (skips all evaluation to avoid resolution-time risk).
+
+\textit{Implementation reference:} \texttt{vault/fast15m\_reactive.rs::on\_price\_update()}.
+
+\section{Complete Decision Pipeline Summary}
+
+The complete decision pipeline for a 15-minute Up/Down market at time $t$ is:
+
+\begin{enumerate}
+\item \textbf{Window Identification}: Compute $t_0 = t - (t \mod 900)$, $T = t_0 + 900$, $\tau = T - t$.
+
+\item \textbf{Gating Phase}: Check all gates $g_1, \ldots, g_9$. If any fails, return NO\_TRADE.
+
+\item \textbf{Data Retrieval}: Fetch $P^{\text{Bin}}_t$, $P^{\text{Bin}}_{t_0}$, $\sigma$ from Binance feed; fetch $a^{\text{Up}}_t$, $a^{\text{Down}}_t$ from Polymarket WebSocket cache (1500ms staleness threshold).
+
+\item \textbf{Probability Estimation}: 
+\[
+p^{\text{raw}}_{\text{up}} = \Phi\left(\frac{\log(P^{\text{Bin}}_t/P^{\text{Bin}}_{t_0})}{\sigma\sqrt{\tau}}\right), \quad
+p_{\text{up}} = 0.5 + 0.35(p^{\text{raw}}_{\text{up}} - 0.5)
+\]
+
+\item \textbf{RN-JD Enhancement} (if enabled): Apply belief volatility correction and check jump regime.
+
+\item \textbf{Edge Computation}: 
+\[
+e^{\text{Up}} = p_{\text{up}} - a^{\text{Up}}_t, \quad e^{\text{Down}} = (1-p_{\text{up}}) - a^{\text{Down}}_t
+\]
+Select side with higher edge.
+
+\item \textbf{Edge Check}: If $e^* < e_{\min}^{\text{eff}}$, return NO\_TRADE.
+
+\item \textbf{Kelly Sizing}:
+\[
+f^* = \frac{p^* - a^*}{1 - a^*}, \quad \Delta = B_t \cdot \min(0.05 \cdot f^*, 0.01)
+\]
+Apply vol-adjustment if enabled. If $\Delta < \$1$, return NO\_TRADE.
+
+\item \textbf{Order Submission}: Construct IOC limit buy order at price $a^*$ for notional $\Delta$.
+
+\item \textbf{Ledger Update}: On fill, update cash balance and record position. Update cooldown timestamp.
+\end{enumerate}
+
+\section{Parameter Summary}
+
+\begin{center}
+\begin{tabular}{llll}
+\hline
+\textbf{Parameter} & \textbf{Symbol} & \textbf{Default} & \textbf{Source} \\
+\hline
+Minimum time remaining & $\tau_{\min}$ & 15s & \texttt{engine.rs} \\
+Cooldown period & $\Delta_{\text{cool}}$ & 30s & \texttt{UPDOWN15M\_COOLDOWN\_SEC} \\
+Shrinkage factor & $\lambda$ & 0.35 & \texttt{UPDOWN15M\_SHRINK} \\
+Minimum edge & $e_{\min}$ & 0.01 & \texttt{UPDOWN15M\_MIN\_EDGE} \\
+Kelly fraction & $\kappa$ & 0.05 & \texttt{UPDOWN15M\_KELLY\_FRACTION} \\
+Max position fraction & $\phi_{\max}$ & 0.01 & \texttt{UPDOWN15M\_MAX\_POSITION\_PCT} \\
+Min position size & $\Delta_{\min}$ & \$1 & \texttt{kelly.rs} \\
+Max drawdown & $\delta_{\max}$ & 0.30 & \texttt{VAULT\_MAX\_DRAWDOWN\_PCT} \\
+Book staleness threshold & --- & 1500ms & \texttt{engine.rs}, \texttt{fast15m\_reactive.rs} \\
+EMA lambda (vol) & $\lambda_{\text{ema}}$ & 0.97 & \texttt{binance\_price\_feed.rs} \\
+Belief vol EMA alpha & $\alpha$ & 0.1 & \texttt{belief\_vol.rs} \\
+Paper base latency & $L_{\text{base}}$ & 150ms & \texttt{execution.rs} \\
+Paper latency jitter & $L_{\text{jitter}}$ & 200ms & \texttt{execution.rs} \\
+Paper base slippage & $s_{\text{base}}$ & 10bps & \texttt{execution.rs} \\
+Paper impact slippage & $s_{\text{impact}}$ & 15bps/\$1k & \texttt{execution.rs} \\
+Paper fee rate & $r_{\text{fee}}$ & 0.5\% & \texttt{execution.rs} \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Representation Choices and Invariances}
+
+\subsection{Why Driftless Lognormal?}
+
+The driftless lognormal assumption $dS/S = \sigma\,dW$ (rather than the more standard $dS/S = \mu\,dt + \sigma\,dW$) is a simplification appropriate for very short horizons ($\tau \leq 900$s). Over 15 minutes, the drift contribution $\mu\tau \approx 0$ for reasonable drift magnitudes, while the diffusive term $\sigma\sqrt{\tau}$ dominates. This choice:
+\begin{enumerate}
+\item Avoids drift estimation, which is notoriously difficult on short timescales
+\item Makes the probability estimate purely a function of realized return and volatility
+\item Is conservative in the sense that it does not attempt to predict directional moves
+\end{enumerate}
+
+The shrinkage transform provides additional conservatism by pulling estimates toward $0.5$.
+
+\subsection{Why Log-Odds for Belief Volatility?}
+
+The log-odds transform $x = \logit(p)$ maps the probability simplex $(0,1)$ to $\mathbb{R}$, providing:
+\begin{enumerate}
+\item An unbounded space where additive Gaussian increments are natural
+\item Automatic enforcement of probability bounds via the sigmoid inverse
+\item Symmetric treatment of probabilities near 0 and 1
+\end{enumerate}
+
+The RN-JD framework uses this representation to track belief dynamics as a diffusion-with-jumps in log-odds space, with the risk-neutral drift pinned by no-arbitrage.
+
+\subsection{Representation-Invariant Components}
+
+The following parts of the decision rule are representation-invariant:
+\begin{itemize}
+\item The edge computation $e = p - a$ (operates directly on probabilities)
+\item The Kelly formula $f^* = (p-q)/(1-q)$ (operates on probabilities)
+\item The gating conditions (operate on timestamps, prices, and flags)
+\end{itemize}
+
+The following depend on the log-price or log-odds representation:
+\begin{itemize}
+\item The driftless lognormal $z$-score uses log returns
+\item The belief volatility tracker uses log-odds increments
+\item The RN drift formula uses the logistic function and its derivatives
+\end{itemize}
+
+\section{Code-to-Specification Mapping}
+
+\begin{center}
+\begin{tabular}{ll}
+\hline
+\textbf{Specification Section} & \textbf{Primary Implementation Files} \\
+\hline
+Market structure & \texttt{vault/updown15m.rs} \\
+Gating operator & \texttt{vault/engine.rs::run\_updown15m()}, \texttt{::evaluate\_updown15m()} \\
+Raw probability & \texttt{vault/updown15m.rs::p\_up\_driftless\_lognormal()} \\
+Shrinkage & \texttt{vault/updown15m.rs::shrink\_to\_half()} \\
+RN-JD enhancement & \texttt{vault/rnjd.rs}, \texttt{vault/belief\_vol.rs} \\
+Edge computation & \texttt{vault/engine.rs} lines 2015--2065 \\
+Kelly sizing & \texttt{vault/kelly.rs} \\
+Vol-adjusted Kelly & \texttt{vault/kelly.rs::kelly\_with\_belief\_vol()} \\
+Order construction & \texttt{vault/engine.rs} lines 2080--2095 \\
+Paper execution & \texttt{vault/execution.rs::PaperExecutionAdapter} \\
+Ledger updates & \texttt{vault/paper\_ledger.rs} \\
+Reactive variant & \texttt{vault/fast15m\_reactive.rs} \\
+Binance feed & \texttt{scrapers/binance\_price\_feed.rs} \\
+\hline
+\end{tabular}
+\end{center}
+
+\end{document}

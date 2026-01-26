@@ -1,0 +1,578 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\definecolor{codebg}{rgb}{0.95,0.95,0.95}
+\definecolor{codeframe}{rgb}{0.8,0.8,0.8}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true
+}
+
+\title{Polymarket 15-Minute Up/Down Backtester\\Architectural Description}
+\author{External Code Review}
+\date{January 2026}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% =============================================================================
+\section{Orientation and Scope}
+% =============================================================================
+
+The system under review is a backtesting framework located in \texttt{rust-backend/src/backtest\_v2/}. Based on examination of the module documentation strings and code, the system is designed to replay historical market data against trading strategies in a simulated environment.
+
+The target market, as explicitly stated in \texttt{mod.rs} line 4, is ``Polymarket-style CLOB markets.'' The \texttt{HistoricalDataContract} type in \texttt{data\_contract.rs} includes a factory method \texttt{polymarket\_15m\_updown\_hybrid\_snapshots\_and\_trades()} (line 39) which constructs a contract with:
+\begin{itemize}
+    \item \texttt{venue: "Polymarket"}
+    \item \texttt{market: "15m up/down"}
+\end{itemize}
+
+The settlement module (\texttt{settlement.rs}) defines \texttt{WINDOW\_15M\_SECS = 15 * 60} (line 21) and includes a \texttt{SettlementSpec::polymarket\_15m\_updown()} method (lines 159--175) that encodes the contract semantics for 15-minute prediction markets on price direction.
+
+The system scope therefore encompasses: (1) replay of historical order book and trade data, (2) simulation of order execution via a matching engine, (3) tracking of positions and accounting, and (4) determination of settlement outcomes for 15-minute directional markets. Whether the system is intended for other market types is not explicitly stated; the code contains generic abstractions but the concrete implementations target the 15-minute up/down product.
+
+% =============================================================================
+\section{High-Level System Decomposition}
+% =============================================================================
+
+The system consists of 28 Rust source files organized into logical subsystems. The module structure is declared in \texttt{mod.rs} (lines 47--72).
+
+\subsection{Core Components}
+
+\subsubsection{Orchestrator}
+File: \texttt{orchestrator.rs}. The \texttt{BacktestOrchestrator} struct (line 290) owns the simulation clock, event queue, simulated order sender, and result accumulator. The \texttt{run()} method (line 362) implements the main event loop.
+
+\subsubsection{Event Queue}
+File: \texttt{queue.rs}. The \texttt{EventQueue} struct (line 44) wraps a \texttt{BinaryHeap<Reverse<TimestampedEvent>{}>} to provide min-heap ordering. Events are ordered by \texttt{(time, priority, source, seq)} as documented in lines 30--36.
+
+\subsubsection{Simulation Clock}
+File: \texttt{clock.rs}. The \texttt{SimClock} struct (line 18) maintains a monotonically advancing nanosecond counter. The \texttt{advance\_to()} method (line 48) asserts forward-only movement via \texttt{debug\_assert!}.
+
+\subsubsection{Event Model}
+File: \texttt{events.rs}. Defines the canonical event types in the \texttt{Event} enum (lines 139--210) and \texttt{TimestampedEvent} struct (lines 263--280). Event priority is encoded in \texttt{EventPriority} (lines 123--136).
+
+\subsubsection{Matching Engine}
+File: \texttt{matching.rs}. The \texttt{LimitOrderBook} struct (line 230) and \texttt{MatchingEngine} implement CLOB simulation with FIFO matching, maker/taker fees, and self-trade prevention.
+
+\subsubsection{Order Management System}
+File: \texttt{oms.rs}. The \texttt{OrderManagementSystem} struct (line 443) tracks order state machines, rate limits, and validation. Order states are defined in \texttt{OrderState} enum (lines 15--33).
+
+\subsubsection{Simulated Adapter}
+File: \texttt{sim\_adapter.rs}. The \texttt{SimulatedOrderSender} struct (line 75) implements the \texttt{OrderSender} trait, bridging strategies to the matching engine with OMS validation.
+
+\subsubsection{Strategy Interface}
+File: \texttt{strategy.rs}. The \texttt{Strategy} trait (lines 188--222) defines callbacks for book updates, trades, fills, and timers. \texttt{StrategyContext} (line 168) provides the execution interface.
+
+\subsubsection{Settlement Engine}
+File: \texttt{settlement.rs}. The \texttt{SettlementEngine} struct (line 410) and \texttt{SettlementSpec} (lines 93--152) encode 15-minute window semantics, reference price rules, and outcome determination.
+
+\subsubsection{Accounting Ledger}
+File: \texttt{ledger.rs}. The \texttt{Ledger} struct (line 490) implements double-entry accounting with fixed-point amounts (\texttt{Amount = i128}, line 42).
+
+\subsubsection{Visibility Enforcement}
+File: \texttt{visibility.rs}. The \texttt{VisibilityWatermark} struct (line 188) tracks what data is visible at current decision time. \texttt{DecisionProof} (line 299) provides audit trail.
+
+\subsubsection{Data Contract Validation}
+File: \texttt{data\_contract.rs}. The \texttt{DataContractValidator} struct (line 85) observes events and validates conformance to declared data shape.
+
+\subsubsection{Stream Integrity}
+File: \texttt{integrity.rs}. The \texttt{StreamIntegrityGuard} struct handles duplicates, gaps, and out-of-order events via configurable policies.
+
+\subsubsection{Invariant Enforcement}
+File: \texttt{invariants.rs}. The \texttt{InvariantEnforcer} struct provides runtime invariant checking across time, book, OMS, fills, and accounting categories.
+
+\subsubsection{Gate Suite}
+File: \texttt{gate\_suite.rs}. The \texttt{GateSuite} implements adversarial tests (zero-edge, martingale) to validate simulator correctness.
+
+\subsubsection{Sensitivity Analysis}
+File: \texttt{sensitivity.rs}. Provides sweep configurations for latency, queue model, and execution assumptions.
+
+\subsection{Data Flow}
+
+The data flow proceeds as follows:
+
+\begin{enumerate}
+    \item Historical data is loaded via a \texttt{MarketDataFeed} implementation (\texttt{feed.rs}) into the \texttt{EventQueue}.
+    \item The \texttt{DataContractValidator} observes each event during loading.
+    \item The \texttt{BacktestOrchestrator} pops events from the queue in timestamp order.
+    \item Each event advances the \texttt{SimClock} and \texttt{VisibilityWatermark}.
+    \item The orchestrator dispatches events to strategy callbacks.
+    \item Strategy decisions invoke the \texttt{OrderSender} trait methods.
+    \item \texttt{SimulatedOrderSender} validates through \texttt{OrderManagementSystem} and routes to \texttt{MatchingEngine}.
+    \item Fill events are generated and pushed back to the \texttt{EventQueue}.
+    \item Results are accumulated in \texttt{BacktestResults}.
+\end{enumerate}
+
+% =============================================================================
+\section{Event Model and Time Semantics}
+% =============================================================================
+
+\subsection{Event Definition}
+
+An ``event'' in this system is an instance of the \texttt{Event} enum (\texttt{events.rs}, lines 139--210). The enum variants include:
+
+\begin{itemize}
+    \item \texttt{L2BookSnapshot}: Full order book state with bids, asks, and exchange sequence number.
+    \item \texttt{L2Delta}: Incremental book updates with bid/ask level changes.
+    \item \texttt{TradePrint}: Public trade with price, size, aggressor side.
+    \item \texttt{OrderAck}, \texttt{OrderReject}, \texttt{Fill}, \texttt{CancelAck}: Order lifecycle events.
+    \item \texttt{MarketStatusChange}, \texttt{ResolutionEvent}: Market state events.
+    \item \texttt{Timer}: Scheduled callbacks.
+\end{itemize}
+
+Events are wrapped in \texttt{TimestampedEvent} (\texttt{events.rs}, lines 263--280) which adds:
+\begin{itemize}
+    \item \texttt{time: Nanos} --- arrival timestamp (when the system ``sees'' the event)
+    \item \texttt{source\_time: Nanos} --- original upstream timestamp
+    \item \texttt{seq: u64} --- sequence number assigned by \texttt{EventQueue}
+    \item \texttt{source: u8} --- source stream identifier
+\end{itemize}
+
+\subsection{Event Ordering}
+
+The \texttt{Ord} implementation for \texttt{TimestampedEvent} (\texttt{events.rs}, lines 297--308) defines total ordering as:
+\begin{lstlisting}
+(time, event.priority(), source, seq)
+\end{lstlisting}
+This ordering is lexicographic: first by arrival timestamp, then by event priority (system events before market data), then by source stream, then by insertion order.
+
+Event priority classes are defined in \texttt{EventPriority} (\texttt{events.rs}, lines 123--136) with values 0--8 where lower values have higher priority (processed first).
+
+\subsection{Timestamps}
+
+The system distinguishes three timestamp concepts, documented in \texttt{visibility.rs} (lines 1--14):
+
+\begin{enumerate}
+    \item \texttt{source\_time}: Timestamp from the upstream data provider. May be missing or untrusted.
+    \item \texttt{arrival\_time} (stored as \texttt{time} field): Time when the backtest system observes the event. This is the only timestamp used for visibility checks.
+    \item \texttt{decision\_time}: Current \texttt{SimClock} time when a strategy callback is invoked.
+\end{enumerate}
+
+The mapping from source to arrival time is controlled by \texttt{SimArrivalPolicy} (\texttt{visibility.rs}, lines 47--68):
+\begin{itemize}
+    \item \texttt{RecordedArrival}: Use pre-recorded arrival timestamps from historical data.
+    \item \texttt{SimulatedLatency}: Add sampled latency to source timestamps.
+    \item \texttt{Unusable}: Neither timestamp is available; blocks production-grade claims.
+\end{itemize}
+
+\subsection{Time Advancement}
+
+Simulation time advances monotonically via \texttt{SimClock::advance\_to()} (\texttt{clock.rs}, line 48). The \texttt{debug\_assert!} on line 49 enforces forward-only movement.
+
+In the event loop (\texttt{orchestrator.rs}, lines 425--430), each event pops from the queue causes:
+\begin{lstlisting}
+self.clock.advance_to(event.time);
+self.adapter.set_time(event.time);
+self.visibility.advance_to(event.time);
+\end{lstlisting}
+
+% =============================================================================
+\section{Market Data Representation}
+% =============================================================================
+
+\subsection{Data Sources}
+
+The system consumes historical data via the \texttt{MarketDataFeed} trait (\texttt{feed.rs}, lines 7--25). This trait requires:
+\begin{itemize}
+    \item \texttt{next\_event()}: Produce the next \texttt{TimestampedEvent}.
+    \item \texttt{peek\_time()}: Preview the next timestamp.
+    \item \texttt{reset()}: Allow multiple replay runs.
+\end{itemize}
+
+A concrete implementation \texttt{VecFeed} (\texttt{feed.rs}, lines 30--67) wraps a pre-sorted vector of events.
+
+\subsection{Data Shapes}
+
+The \texttt{HistoricalDataContract} struct (\texttt{data\_contract.rs}, lines 29--35) declares the expected data shape:
+\begin{lstlisting}
+pub struct HistoricalDataContract {
+    pub venue: String,
+    pub market: String,
+    pub orderbook: OrderBookHistory,
+    pub trades: TradeHistory,
+}
+\end{lstlisting}
+
+The \texttt{OrderBookHistory} enum (\texttt{data\_contract.rs}, lines 7--17) defines:
+\begin{itemize}
+    \item \texttt{FullIncrementalL2DeltasWithExchangeSeq}: Full delta stream with sequence numbers.
+    \item \texttt{PeriodicL2Snapshots}: Point-in-time snapshots only.
+    \item \texttt{TopOfBookPolling}: Only best bid/ask.
+    \item \texttt{None}: No order book data.
+\end{itemize}
+
+The default contract (\texttt{polymarket\_15m\_updown\_hybrid\_snapshots\_and\_trades()}) uses \texttt{PeriodicL2Snapshots} with \texttt{TradePrints}.
+
+\subsection{Validation}
+
+The \texttt{DataContractValidator} (\texttt{data\_contract.rs}, lines 85--190) performs the following checks during event observation:
+
+\begin{enumerate}
+    \item \texttt{source\_time >= 0} (line 102)
+    \item \texttt{time >= 0} (line 106)
+    \item \texttt{time >= source\_time} (line 110)
+    \item For \texttt{L2Delta}: contract must declare incremental deltas; sequence monotonicity is checked (lines 120--145)
+    \item For \texttt{L2BookSnapshot}: sequence regression is detected (lines 152--175)
+\end{enumerate}
+
+Non-conformance causes the \texttt{DataQualitySummary} to be downgraded to \texttt{BacktestMode::Approximate}.
+
+\subsection{Integrity Enforcement}
+
+The \texttt{StreamIntegrityGuard} (\texttt{integrity.rs}) handles pathologies via \texttt{PathologyPolicy}:
+\begin{itemize}
+    \item \texttt{DuplicatePolicy}: Drop or Halt on duplicate events.
+    \item \texttt{GapPolicy}: Halt or Resync on sequence gaps.
+    \item \texttt{OutOfOrderPolicy}: Drop, Reorder, or Halt on out-of-order events.
+\end{itemize}
+
+The default policy is \texttt{PathologyPolicy::strict()} which halts on gaps or out-of-order events.
+
+% =============================================================================
+\section{Strategy Interface and Decision Boundary}
+% =============================================================================
+
+\subsection{Strategy Trait}
+
+Strategies implement the \texttt{Strategy} trait (\texttt{strategy.rs}, lines 188--222). Required methods:
+\begin{itemize}
+    \item \texttt{on\_book\_update(\&mut StrategyContext, \&BookSnapshot)}
+    \item \texttt{on\_trade(\&mut StrategyContext, \&TradePrint)}
+    \item \texttt{on\_timer(\&mut StrategyContext, \&TimerEvent)}
+    \item \texttt{on\_order\_ack}, \texttt{on\_order\_reject}, \texttt{on\_fill}, \texttt{on\_cancel\_ack}
+    \item \texttt{name() -> \&str}
+\end{itemize}
+
+Optional methods include \texttt{on\_start()}, \texttt{on\_stop()}, \texttt{get\_state()}, \texttt{restore\_state()}.
+
+\subsection{Information Provided}
+
+The \texttt{StrategyContext} struct (\texttt{strategy.rs}, lines 168--176) provides:
+\begin{lstlisting}
+pub struct StrategyContext<'a> {
+    pub orders: &'a mut dyn OrderSender,
+    pub timestamp: Nanos,
+    pub params: &'a StrategyParams,
+}
+\end{lstlisting}
+
+Through \texttt{OrderSender}, strategies can:
+\begin{itemize}
+    \item Query current position (\texttt{get\_position()}, \texttt{get\_all\_positions()})
+    \item Query open orders (\texttt{get\_open\_orders()})
+    \item Get current time (\texttt{now()})
+    \item Submit orders, cancels (\texttt{send\_order()}, \texttt{send\_cancel()})
+    \item Schedule timers (\texttt{schedule\_timer()})
+\end{itemize}
+
+\subsection{Visibility Constraints}
+
+The strategy can only observe state derived from events with \texttt{arrival\_time <= decision\_time}. This invariant is documented in \texttt{orchestrator.rs} (lines 10--14) and enforced by \texttt{VisibilityWatermark::record\_applied()} (\texttt{visibility.rs}, lines 252--265) which panics in strict mode if violated.
+
+\subsection{Decision Trigger}
+
+Decisions are event-driven. Each event that passes through the orchestrator's dispatch loop (\texttt{orchestrator.rs:dispatch\_event()}, lines 451--580) triggers the appropriate strategy callback. Timer events provide time-driven decision points.
+
+% =============================================================================
+\section{Order Lifecycle and Execution Simulation}
+% =============================================================================
+
+\subsection{Order Creation}
+
+Orders are created via \texttt{StrategyOrder::limit()} (\texttt{strategy.rs}, lines 70--86) and submitted through \texttt{OrderSender::send\_order()}.
+
+The \texttt{SimulatedOrderSender::send\_order()} implementation (\texttt{sim\_adapter.rs}, lines 260--340):
+\begin{enumerate}
+    \item Creates order through OMS for validation (line 263)
+    \item Checks rate limits via OMS (line 285)
+    \item Samples latencies (lines 310--312)
+    \item Creates \texttt{OrderRequest} for matching engine (lines 315--327)
+    \item Submits to \texttt{MatchingEngine::submit\_order()} (line 330)
+    \item Tracks as open order (lines 333--343)
+\end{enumerate}
+
+\subsection{Order States}
+
+The \texttt{OrderState} enum (\texttt{oms.rs}, lines 15--33) defines:
+\begin{itemize}
+    \item \texttt{New}: Created but not sent
+    \item \texttt{PendingAck}: Sent, awaiting venue acknowledgment
+    \item \texttt{Live}: Acknowledged and resting on book
+    \item \texttt{PartiallyFilled}: Partially executed, still active
+    \item \texttt{PendingCancel}: Cancel request sent
+    \item \texttt{Done}: Terminal state
+\end{itemize}
+
+State transitions are tracked by \texttt{OmsOrder} methods (\texttt{oms.rs}, lines 96--196).
+
+\subsection{Fill Generation}
+
+The \texttt{LimitOrderBook::submit\_order()} (\texttt{matching.rs}, lines 280--340) performs:
+\begin{enumerate}
+    \item Price validation
+    \item Post-only check
+    \item Matching against contra book
+    \item Fill event generation
+    \item Residual quantity handling based on time-in-force
+\end{enumerate}
+
+Matching is FIFO within each price level. The \texttt{match\_order()} method (\texttt{matching.rs}, lines 550--630) generates \texttt{Event::Fill} for each execution.
+
+\subsection{Cancel Handling}
+
+Cancels are submitted via \texttt{OrderSender::send\_cancel()} which routes to \texttt{LimitOrderBook::cancel\_order()} (\texttt{matching.rs}, lines 350--380). Successful cancels produce \texttt{Event::CancelAck}.
+
+\subsection{Execution Rules}
+
+The matching engine uses:
+\begin{itemize}
+    \item Price-time priority (FIFO at each price level)
+    \item Tick size discretization: \texttt{price\_to\_ticks()} (\texttt{matching.rs}, line 28)
+    \item Self-trade prevention modes (\texttt{SelfTradeMode} enum, lines 73--82)
+    \item Separate maker/taker fees (\texttt{FeeConfig}, lines 45--56)
+\end{itemize}
+
+% =============================================================================
+\section{Settlement and Outcome Handling}
+% =============================================================================
+
+\subsection{Window Definition}
+
+The 15-minute window is defined in \texttt{settlement.rs}:
+\begin{lstlisting}
+pub const WINDOW_15M_SECS: i64 = 15 * 60;
+\end{lstlisting}
+
+Window boundaries are derived from market identifiers. The \texttt{parse\_window\_start()} method (\texttt{settlement.rs}, lines 192--210) extracts timestamps from slugs like ``btc-updown-15m-1768533300''.
+
+\subsection{Outcome Determination}
+
+The \texttt{SettlementSpec::determine\_outcome()} method (\texttt{settlement.rs}, lines 220--265) compares start and end prices:
+\begin{itemize}
+    \item \texttt{end\_price > start\_price}: Up wins (\texttt{Outcome::Yes})
+    \item \texttt{end\_price < start\_price}: Down wins (\texttt{Outcome::No})
+    \item \texttt{end\_price == start\_price}: Tie, resolved by \texttt{TieRule} (default: No wins)
+\end{itemize}
+
+Price comparison uses configurable rounding (\texttt{RoundingRule} enum, lines 50--62).
+
+\subsection{Settlement Timing}
+
+The \texttt{OutcomeKnowableRule} (\texttt{settlement.rs}, lines 77--92) controls when the outcome becomes knowable:
+\begin{itemize}
+    \item \texttt{OnReferenceArrival}: Outcome knowable when reference price event arrives (arrival-time based)
+    \item \texttt{DelayFromCutoff}: Explicit delay from window end
+    \item \texttt{AtCutoff}: At exact cutoff (noted as dangerous for look-ahead)
+\end{itemize}
+
+\subsection{Settlement State Machine}
+
+The \texttt{SettlementState} enum (\texttt{settlement.rs}, lines 277--330) tracks:
+\begin{lstlisting}
+Pending -> AwaitingStartPrice -> Active -> AwaitingEndPrice 
+        -> Resolvable -> Resolved
+\end{lstlisting}
+
+The \texttt{SettlementEngine} (\texttt{settlement.rs}, lines 410--500) manages state transitions via \texttt{observe\_price()} and \texttt{try\_settle()}.
+
+\subsection{Integration Status}
+
+The settlement engine exists but is not fully integrated with the orchestrator. \texttt{BacktestResults} (\texttt{orchestrator.rs}, line 248) defaults \texttt{settlement\_model} to \texttt{SettlementModel::None}. The event loop does not contain calls to \texttt{settlement.try\_settle()}.
+
+% =============================================================================
+\section{Accounting and PnL Tracking}
+% =============================================================================
+
+\subsection{Balance Representation}
+
+The ledger uses fixed-point arithmetic (\texttt{ledger.rs}, lines 42--55):
+\begin{lstlisting}
+pub type Amount = i128;
+pub const AMOUNT_SCALE: i128 = 100_000_000;  // 8 decimal places
+\end{lstlisting}
+
+Account types are defined in \texttt{LedgerAccount} (\texttt{ledger.rs}, lines 63--110): Cash, CostBasis, FeesPaid, Capital, RealizedPnL, SettlementReceivable, SettlementPayable.
+
+\subsection{Double-Entry Structure}
+
+Each \texttt{LedgerEntry} (\texttt{ledger.rs}, lines 150--175) contains:
+\begin{itemize}
+    \item \texttt{entry\_id}: Monotonic identifier
+    \item \texttt{sim\_time\_ns}: Simulation timestamp
+    \item \texttt{event\_ref}: Reference to triggering event
+    \item \texttt{postings}: Vector of \texttt{LedgerPosting} (account + amount)
+\end{itemize}
+
+The \texttt{is\_balanced()} method (line 180) verifies debits equal credits.
+
+\subsection{PnL Computation}
+
+In the current implementation, PnL is tracked in \texttt{SimulatedOrderSender::process\_fill()} (\texttt{sim\_adapter.rs}, lines 230--275) using float arithmetic directly on \texttt{Position} structs, not through the ledger.
+
+The orchestrator computes final PnL in \texttt{finalize\_results()} (\texttt{orchestrator.rs}, lines 590--650) by summing \texttt{realized\_pnl} from positions.
+
+\subsection{Invariant Enforcement}
+
+The ledger infrastructure includes violation types (\texttt{ViolationType} enum, \texttt{ledger.rs}, lines 255--305) but strict enforcement is not enabled by default (\texttt{strict\_accounting\_enabled: false} in \texttt{BacktestResults}).
+
+% =============================================================================
+\section{Determinism, Reproducibility, and Modes}
+% =============================================================================
+
+\subsection{Determinism Mechanisms}
+
+The module documentation (\texttt{mod.rs}, lines 45--55) states determinism guarantees:
+\begin{itemize}
+    \item Clock: Never calls system time; all time from \texttt{SimClock}
+    \item EventQueue: \texttt{(time, priority, source, seq)} ordering
+    \item RNG: Seeded only (the documentation mentions \texttt{ChaCha8Rng})
+    \item Data replay: Pre-sorted by \texttt{(timestamp, exchange\_seq)}
+\end{itemize}
+
+\subsection{Seeding}
+
+The \texttt{DeterministicSeed} struct (\texttt{validation.rs}, lines 20--50) derives sub-seeds for different components:
+\begin{lstlisting}
+pub struct DeterministicSeed {
+    pub primary: u64,
+    pub latency: u64,
+    pub fill_probability: u64,
+    pub queue_position: u64,
+}
+\end{lstlisting}
+
+The \texttt{BacktestConfig.seed} (default: 42) is passed to \texttt{SimulatedOrderSender} which uses it for latency sampling.
+
+\subsection{Configuration Modes}
+
+\texttt{InvariantMode} (\texttt{invariants.rs}, lines 37--54):
+\begin{itemize}
+    \item \texttt{Off}: No checking
+    \item \texttt{Soft}: Log violations, continue
+    \item \texttt{Hard}: Abort on first violation
+\end{itemize}
+
+\texttt{OmsParityMode} (\texttt{sim\_adapter.rs}, lines 14--35):
+\begin{itemize}
+    \item \texttt{Full}: All validation enforced
+    \item \texttt{Relaxed}: Validation logged but not blocking
+    \item \texttt{Bypass}: No validation
+\end{itemize}
+
+\texttt{MakerFillModel} (\texttt{orchestrator.rs}, lines 40--67):
+\begin{itemize}
+    \item \texttt{ExplicitQueue}: Queue position tracking required
+    \item \texttt{MakerDisabled}: Taker-only execution
+    \item \texttt{Optimistic}: Immediate fills without queue validation
+\end{itemize}
+
+Strict mode for visibility is controlled by a global atomic (\texttt{visibility.rs}, line 25) via \texttt{enable\_strict\_mode()}.
+
+\subsection{Reproducibility Validation}
+
+The \texttt{ReproducibilityValidator} (\texttt{validation.rs}, lines 120--180) checkpoints \texttt{StateFingerprint} instances and validates against reference runs. The \texttt{validate\_against()} method returns \texttt{ValidationResult::Passed} or \texttt{Failed}.
+
+\subsection{Observation on HashMap Usage}
+
+The orchestrator uses \texttt{std::collections::HashMap} for \texttt{positions}, \texttt{open\_orders}, \texttt{last\_mid}, and \texttt{pending\_cancels} (\texttt{orchestrator.rs}, lines 340--348). Rust's \texttt{HashMap} does not guarantee iteration order, which could affect determinism if iteration order influences logic.
+
+% =============================================================================
+\section{Observability and Failure Handling}
+% =============================================================================
+
+\subsection{Decision Proofs}
+
+The \texttt{DecisionProofBuffer} (\texttt{visibility.rs}, lines 349--400) records \texttt{DecisionProof} instances for each strategy invocation. Each proof contains:
+\begin{itemize}
+    \item \texttt{decision\_id}: Monotonic identifier
+    \item \texttt{decision\_time}: SimClock time
+    \item \texttt{input\_events}: Events that affected state
+    \item \texttt{proof\_hash}: Hash for comparison
+\end{itemize}
+
+The orchestrator commits proofs in the dispatch loop (\texttt{orchestrator.rs}, lines 446, 580).
+
+\subsection{Causal Dumps}
+
+The \texttt{CausalDump} struct (\texttt{invariants.rs}, lines 355--400) provides deterministic debugging output when a Hard mode violation occurs. It includes:
+\begin{itemize}
+    \item The triggering violation
+    \item Recent events
+    \item OMS transitions
+    \item Ledger entries
+    \item State snapshot
+    \item Run fingerprint
+\end{itemize}
+
+The \texttt{format\_text()} method produces human-readable output.
+
+\subsection{Error Handling}
+
+Error handling varies by mode:
+\begin{itemize}
+    \item Strict mode (\texttt{visibility.rs}): \texttt{panic!()} on visibility violation (line 255)
+    \item Hard mode (\texttt{invariants.rs}): Returns \texttt{InvariantResult::Abort} with \texttt{CausalDump}
+    \item Default: Log and continue; violations accumulated in counters
+\end{itemize}
+
+The \texttt{BacktestOrchestrator::run()} method (\texttt{orchestrator.rs}) does not currently instantiate an \texttt{InvariantEnforcer}, so invariant checks beyond visibility are not performed during execution.
+
+\subsection{Result Artifacts}
+
+\texttt{BacktestResults} (\texttt{orchestrator.rs}, lines 145--270) captures:
+\begin{itemize}
+    \item PnL metrics: \texttt{final\_pnl}, \texttt{total\_fees}, \texttt{sharpe\_ratio}, \texttt{max\_drawdown}
+    \item Execution stats: \texttt{events\_processed}, \texttt{total\_fills}, \texttt{maker\_fills}, \texttt{taker\_fills}
+    \item Validity flags: \texttt{maker\_fills\_valid}, \texttt{visibility\_violations}
+    \item Data quality: \texttt{data\_quality: DataQualitySummary}
+    \item OMS statistics: \texttt{oms\_parity: OmsParityStats}
+    \item Settlement info: \texttt{settlement\_model}, \texttt{settlement\_stats}
+    \item Integrity counters: \texttt{pathology\_counters}
+    \item Trust level: \texttt{trust\_level: TrustLevel}
+\end{itemize}
+
+% =============================================================================
+\section{Architectural Summary (Descriptive Only)}
+% =============================================================================
+
+The backtest\_v2 module implements a discrete-event simulation framework for Polymarket 15-minute up/down prediction markets. The architecture consists of:
+
+\textbf{Event-driven core}: A priority queue (\texttt{EventQueue}) orders events by \texttt{(time, priority, source, seq)}. A monotonic clock (\texttt{SimClock}) tracks simulation time. An orchestrator (\texttt{BacktestOrchestrator}) drives the event loop.
+
+\textbf{Strategy abstraction}: The \texttt{Strategy} trait provides event callbacks. Strategies interact with the system through \texttt{OrderSender}, which abstracts order submission and position queries.
+
+\textbf{Execution simulation}: A matching engine (\texttt{LimitOrderBook}) implements FIFO matching with fees and self-trade prevention. An OMS (\texttt{OrderManagementSystem}) tracks order state machines and enforces rate limits.
+
+\textbf{Time semantics}: Three timestamp types (\texttt{source\_time}, \texttt{arrival\_time}, \texttt{decision\_time}) are distinguished. A visibility watermark (\texttt{VisibilityWatermark}) enforces that strategies only observe data that has ``arrived'' by the current decision time.
+
+\textbf{Data contracts}: The \texttt{HistoricalDataContract} declares expected data shape. The \texttt{DataContractValidator} detects conformance violations. The \texttt{StreamIntegrityGuard} handles duplicates, gaps, and out-of-order events.
+
+\textbf{Settlement logic}: A \texttt{SettlementEngine} encodes 15-minute window semantics, reference price rules, and outcome determination. This component exists but is not integrated into the main event loop.
+
+\textbf{Accounting infrastructure}: A double-entry \texttt{Ledger} with fixed-point amounts is implemented. Fill processing currently uses direct float updates rather than ledger postings.
+
+\textbf{Validation framework}: An \texttt{InvariantEnforcer} with multiple categories exists. A \texttt{GateSuite} provides adversarial zero-edge tests. These are implemented but not automatically invoked by the orchestrator.
+
+\textbf{Configuration modes}: Multiple modes control strictness: \texttt{InvariantMode} (Off/Soft/Hard), \texttt{OmsParityMode} (Full/Relaxed/Bypass), \texttt{MakerFillModel} (ExplicitQueue/MakerDisabled/Optimistic), and a global strict visibility flag.
+
+\textbf{Test coverage}: The module includes test submodules for visibility, OMS parity, ledger, settlement, invariants, gate suite, integrity, queue model, and sensitivity analysis.
+
+The architecture separates concerns across well-defined module boundaries. Components communicate through explicit interfaces. The system provides hooks for validation, observability, and configuration at multiple levels. Integration between some components (settlement, ledger, invariant enforcer) is declared structurally but not fully wired in the main execution path.
+
+\end{document}

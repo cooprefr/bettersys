@@ -290,6 +290,30 @@ CREATE TABLE IF NOT EXISTS dome_cache (
 CREATE INDEX IF NOT EXISTS idx_dome_cache_fetched_at
     ON dome_cache(fetched_at DESC);
 
+-- Up/Down 15m settlement history (oracle/binance start/end + outcomes)
+CREATE TABLE IF NOT EXISTS updown_15m_windows (
+    market_slug TEXT PRIMARY KEY,
+    asset TEXT NOT NULL,
+    window_start_ts INTEGER NOT NULL,
+    window_end_ts INTEGER NOT NULL,
+    chainlink_start REAL,
+    chainlink_end REAL,
+    binance_start REAL,
+    binance_end REAL,
+    chainlink_outcome INTEGER,
+    binance_outcome INTEGER,
+    agreed INTEGER,
+    divergence_usd REAL,
+    divergence_bps REAL,
+    recorded_at INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_updown_15m_windows_asset_end
+    ON updown_15m_windows(asset, window_end_ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_updown_15m_windows_end
+    ON updown_15m_windows(window_end_ts DESC);
+
 -- Vault LONG engine: bounded LLM decision logs (small, auditable)
 CREATE TABLE IF NOT EXISTS vault_llm_decisions (
     decision_id TEXT PRIMARY KEY,
@@ -419,12 +443,19 @@ impl DbSignalStorage {
                     }
 
                     if let Some(last) = warm_signals.last() {
-                        let _ = Self::set_metadata(&conn, "search_backfill_cursor_detected_at", &last.detected_at);
+                        let _ = Self::set_metadata(
+                            &conn,
+                            "search_backfill_cursor_detected_at",
+                            &last.detected_at,
+                        );
                         let _ = Self::set_metadata(&conn, "search_backfill_cursor_id", &last.id);
                     }
 
                     conn.execute("COMMIT", [])?;
-                    info!("🔎 Search index warm-up: indexed {} recent signals", warm_signals.len());
+                    info!(
+                        "🔎 Search index warm-up: indexed {} recent signals",
+                        warm_signals.len()
+                    );
                 }
             }
         }
@@ -438,10 +469,10 @@ impl DbSignalStorage {
     fn get_metadata(conn: &Connection, key: &str) -> Option<String> {
         let value: String = conn
             .query_row(
-            "SELECT value FROM metadata WHERE key = ?1 LIMIT 1",
-            [key],
-            |row| row.get(0),
-        )
+                "SELECT value FROM metadata WHERE key = ?1 LIMIT 1",
+                [key],
+                |row| row.get(0),
+            )
             .ok()?;
 
         let trimmed = value.trim();
@@ -460,6 +491,16 @@ impl DbSignalStorage {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    pub fn get_metadata_value(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock();
+        Ok(Self::get_metadata(&conn, key))
+    }
+
+    pub fn set_metadata_value(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        Self::set_metadata(&conn, key, value)
     }
 
     fn extract_quoted_market_title(s: &str) -> Option<String> {
@@ -537,9 +578,15 @@ impl DbSignalStorage {
                 Some(wallet_label.clone()),
                 token_label.clone(),
             ),
-            SignalType::WhaleFollowing { whale_address, .. } => (Some(whale_address.clone()), None, None),
-            SignalType::EliteWallet { wallet_address, .. } => (Some(wallet_address.clone()), None, None),
-            SignalType::InsiderWallet { wallet_address, .. } => (Some(wallet_address.clone()), None, None),
+            SignalType::WhaleFollowing { whale_address, .. } => {
+                (Some(whale_address.clone()), None, None)
+            }
+            SignalType::EliteWallet { wallet_address, .. } => {
+                (Some(wallet_address.clone()), None, None)
+            }
+            SignalType::InsiderWallet { wallet_address, .. } => {
+                (Some(wallet_address.clone()), None, None)
+            }
             _ => (None, None, None),
         }
     }
@@ -616,7 +663,11 @@ impl DbSignalStorage {
         }
     }
 
-    fn update_signal_search_from_context(conn: &Connection, signal_id: &str, context: &SignalContext) -> Result<()> {
+    fn update_signal_search_from_context(
+        conn: &Connection,
+        signal_id: &str,
+        context: &SignalContext,
+    ) -> Result<()> {
         let order_title = {
             let s = context.order.title.trim();
             if s.is_empty() {
@@ -630,19 +681,37 @@ impl DbSignalStorage {
             .market
             .as_ref()
             .and_then(|m| m.get("question").and_then(|v| v.as_str()))
-            .or_else(|| context.market.as_ref().and_then(|m| m.get("title").and_then(|v| v.as_str())))
+            .or_else(|| {
+                context
+                    .market
+                    .as_ref()
+                    .and_then(|m| m.get("title").and_then(|v| v.as_str()))
+            })
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let token_label = context.order.token_label.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let token_label = context
+            .order
+            .token_label
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let wallet_address = {
             let s = context.order.user.trim();
-            if s.is_empty() { None } else { Some(s.to_string()) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
         };
 
         let market_slug = {
             let s = context.order.market_slug.trim();
-            if s.is_empty() { None } else { Some(s.to_string()) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
         };
 
         let changed = conn.execute(
@@ -654,7 +723,14 @@ impl DbSignalStorage {
                 market_slug=COALESCE(?5, market_slug),
                 updated_at=strftime('%s','now')
              WHERE signal_id = ?6",
-            params![order_title, market_question, token_label, wallet_address, market_slug, signal_id],
+            params![
+                order_title,
+                market_question,
+                token_label,
+                wallet_address,
+                market_slug,
+                signal_id
+            ],
         )?;
 
         if changed == 0 {
@@ -669,7 +745,14 @@ impl DbSignalStorage {
                         market_slug=COALESCE(?5, market_slug),
                         updated_at=strftime('%s','now')
                      WHERE signal_id = ?6",
-                    params![order_title, market_question, token_label, wallet_address, market_slug, signal_id],
+                    params![
+                        order_title,
+                        market_question,
+                        token_label,
+                        wallet_address,
+                        market_slug,
+                        signal_id
+                    ],
                 );
             }
         }
@@ -680,9 +763,22 @@ impl DbSignalStorage {
     /// Store a signal with optimized single-row insert
     #[inline]
     pub async fn store(&self, signal: &MarketSignal) -> Result<()> {
+        let start = std::time::Instant::now();
+
         // Pre-serialize outside the lock
         let details_json = serde_json::to_string(&signal.details)?;
         let signal_type_json = serde_json::to_string(&signal.signal_type)?;
+
+        // Track serialization cost
+        let serialize_us = start.elapsed().as_micros() as u64;
+        crate::latency::global_comprehensive()
+            .serialization
+            .record_encode(
+                "signal",
+                serialize_us,
+                (details_json.len() + signal_type_json.len()) as u64,
+                false,
+            );
 
         let conn = self.conn.lock();
 
@@ -714,9 +810,27 @@ impl DbSignalStorage {
             .ok();
 
             if let Err(e) = Self::upsert_signal_search_row(&conn, signal) {
-                warn!("failed to upsert signal_search row for {}: {}", signal.id, e);
+                warn!(
+                    "failed to upsert signal_search row for {}: {}",
+                    signal.id, e
+                );
             }
         }
+
+        // Record DB write latency
+        let write_us = start.elapsed().as_micros() as u64;
+        crate::latency::global_registry().record_span(crate::latency::LatencySpan::new(
+            crate::latency::SpanType::DbWrite,
+            write_us,
+        ));
+        crate::latency::global_comprehensive()
+            .throughput
+            .db_writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Record to CPU profiler for hot path tracking
+        crate::performance::global_profiler()
+            .cpu
+            .record_span("db_signal_write", write_us);
 
         Ok(())
     }
@@ -763,7 +877,10 @@ impl DbSignalStorage {
 
             if changes > 0 {
                 if let Err(e) = Self::upsert_signal_search_row(&conn, signal) {
-                    warn!("failed to upsert signal_search row for {}: {}", signal.id, e);
+                    warn!(
+                        "failed to upsert signal_search row for {}: {}",
+                        signal.id, e
+                    );
                 }
             }
         }
@@ -804,6 +921,7 @@ impl DbSignalStorage {
     /// Get recent signals - optimized query using covering index
     #[inline]
     pub fn get_recent(&self, limit: usize) -> Result<Vec<MarketSignal>> {
+        let start = std::time::Instant::now();
         let conn = self.conn.lock();
 
         let mut stmt = conn.prepare_cached(
@@ -818,6 +936,16 @@ impl DbSignalStorage {
             .query_map([limit], Self::row_to_signal)?
             .filter_map(|r| r.ok())
             .collect();
+
+        // Record DB read latency
+        crate::latency::global_registry().record_span(crate::latency::LatencySpan::new(
+            crate::latency::SpanType::DbRead,
+            start.elapsed().as_micros() as u64,
+        ));
+        crate::latency::global_comprehensive()
+            .throughput
+            .db_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         Ok(signals)
     }
@@ -1003,7 +1131,14 @@ impl DbSignalStorage {
 
         let signals: Vec<MarketSignal> = stmt
             .query_map(
-                params![q, min_confidence, exclude_flag, before_detected_at, before_id, limit],
+                params![
+                    q,
+                    min_confidence,
+                    exclude_flag,
+                    before_detected_at,
+                    before_id,
+                    limit
+                ],
                 Self::row_to_signal,
             )?
             .filter_map(|r| r.ok())
@@ -1020,7 +1155,8 @@ impl DbSignalStorage {
         let warm_limit = warm_limit.clamp(1, 5_000);
         let conn = self.conn.lock();
 
-        let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM signal_search", [], |row| row.get(0))?;
+        let indexed: i64 =
+            conn.query_row("SELECT COUNT(*) FROM signal_search", [], |row| row.get(0))?;
         if indexed > 0 {
             return Ok(0);
         }
@@ -1055,7 +1191,11 @@ impl DbSignalStorage {
             Self::upsert_signal_search_row(&conn, s)?;
         }
         if let Some(last) = warm_signals.last() {
-            let _ = Self::set_metadata(&conn, "search_backfill_cursor_detected_at", &last.detected_at);
+            let _ = Self::set_metadata(
+                &conn,
+                "search_backfill_cursor_detected_at",
+                &last.detected_at,
+            );
             let _ = Self::set_metadata(&conn, "search_backfill_cursor_id", &last.id);
         }
         conn.execute("COMMIT", [])?;
@@ -1115,8 +1255,9 @@ impl DbSignalStorage {
             .query_row("SELECT COUNT(*) FROM signals", [], |row| row.get(0))
             .unwrap_or(0);
 
-        let indexed_rows_res =
-            conn.query_row("SELECT COUNT(*) FROM signal_search", [], |row| row.get::<_, i64>(0));
+        let indexed_rows_res = conn.query_row("SELECT COUNT(*) FROM signal_search", [], |row| {
+            row.get::<_, i64>(0)
+        });
         let (signal_search_exists, indexed_rows): (bool, i64) = match indexed_rows_res {
             Ok(v) => (true, v),
             Err(_) => (false, 0),
@@ -1133,7 +1274,8 @@ impl DbSignalStorage {
 
         let schema_ready = signal_search_exists && fts_exists;
 
-        let backfill_done = Self::get_metadata(&conn, "search_backfill_done").as_deref() == Some("1");
+        let backfill_done =
+            Self::get_metadata(&conn, "search_backfill_done").as_deref() == Some("1");
         let cursor_detected_at = Self::get_metadata(&conn, "search_backfill_cursor_detected_at");
         let cursor_id = Self::get_metadata(&conn, "search_backfill_cursor_id");
 
@@ -1305,15 +1447,23 @@ impl DbSignalStorage {
                 let signal_id: String = row.get(0)?;
                 let context_json: String = row.get(1)?;
                 if let Ok(ctx) = serde_json::from_str::<SignalContext>(&context_json) {
-                    if let Err(e) = Self::update_signal_search_from_context(&conn, &signal_id, &ctx) {
-                        warn!("search backfill: failed to apply context for {}: {}", signal_id, e);
+                    if let Err(e) = Self::update_signal_search_from_context(&conn, &signal_id, &ctx)
+                    {
+                        warn!(
+                            "search backfill: failed to apply context for {}: {}",
+                            signal_id, e
+                        );
                     }
                 }
             }
         }
 
         if let Some(last) = batch.last() {
-            let _ = Self::set_metadata(&conn, "search_backfill_cursor_detected_at", &last.detected_at);
+            let _ = Self::set_metadata(
+                &conn,
+                "search_backfill_cursor_detected_at",
+                &last.detected_at,
+            );
             let _ = Self::set_metadata(&conn, "search_backfill_cursor_id", &last.id);
         }
 
@@ -1437,7 +1587,10 @@ impl DbSignalStorage {
         )?;
 
         if let Err(e) = Self::update_signal_search_from_context(&conn, signal_id, context) {
-            warn!("failed to update signal_search from context for {}: {}", signal_id, e);
+            warn!(
+                "failed to update signal_search from context for {}: {}",
+                signal_id, e
+            );
         }
         Ok(())
     }
@@ -1862,6 +2015,259 @@ impl DbSignalStorage {
             per_market_calls_today: per_market,
         })
     }
+
+    /// Store a batch of Dome orders from API (for backtest data population)
+    pub async fn store_dome_orders_batch(&self, orders: &[DomeOrder]) -> Result<usize> {
+        if orders.is_empty() {
+            return Ok(0);
+        }
+
+        let orders: Vec<DomeOrder> = orders.to_vec();
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock();
+            conn.execute("BEGIN TRANSACTION", [])?;
+
+            let mut inserted = 0usize;
+            for order in orders {
+                // Legacy synthetic key used by earlier backfills.
+                let legacy_order_hash = format!(
+                    "api_{}_{}_{}_{}",
+                    order.market_slug, order.timestamp, order.side, order.price
+                );
+
+                // Prefer Dome's stable order_hash (unique). Fallback to tx_hash, then a synthetic key.
+                let order_hash = if !order.order_hash.trim().is_empty() {
+                    order.order_hash.clone()
+                } else if !order.tx_hash.trim().is_empty() {
+                    format!("tx_{}", order.tx_hash)
+                } else {
+                    legacy_order_hash.clone()
+                };
+
+                // Serialize to JSON for storage
+                let payload_json = serde_json::to_string(&order).unwrap_or_default();
+                let received_at = chrono::Utc::now().timestamp();
+
+                let result = conn.execute(
+                    "INSERT OR IGNORE INTO dome_order_events \
+                     (order_hash, tx_hash, user, market_slug, condition_id, token_id, timestamp, payload_json, received_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        order_hash,
+                        &order.tx_hash,
+                        &order.user,
+                        order.market_slug,
+                        order.condition_id,
+                        order.token_id,
+                        order.timestamp,
+                        payload_json,
+                        received_at,
+                    ],
+                );
+
+                // If this order is being stored under its real Dome order_hash, delete any
+                // legacy synthetic-key duplicate for the same underlying order.
+                if !order.order_hash.trim().is_empty() {
+                    let _ = conn.execute(
+                        "DELETE FROM dome_order_events \
+                         WHERE order_hash = ?1 AND json_extract(payload_json, '$.order_hash') = ?2",
+                        params![legacy_order_hash, order.order_hash],
+                    );
+                }
+
+                if result.is_ok() && result.unwrap() > 0 {
+                    inserted += 1;
+                }
+            }
+
+            conn.execute("COMMIT", [])?;
+            Ok(inserted)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+    }
+
+    /// Query dome_order_events for backtest
+    pub async fn query_dome_orders_for_backtest(
+        &self,
+        where_clause: &str,
+    ) -> Result<Vec<DomeOrderForBacktest>> {
+        let where_clause = where_clause.to_string();
+        let conn = self.conn.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock();
+
+            let query = format!(
+                r#"
+                SELECT 
+                    timestamp,
+                    market_slug,
+                    json_extract(payload_json, '$.side') as side,
+                    json_extract(payload_json, '$.token_label') as outcome,
+                    json_extract(payload_json, '$.price') as price
+                FROM dome_order_events
+                {}
+                ORDER BY timestamp ASC
+                "#,
+                where_clause
+            );
+
+            let mut stmt = conn.prepare(&query)?;
+            let rows = stmt.query_map([], |row| {
+                Ok(DomeOrderForBacktest {
+                    timestamp: row.get(0)?,
+                    market_slug: row.get::<_, String>(1).unwrap_or_default(),
+                    side: row.get::<_, String>(2).unwrap_or_default(),
+                    outcome: row.get::<_, String>(3).unwrap_or_default(),
+                    price: row.get::<_, f64>(4).unwrap_or(0.5),
+                })
+            })?;
+
+            let mut orders = Vec::new();
+            for row in rows {
+                if let Ok(order) = row {
+                    orders.push(order);
+                }
+            }
+
+            Ok(orders)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
+    }
+
+    pub fn upsert_updown_15m_window(
+        &self,
+        window: &crate::scrapers::oracle_comparison::WindowResolution,
+    ) -> Result<()> {
+        let market_slug = format!(
+            "{}-updown-15m-{}",
+            window.asset.to_ascii_lowercase(),
+            window.window_start_ts
+        );
+
+        let chainlink_outcome: Option<i64> =
+            window.chainlink_outcome.map(|b| if b { 1 } else { 0 });
+        let binance_outcome: Option<i64> = window.binance_outcome.map(|b| if b { 1 } else { 0 });
+        let agreed: Option<i64> = window.agreed.map(|b| if b { 1 } else { 0 });
+
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO updown_15m_windows \
+             (market_slug, asset, window_start_ts, window_end_ts, chainlink_start, chainlink_end, binance_start, binance_end, chainlink_outcome, binance_outcome, agreed, divergence_usd, divergence_bps, recorded_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+             ON CONFLICT(market_slug) DO UPDATE SET \
+                asset=excluded.asset, \
+                window_start_ts=excluded.window_start_ts, \
+                window_end_ts=excluded.window_end_ts, \
+                chainlink_start=excluded.chainlink_start, \
+                chainlink_end=excluded.chainlink_end, \
+                binance_start=excluded.binance_start, \
+                binance_end=excluded.binance_end, \
+                chainlink_outcome=excluded.chainlink_outcome, \
+                binance_outcome=excluded.binance_outcome, \
+                agreed=excluded.agreed, \
+                divergence_usd=excluded.divergence_usd, \
+                divergence_bps=excluded.divergence_bps, \
+                recorded_at=excluded.recorded_at",
+            params![
+                market_slug,
+                window.asset.as_str(),
+                window.window_start_ts,
+                window.window_end_ts,
+                window.chainlink_start,
+                window.chainlink_end,
+                window.binance_start,
+                window.binance_end,
+                chainlink_outcome,
+                binance_outcome,
+                agreed,
+                window.divergence_usd,
+                window.divergence_bps,
+                window.recorded_at,
+            ],
+        )
+        .context("upsert_updown_15m_window failed")?;
+
+        Ok(())
+    }
+
+    pub fn get_updown_15m_windows(
+        &self,
+        asset: Option<&str>,
+        limit: usize,
+        before_end_ts: Option<i64>,
+    ) -> Result<Vec<crate::scrapers::oracle_comparison::WindowResolution>> {
+        let limit = limit.clamp(1, 10_000) as i64;
+        let asset_norm: Option<String> = asset.map(|a| a.to_ascii_uppercase());
+        let asset_param: Option<&str> = asset_norm.as_deref();
+
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT asset, window_start_ts, window_end_ts, chainlink_start, chainlink_end, binance_start, binance_end, chainlink_outcome, binance_outcome, agreed, divergence_usd, divergence_bps, recorded_at\
+                 FROM updown_15m_windows\
+                 WHERE (?1 IS NULL OR asset = ?1)\
+                   AND (?2 IS NULL OR window_end_ts < ?2)\
+                 ORDER BY window_end_ts DESC\
+                 LIMIT ?3",
+            )
+            .context("prepare get_updown_15m_windows")?;
+
+        let rows = stmt
+            .query_map(params![asset_param, before_end_ts, limit], |row| {
+                let asset: String = row.get(0)?;
+                let window_start_ts: i64 = row.get(1)?;
+                let window_end_ts: i64 = row.get(2)?;
+                let chainlink_start: Option<f64> = row.get(3)?;
+                let chainlink_end: Option<f64> = row.get(4)?;
+                let binance_start: Option<f64> = row.get(5)?;
+                let binance_end: Option<f64> = row.get(6)?;
+                let chainlink_outcome: Option<i64> = row.get(7)?;
+                let binance_outcome: Option<i64> = row.get(8)?;
+                let agreed: Option<i64> = row.get(9)?;
+                let divergence_usd: Option<f64> = row.get(10)?;
+                let divergence_bps: Option<f64> = row.get(11)?;
+                let recorded_at: i64 = row.get(12)?;
+
+                Ok(crate::scrapers::oracle_comparison::WindowResolution {
+                    asset,
+                    window_start_ts,
+                    window_end_ts,
+                    chainlink_start,
+                    chainlink_end,
+                    binance_start,
+                    binance_end,
+                    chainlink_outcome: chainlink_outcome.map(|v| v != 0),
+                    binance_outcome: binance_outcome.map(|v| v != 0),
+                    agreed: agreed.map(|v| v != 0),
+                    divergence_usd,
+                    divergence_bps,
+                    recorded_at,
+                })
+            })
+            .context("query get_updown_15m_windows")?;
+
+        let mut out: Vec<crate::scrapers::oracle_comparison::WindowResolution> = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+
+        Ok(out)
+    }
+}
+
+/// Order data for backtest
+#[derive(Debug, Clone)]
+pub struct DomeOrderForBacktest {
+    pub timestamp: i64,
+    pub market_slug: String,
+    pub side: String,
+    pub outcome: String,
+    pub price: f64,
 }
 
 /// Database statistics

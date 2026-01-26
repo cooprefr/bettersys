@@ -2,6 +2,7 @@
 name = "betterbot-backend"
 version = "0.1.0"
 edition = "2021"
+default-run = "betterbot"
 
 [dependencies]
 # Async runtime
@@ -22,7 +23,7 @@ barter-data = "0.10.2"
 barter-instrument = "0.3.1"
 
 # HTTP client (using rustls instead of openssl to avoid build issues)
-reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.11", features = ["json", "rustls-tls", "blocking"], default-features = false }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -33,6 +34,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Fast synchronization primitives
 parking_lot = "0.12"
+lazy_static = "1.4"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -44,6 +46,7 @@ rayon = "1.8"
 nalgebra = "0.32"
 statrs = "0.16"
 rand = "0.8"
+rand_chacha = "0.3"
 
 # Environment
 dotenv = "0.15"
@@ -67,9 +70,45 @@ num-bigint = "0.4"
 # Performance monitoring
 metrics = "0.21"
 metrics-exporter-prometheus = "0.12"
+toml = "0.8"
+
+# Terminal UI for performance visualization
+ratatui = "0.26"
+crossterm = "0.27"
+
+# Native GUI application
+eframe = "0.28"
+egui = "0.28"
+egui_plot = "0.28"
+
+# Enhanced tracing with tokio-console support
+console-subscriber = "0.4"
+tracing-flame = "0.2"
+
+# System monitoring
+sysinfo = "0.31"
+libc = "0.2"
+
+# Lock-free data structures for HFT
+crossbeam = "0.8"
+arc-swap = "1.7"
+
+# Memory-mapped IO for shared metrics
+memmap2 = "0.9"
+
+# High-precision timing
+quanta = "0.12"
+
+# HMAC signing for Polymarket CLOB API
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
 
 [dev-dependencies]
-httpmock = "0.6"
 tempfile = "3.10"
 
 [profile.release]
@@ -78,6 +117,46 @@ lto = true
 codegen-units = 1
 panic = 'abort'
 
+[lib]
+name = "betterbot_backend"
+path = "src/lib.rs"
+
 [[bin]]
 name = "betterbot"
 path = "src/main.rs"
+
+[[bin]]
+name = "better-perf"
+path = "src/bin/perf_monitor.rs"
+
+[[bin]]
+name = "better-perf-gui"
+path = "src/bin/perf_gui.rs"
+
+[[bin]]
+name = "latency_arb_backtest"
+path = "src/bin/latency_arb_backtest.rs"
+
+[[bin]]
+name = "latency_arb_backtest_real"
+path = "src/bin/latency_arb_backtest_real.rs"
+
+[[bin]]
+name = "backtest_benchmark"
+path = "src/bin/backtest_benchmark.rs"
+
+[[bin]]
+name = "live_recorder"
+path = "src/bin/live_recorder.rs"
+
+[[bin]]
+name = "recording_inspector"
+path = "src/bin/recording_inspector.rs"
+
+[[bin]]
+name = "dataset_inspect"
+path = "src/bin/dataset_inspect.rs"
+
+[[bin]]
+name = "backtest_run"
+path = "src/bin/backtest_run.rs"

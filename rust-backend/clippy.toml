@@ -1,0 +1,61 @@
+# Clippy configuration for hermetic strategy enforcement
+#
+# CRITICAL: This configuration enforces compile-time hermetic boundaries for strategy code.
+# Strategy modules MUST NOT access wall-clock time APIs to ensure backtest determinism.
+#
+# See: src/backtest_v2/HERMETIC_COMPILE_ENFORCEMENT.md
+
+# =============================================================================
+# DISALLOWED TYPES
+# =============================================================================
+# These types are forbidden in strategy modules because they can leak real time
+# into backtests, breaking determinism guarantees.
+
+disallowed-types = [
+    # Wall-clock time APIs that break determinism
+    { path = "std::time::SystemTime", reason = "Use StrategyContext::timestamp() for simulated time. SystemTime breaks backtest determinism." },
+    { path = "std::time::Instant", reason = "Use StrategyContext::timestamp() for simulated time. Instant breaks backtest determinism." },
+    
+    # Tokio time APIs (if strategies accidentally use async time)
+    { path = "tokio::time::Instant", reason = "Use StrategyContext::timestamp() for simulated time. tokio::time::Instant breaks backtest determinism." },
+    
+    # Chrono types that access system time
+    { path = "chrono::Local", reason = "Use StrategyContext::timestamp() for simulated time. chrono::Local accesses system clock." },
+    { path = "chrono::Utc", reason = "Chrono Utc::now() accesses system clock. Use StrategyContext::timestamp() for simulated time." },
+]
+
+# =============================================================================
+# DISALLOWED METHODS
+# =============================================================================
+# These methods are forbidden because they access system time even on allowed types.
+
+disallowed-methods = [
+    # SystemTime methods
+    { path = "std::time::SystemTime::now", reason = "Forbidden: accesses system clock. Use StrategyContext::timestamp() instead." },
+    { path = "std::time::SystemTime::elapsed", reason = "Forbidden: accesses system clock. Use simulated timestamps." },
+    
+    # Instant methods
+    { path = "std::time::Instant::now", reason = "Forbidden: accesses system clock. Use StrategyContext::timestamp() instead." },
+    { path = "std::time::Instant::elapsed", reason = "Forbidden: accesses system clock. Use simulated timestamps." },
+    
+    # Chrono methods that access system time
+    { path = "chrono::Utc::now", reason = "Forbidden: accesses system clock. Use StrategyContext::timestamp() instead." },
+    { path = "chrono::Local::now", reason = "Forbidden: accesses system clock. Use StrategyContext::timestamp() instead." },
+    
+    # Tokio time
+    { path = "tokio::time::Instant::now", reason = "Forbidden: accesses system clock. Use StrategyContext::timestamp() instead." },
+]
+
+# =============================================================================
+# LINT CONFIGURATION
+# =============================================================================
+# Additional lint settings for production-grade code quality
+
+# Maximum cognitive complexity allowed
+cognitive-complexity-threshold = 30
+
+# Maximum line count for functions
+too-many-lines-threshold = 150
+
+# Enforce documentation on public items
+missing-docs-in-crate-items = true

@@ -6,7 +6,7 @@ interface AppShellProps {
 
 export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   return (
-    <div className="min-h-screen bg-void text-white">
+    <div className="min-h-screen bg-void text-fg">
       {children}
     </div>
   );

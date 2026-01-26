@@ -69,8 +69,8 @@ function tabButtonClass(active: boolean): string {
   return [
     'px-3 py-2 text-[11px] font-mono border transition-colors duration-150',
     active
-      ? 'bg-white text-black border-white font-semibold'
-      : 'border-grey/30 text-grey/80 hover:text-white hover:border-grey/50 hover:bg-grey/10',
+      ? 'bg-fg text-void border-fg font-semibold'
+      : 'border-grey/30 text-fg/90 hover:text-fg hover:border-grey/50 hover:bg-grey/10',
   ].join(' ');
 }
 
@@ -90,7 +90,7 @@ const Badge: React.FC<{
           ? 'border-success/40 text-success'
           : tone === 'danger'
             ? 'border-danger/40 text-danger'
-        : 'border-grey/30 text-grey/80';
+        : 'border-grey/30 text-fg/90';
   return (
     <span
       className={`px-2 py-0.5 text-[10px] font-mono border ${cls} tracking-widest select-none`}
@@ -109,8 +109,8 @@ const Panel: React.FC<{
   return (
     <div className={`bg-surface border border-grey/10 ${className || ''}`}>
       <div className="flex items-center justify-between gap-4 px-4 py-3 border-b border-grey/10">
-        <div className="text-[10px] text-grey/80 tracking-widest">{title}</div>
-        {right ? <div className="text-[10px] font-mono text-grey/70">{right}</div> : null}
+        <div className="text-[10px] text-fg/90 tracking-widest">{title}</div>
+        {right ? <div className="text-[10px] font-mono text-fg/80">{right}</div> : null}
       </div>
       <div className="p-4">{children}</div>
     </div>
@@ -120,9 +120,9 @@ const Panel: React.FC<{
 const KpiCard: React.FC<{ label: string; value: string; sub?: string }> = ({ label, value, sub }) => {
   return (
     <div className="bg-surface border border-grey/10 p-4">
-      <div className="text-[10px] text-grey/80 tracking-widest mb-2">{label}</div>
-      <div className="text-xl font-mono text-white">{value}</div>
-      {sub ? <div className="text-[10px] font-mono text-grey/70 mt-1">{sub}</div> : null}
+      <div className="text-[10px] text-fg/90 tracking-widest mb-2">{label}</div>
+      <div className="text-xl font-mono text-fg">{value}</div>
+      {sub ? <div className="text-[10px] font-mono text-fg/80 mt-1">{sub}</div> : null}
     </div>
   );
 };
@@ -133,7 +133,7 @@ const Watermark: React.FC<{ text: string }> = ({ text }) => {
       className="absolute inset-0 pointer-events-none flex items-center justify-center"
       aria-hidden="true"
     >
-      <div className="text-[72px] font-mono text-white/5 tracking-[0.25em] select-none">
+      <div className="text-[72px] font-mono text-fg/5 tracking-[0.25em] select-none">
         {text}
       </div>
     </div>
@@ -537,20 +537,20 @@ export const VaultDashboard: React.FC = () => {
       <div className="flex items-end justify-between mb-5 border-b border-grey/20 pb-4">
         <div>
           <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-3xl font-semibold text-white font-mono">BETTER VAULT</h1>
+            <h1 className="text-3xl font-semibold text-fg font-mono">BETTER VAULT</h1>
             <Badge tone={paperMode ? 'paper' : 'success'}>{paperMode ? 'PAPER' : 'LIVE'}</Badge>
             <Badge tone={engineEnabled ? 'success' : 'danger'}>
               {engineEnabled ? 'ENGINE ON' : 'ENGINE OFF'}
             </Badge>
             <Badge tone="base">BASE</Badge>
           </div>
-          <div className="text-[10px] text-grey/80 tracking-widest mt-1">
+          <div className="text-[10px] text-fg/90 tracking-widest mt-1">
             POOLED QUANT STRATEGY // NAV-PRICED SHARES // EXECUTION VIA CLOB
           </div>
         </div>
         <div className="text-right">
-          <div className="text-[10px] text-grey/80 tracking-widest mb-1">NAV / SHARE</div>
-          <div className="text-2xl font-semibold text-white font-mono">{sharePriceText}</div>
+          <div className="text-[10px] text-fg/90 tracking-widest mb-1">NAV / SHARE</div>
+          <div className="text-2xl font-semibold text-fg font-mono">{sharePriceText}</div>
         </div>
       </div>
 
@@ -573,14 +573,14 @@ export const VaultDashboard: React.FC = () => {
       </div>
 
       <div className="flex items-center justify-between mb-5">
-        <div className="text-[11px] font-mono text-grey/70">{statusLine}</div>
+        <div className="text-[11px] font-mono text-fg/80">{statusLine}</div>
         <button
           type="button"
           onClick={() => {
             refresh();
             refreshActiveTab();
           }}
-          className="text-[11px] font-mono border border-grey/20 px-3 py-1 text-grey/80 hover:text-white hover:border-grey/40"
+          className="text-[11px] font-mono border border-grey/20 px-3 py-1 text-fg/90 hover:text-fg hover:border-grey/40"
         >
           [REFRESH]
         </button>
@@ -611,27 +611,27 @@ export const VaultDashboard: React.FC = () => {
                 right={walletTrim ? shortHex(walletTrim) : 'NO WALLET'}
               >
                 {!walletTrim ? (
-                  <div className="text-[11px] font-mono text-grey/70">CONNECT OR PASTE A WALLET ADDRESS TO VIEW SHARES.</div>
+                  <div className="text-[11px] font-mono text-fg/80">CONNECT OR PASTE A WALLET ADDRESS TO VIEW SHARES.</div>
                 ) : !walletLooksEvm ? (
                   <div className="text-[11px] font-mono text-danger">INVALID WALLET ADDRESS (EXPECTED 0x…40 HEX).</div>
                 ) : overviewLoading ? (
-                  <div className="text-[11px] font-mono text-grey/70">LOADING…</div>
+                  <div className="text-[11px] font-mono text-fg/80">LOADING…</div>
                 ) : overviewError ? (
                   <div className="text-[11px] font-mono text-danger">{overviewError}</div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-[11px] font-mono">
                     <div>
-                      <div className="text-grey/70">SHARES</div>
-                      <div className="text-white">{formatMaybe(vaultOverview?.user_shares, 6)}</div>
+                      <div className="text-fg/80">SHARES</div>
+                      <div className="text-fg">{formatMaybe(vaultOverview?.user_shares, 6)}</div>
                     </div>
                     <div>
-                      <div className="text-grey/70">VALUE (USDC)</div>
-                      <div className="text-white">{formatUsd(vaultOverview?.user_value_usdc, 2)}</div>
+                      <div className="text-fg/80">VALUE (USDC)</div>
+                      <div className="text-fg">{formatUsd(vaultOverview?.user_value_usdc, 2)}</div>
                     </div>
                     <div>
-                      <div className="text-grey/70">NAV / SHARE</div>
-                      <div className="text-white">{formatUsd(vaultOverview?.nav_per_share, 4)}</div>
-                      <div className="text-[10px] text-grey/70 mt-1">AS OF {formatTs(vaultOverview?.fetched_at)}</div>
+                      <div className="text-fg/80">NAV / SHARE</div>
+                      <div className="text-fg">{formatUsd(vaultOverview?.nav_per_share, 4)}</div>
+                      <div className="text-[10px] text-fg/80 mt-1">AS OF {formatTs(vaultOverview?.fetched_at)}</div>
                     </div>
                   </div>
                 )}
@@ -649,24 +649,24 @@ export const VaultDashboard: React.FC = () => {
                       value={walletAddress}
                       onChange={(e) => setWalletAddress(e.target.value)}
                       placeholder="wallet address (0x...)"
-                      className="w-full bg-black/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-white"
+                      className="w-full bg-void/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-fg"
                     />
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={connectMetaMask}
                         disabled={!walletHint.metamask}
-                        className="text-[11px] font-mono border border-grey/20 px-3 py-1 text-grey/80 hover:text-white hover:border-grey/40 disabled:opacity-40"
+                        className="text-[11px] font-mono border border-grey/20 px-3 py-1 text-fg/90 hover:text-fg hover:border-grey/40 disabled:opacity-40"
                         title={walletHint.metamask ? 'Connect MetaMask' : 'MetaMask not detected'}
                       >
                         [CONNECT METAMASK]
                       </button>
                       {walletHint.metamask ? (
-                        <span className="text-[10px] font-mono text-grey/70">
+                        <span className="text-[10px] font-mono text-fg/80">
                           CHAIN {walletHint.chainId || '---'}
                         </span>
                       ) : (
-                        <span className="text-[10px] font-mono text-grey/70">METAMASK NOT DETECTED</span>
+                        <span className="text-[10px] font-mono text-fg/80">METAMASK NOT DETECTED</span>
                       )}
                       {walletConnectError ? (
                         <span className="text-[10px] font-mono text-danger">{walletConnectError}</span>
@@ -679,7 +679,7 @@ export const VaultDashboard: React.FC = () => {
                       onChange={(e) => setDepositAmount(e.target.value)}
                       placeholder="amount_usdc"
                       inputMode="decimal"
-                      className="w-full bg-black/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-white"
+                      className="w-full bg-void/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-fg"
                     />
                     <button
                       type="button"
@@ -726,9 +726,9 @@ export const VaultDashboard: React.FC = () => {
                       value={walletAddress}
                       onChange={(e) => setWalletAddress(e.target.value)}
                       placeholder="wallet address (0x...)"
-                      className="w-full bg-black/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-white"
+                      className="w-full bg-void/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-fg"
                     />
-                    <div className="text-[10px] font-mono text-grey/70 mt-2">
+                    <div className="text-[10px] font-mono text-fg/80 mt-2">
                       NOTE: CASH-ONLY WITHDRAWALS (POSITION LIQUIDATION NOT IMPLEMENTED)
                     </div>
                   </div>
@@ -738,7 +738,7 @@ export const VaultDashboard: React.FC = () => {
                       onChange={(e) => setWithdrawShares(e.target.value)}
                       placeholder="shares"
                       inputMode="decimal"
-                      className="w-full bg-black/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-white"
+                      className="w-full bg-void/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-fg"
                     />
                     <button
                       type="button"
@@ -765,7 +765,7 @@ export const VaultDashboard: React.FC = () => {
                           setActionLoading(false);
                         }
                       }}
-                      className="bg-surface border border-grey/30 hover:border-better-blue disabled:opacity-50 text-white font-mono tracking-widest py-3 px-4 transition-colors duration-150 w-full"
+                      className="bg-surface border border-grey/30 hover:border-better-blue disabled:opacity-50 text-fg font-mono tracking-widest py-3 px-4 transition-colors duration-150 w-full"
                     >
                       [WITHDRAW]
                     </button>
@@ -773,21 +773,21 @@ export const VaultDashboard: React.FC = () => {
                 </div>
               </Panel>
 
-              {actionStatus ? <div className="text-[11px] font-mono text-grey/80">{actionStatus}</div> : null}
+              {actionStatus ? <div className="text-[11px] font-mono text-fg/90">{actionStatus}</div> : null}
             </div>
 
             <div className="space-y-4">
               <Panel title="STRATEGY MODULES" right="DISCLOSURE">
                 <div className="space-y-3 text-[11px] font-mono">
                   <div>
-                    <div className="text-white">FAST15M (BTC/ETH/SOL/XRP)</div>
-                    <div className="text-grey/70">
+                    <div className="text-fg">FAST15M (BTC/ETH/SOL/XRP)</div>
+                    <div className="text-fg/80">
                       Driftless lognormal p(UP), shrink-to-half conservatism, fractional Kelly, hard caps.
                     </div>
                   </div>
                   <div>
-                    <div className="text-white">LONG (BRAID-bounded LLM)</div>
-                    <div className="text-grey/70">
+                    <div className="text-fg">LONG (BRAID-bounded LLM)</div>
+                    <div className="text-fg/80">
                       Scout-first gating + 3-of-4 consensus; deterministic admissibility + cost-adjusted edge.
                     </div>
                   </div>
@@ -797,26 +797,26 @@ export const VaultDashboard: React.FC = () => {
               <Panel title="TERMS (PLACEHOLDER)" right="PAPER">
                 <div className="grid grid-cols-2 gap-3 text-[11px] font-mono">
                   <div>
-                    <div className="text-grey/70">MANAGEMENT FEE</div>
-                    <div className="text-white">---</div>
+                    <div className="text-fg/80">MANAGEMENT FEE</div>
+                    <div className="text-fg">---</div>
                   </div>
                   <div>
-                    <div className="text-grey/70">PERFORMANCE FEE</div>
-                    <div className="text-white">---</div>
+                    <div className="text-fg/80">PERFORMANCE FEE</div>
+                    <div className="text-fg">---</div>
                   </div>
                   <div>
-                    <div className="text-grey/70">LIQUIDITY</div>
-                    <div className="text-white">T+0 (PAPER)</div>
+                    <div className="text-fg/80">LIQUIDITY</div>
+                    <div className="text-fg">T+0 (PAPER)</div>
                   </div>
                   <div>
-                    <div className="text-grey/70">CUSTODY</div>
-                    <div className="text-white">ACCOUNTING ONLY</div>
+                    <div className="text-fg/80">CUSTODY</div>
+                    <div className="text-fg">ACCOUNTING ONLY</div>
                   </div>
                 </div>
               </Panel>
 
               <Panel title="INVESTOR NOTES" right="IMPORTANT">
-                <div className="text-[10px] font-mono text-grey/70 space-y-2">
+                <div className="text-[10px] font-mono text-fg/80 space-y-2">
                   <div>PAPER MODE: NO ON-CHAIN DEPOSITS/WITHDRAWALS.</div>
                   <div>LONG ENGINE USES OPENROUTER KEY FROM ENV ONLY (NEVER STORED IN UI).</div>
                   <div>PERFORMANCE/PORTFOLIO/ACTIVITY ARE POWERED BY PERSISTED NAV SNAPSHOTS + ACTIVITY LOG.</div>
@@ -825,7 +825,7 @@ export const VaultDashboard: React.FC = () => {
             </div>
           </div>
 
-          <div className="text-[10px] text-grey/70 text-center font-mono">
+          <div className="text-[10px] text-fg/80 text-center font-mono">
             PAST PERFORMANCE DOES NOT GUARANTEE FUTURE RESULTS. THIS UI IS ACCOUNTING-ONLY UNTIL ON-CHAIN DEPOSITS/WITHDRAWALS ARE WIRED.
           </div>
         </div>
@@ -834,7 +834,7 @@ export const VaultDashboard: React.FC = () => {
       {tab === 'PERFORMANCE' ? (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-[10px] font-mono text-grey/70">RANGE</div>
+            <div className="text-[10px] font-mono text-fg/80">RANGE</div>
             <div className="flex flex-wrap gap-2">
               {(['24h', '7d', '30d', '90d', 'all'] as const).map((r) => (
                 <button
@@ -844,8 +844,8 @@ export const VaultDashboard: React.FC = () => {
                   className={
                     'px-2 py-1 text-[10px] font-mono border ' +
                     (perfRange === r
-                      ? 'bg-white text-black border-white'
-                      : 'border-grey/30 text-grey/80 hover:text-white hover:border-grey/50 hover:bg-grey/10')
+                      ? 'bg-fg text-void border-fg'
+                      : 'border-grey/30 text-fg/90 hover:text-fg hover:border-grey/50 hover:bg-grey/10')
                   }
                 >
                   {r.toUpperCase()}
@@ -869,18 +869,18 @@ export const VaultDashboard: React.FC = () => {
             {perfError ? (
               <div className="text-[11px] font-mono text-danger">{perfError}</div>
             ) : perfLoading ? (
-              <div className="h-56 flex items-center justify-center text-[11px] font-mono text-grey/70">LOADING…</div>
+              <div className="h-56 flex items-center justify-center text-[11px] font-mono text-fg/80">LOADING…</div>
             ) : perfPath ? (
               <div>
                 <svg viewBox={`0 0 ${perfPath.w} ${perfPath.h}`} className="w-full h-56">
                   <path d={perfPath.d} fill="none" stroke="#3B82F6" strokeWidth="2" />
                 </svg>
-                <div className="mt-2 text-[10px] font-mono text-grey/70">
+                <div className="mt-2 text-[10px] font-mono text-fg/80">
                   LAST SNAPSHOT: {formatTs(perfPoints[perfPoints.length - 1]?.ts)}
                 </div>
               </div>
             ) : (
-              <div className="h-56 flex items-center justify-center text-[11px] font-mono text-grey/70">
+              <div className="h-56 flex items-center justify-center text-[11px] font-mono text-fg/80">
                 NO NAV SERIES AVAILABLE YET.
               </div>
             )}
@@ -920,14 +920,14 @@ export const VaultDashboard: React.FC = () => {
             {positionsError ? (
               <div className="text-[11px] font-mono text-danger">{positionsError}</div>
             ) : positionsLoading ? (
-              <div className="text-[11px] font-mono text-grey/70">LOADING…</div>
+              <div className="text-[11px] font-mono text-fg/80">LOADING…</div>
             ) : !positions.length ? (
-              <div className="text-[11px] font-mono text-grey/70">NO OPEN POSITIONS.</div>
+              <div className="text-[11px] font-mono text-fg/80">NO OPEN POSITIONS.</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-[11px] font-mono">
                   <thead>
-                    <tr className="text-grey/70 border-b border-grey/20">
+                    <tr className="text-fg/80 border-b border-grey/20">
                       <th className="text-left py-2 pr-3">MARKET</th>
                       <th className="text-left py-2 pr-3">OUTCOME</th>
                       <th className="text-right py-2 pr-3">SHARES</th>
@@ -949,7 +949,7 @@ export const VaultDashboard: React.FC = () => {
                           ? pnl >= 0
                             ? 'text-success'
                             : 'text-danger'
-                          : 'text-grey/70';
+                          : 'text-fg/80';
                       const spreadBps =
                         typeof p.spread === 'number' && Number.isFinite(p.spread)
                           ? `${Math.round(p.spread * 10_000)}bps`
@@ -957,19 +957,19 @@ export const VaultDashboard: React.FC = () => {
 
                       return (
                         <tr key={p.token_id} className="border-b border-grey/10">
-                          <td className="py-2 pr-3 text-white max-w-[420px] truncate">
+                          <td className="py-2 pr-3 text-fg max-w-[420px] truncate">
                             {p.market_question || p.market_slug || p.token_id}
                           </td>
-                          <td className="py-2 pr-3 text-white">{p.outcome}</td>
-                          <td className="py-2 pr-3 text-right text-white">{formatMaybe(p.shares, 4)}</td>
-                          <td className="py-2 pr-3 text-right text-white">{formatPx(p.avg_price, 4)}</td>
-                          <td className="py-2 pr-3 text-right text-white">{formatPx(p.mid, 4)}</td>
-                          <td className="py-2 pr-3 text-right text-grey/70">{spreadBps}</td>
-                          <td className="py-2 pr-3 text-right text-white">{formatUsd(p.value_usdc, 2)}</td>
+                          <td className="py-2 pr-3 text-fg">{p.outcome}</td>
+                          <td className="py-2 pr-3 text-right text-fg">{formatMaybe(p.shares, 4)}</td>
+                          <td className="py-2 pr-3 text-right text-fg">{formatPx(p.avg_price, 4)}</td>
+                          <td className="py-2 pr-3 text-right text-fg">{formatPx(p.mid, 4)}</td>
+                          <td className="py-2 pr-3 text-right text-fg/80">{spreadBps}</td>
+                          <td className="py-2 pr-3 text-right text-fg">{formatUsd(p.value_usdc, 2)}</td>
                           <td className={`py-2 pr-3 text-right ${pnlCls}`}>{formatUsd(pnl, 2)}</td>
-                          <td className="py-2 pr-3 text-right text-grey/70">{formatTteSec(p.tte_sec)}</td>
-                          <td className="py-2 pr-3 text-grey/70">{p.strategy || '---'}</td>
-                          <td className="py-2 text-grey/70">{p.decision_id ? p.decision_id.slice(0, 10) : '---'}</td>
+                          <td className="py-2 pr-3 text-right text-fg/80">{formatTteSec(p.tte_sec)}</td>
+                          <td className="py-2 pr-3 text-fg/80">{p.strategy || '---'}</td>
+                          <td className="py-2 text-fg/80">{p.decision_id ? p.decision_id.slice(0, 10) : '---'}</td>
                         </tr>
                       );
                     })}
@@ -993,36 +993,36 @@ export const VaultDashboard: React.FC = () => {
             {configError ? (
               <div className="text-[11px] font-mono text-danger">{configError}</div>
             ) : configLoading ? (
-              <div className="text-[11px] font-mono text-grey/70">LOADING…</div>
+              <div className="text-[11px] font-mono text-fg/80">LOADING…</div>
             ) : !configData ? (
-              <div className="text-[11px] font-mono text-grey/70">---</div>
+              <div className="text-[11px] font-mono text-fg/80">---</div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[11px] font-mono">
                 <div className="space-y-2">
-                  <div className="text-white">FAST15M</div>
-                  <div className="text-grey/70">POLL = {configData.updown_poll_ms}ms</div>
-                  <div className="text-grey/70">MIN_EDGE = {formatPct(configData.updown_min_edge, 2)}</div>
-                  <div className="text-grey/70">KELLY_FRACTION = {formatMaybe(configData.updown_kelly_fraction, 4)}</div>
-                  <div className="text-grey/70">MAX_POSITION_PCT = {formatPct(configData.updown_max_position_pct, 2)}</div>
-                  <div className="text-grey/70">SHRINK_TO_HALF = {formatMaybe(configData.updown_shrink_to_half, 3)}</div>
-                  <div className="text-grey/70">COOLDOWN = {configData.updown_cooldown_sec}s</div>
+                  <div className="text-fg">FAST15M</div>
+                  <div className="text-fg/80">POLL = {configData.updown_poll_ms}ms</div>
+                  <div className="text-fg/80">MIN_EDGE = {formatPct(configData.updown_min_edge, 2)}</div>
+                  <div className="text-fg/80">KELLY_FRACTION = {formatMaybe(configData.updown_kelly_fraction, 4)}</div>
+                  <div className="text-fg/80">MAX_POSITION_PCT = {formatPct(configData.updown_max_position_pct, 2)}</div>
+                  <div className="text-fg/80">SHRINK_TO_HALF = {formatMaybe(configData.updown_shrink_to_half, 3)}</div>
+                  <div className="text-fg/80">COOLDOWN = {configData.updown_cooldown_sec}s</div>
                 </div>
 
                 <div className="space-y-2">
-                  <div className="text-white">LONG (LLM)</div>
-                  <div className="text-grey/70">ENABLED = {configData.long_enabled ? 'TRUE' : 'FALSE'}</div>
-                  <div className="text-grey/70">POLL = {configData.long_poll_ms}ms</div>
-                  <div className="text-grey/70">MIN_EDGE = {formatPct(configData.long_min_edge, 2)}</div>
-                  <div className="text-grey/70">MAX_SPREAD = {formatMaybe(configData.long_max_spread_bps, 0)}bps</div>
-                  <div className="text-grey/70">MAX_TTE = {formatMaybe(configData.long_max_tte_days, 1)}d</div>
-                  <div className="text-grey/70">MIN_TOP_BOOK = {formatUsd(configData.long_min_top_of_book_usd, 0)}</div>
-                  <div className="text-grey/70">BUDGET = {configData.long_max_calls_per_day} calls/day, {configData.long_max_tokens_per_day} tokens/day</div>
-                  <div className="text-grey/70">LLM_TIMEOUT = {configData.long_llm_timeout_sec}s</div>
-                  <div className="text-grey/70">LLM_MAX_TOKENS = {configData.long_llm_max_tokens}</div>
-                  <div className="text-grey/70">LLM_TEMPERATURE = {formatMaybe(configData.long_llm_temperature, 2)}</div>
-                  <div className="text-grey/70">MODELS = {configData.long_models?.join(', ') || '---'}</div>
+                  <div className="text-fg">LONG (LLM)</div>
+                  <div className="text-fg/80">ENABLED = {configData.long_enabled ? 'TRUE' : 'FALSE'}</div>
+                  <div className="text-fg/80">POLL = {configData.long_poll_ms}ms</div>
+                  <div className="text-fg/80">MIN_EDGE = {formatPct(configData.long_min_edge, 2)}</div>
+                  <div className="text-fg/80">MAX_SPREAD = {formatMaybe(configData.long_max_spread_bps, 0)}bps</div>
+                  <div className="text-fg/80">MAX_TTE = {formatMaybe(configData.long_max_tte_days, 1)}d</div>
+                  <div className="text-fg/80">MIN_TOP_BOOK = {formatUsd(configData.long_min_top_of_book_usd, 0)}</div>
+                  <div className="text-fg/80">BUDGET = {configData.long_max_calls_per_day} calls/day, {configData.long_max_tokens_per_day} tokens/day</div>
+                  <div className="text-fg/80">LLM_TIMEOUT = {configData.long_llm_timeout_sec}s</div>
+                  <div className="text-fg/80">LLM_MAX_TOKENS = {configData.long_llm_max_tokens}</div>
+                  <div className="text-fg/80">LLM_TEMPERATURE = {formatMaybe(configData.long_llm_temperature, 2)}</div>
+                  <div className="text-fg/80">MODELS = {configData.long_models?.join(', ') || '---'}</div>
                   {configData.llm_usage_today ? (
-                    <div className="text-grey/70">USAGE TODAY = {configData.llm_usage_today.calls_today} calls, {configData.llm_usage_today.tokens_today} tokens</div>
+                    <div className="text-fg/80">USAGE TODAY = {configData.llm_usage_today.calls_today} calls, {configData.llm_usage_today.tokens_today} tokens</div>
                   ) : null}
                 </div>
               </div>
@@ -1043,7 +1043,7 @@ export const VaultDashboard: React.FC = () => {
       {tab === 'ACTIVITY' ? (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-[10px] font-mono text-grey/70">FILTER</div>
+            <div className="text-[10px] font-mono text-fg/80">FILTER</div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -1051,8 +1051,8 @@ export const VaultDashboard: React.FC = () => {
                 className={
                   'px-2 py-1 text-[10px] font-mono border ' +
                   (!activityWalletOnly
-                    ? 'bg-white text-black border-white'
-                    : 'border-grey/30 text-grey/80 hover:text-white hover:border-grey/50 hover:bg-grey/10')
+                    ? 'bg-fg text-void border-fg'
+                    : 'border-grey/30 text-fg/90 hover:text-fg hover:border-grey/50 hover:bg-grey/10')
                 }
               >
                 ALL
@@ -1064,8 +1064,8 @@ export const VaultDashboard: React.FC = () => {
                 className={
                   'px-2 py-1 text-[10px] font-mono border disabled:opacity-40 ' +
                   (activityWalletOnly
-                    ? 'bg-white text-black border-white'
-                    : 'border-grey/30 text-grey/80 hover:text-white hover:border-grey/50 hover:bg-grey/10')
+                    ? 'bg-fg text-void border-fg'
+                    : 'border-grey/30 text-fg/90 hover:text-fg hover:border-grey/50 hover:bg-grey/10')
                 }
                 title={walletLooksEvm ? 'Show only this wallet' : 'Enter a valid wallet first'}
               >
@@ -1083,14 +1083,14 @@ export const VaultDashboard: React.FC = () => {
             {activityError ? (
               <div className="text-[11px] font-mono text-danger">{activityError}</div>
             ) : activityLoading ? (
-              <div className="text-[11px] font-mono text-grey/70">LOADING…</div>
+              <div className="text-[11px] font-mono text-fg/80">LOADING…</div>
             ) : !activityLedger.length ? (
-              <div className="text-[11px] font-mono text-grey/70">NO DEPOSITS/WITHDRAWS LOGGED.</div>
+              <div className="text-[11px] font-mono text-fg/80">NO DEPOSITS/WITHDRAWS LOGGED.</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-[11px] font-mono">
                   <thead>
-                    <tr className="text-grey/70 border-b border-grey/20">
+                    <tr className="text-fg/80 border-b border-grey/20">
                       <th className="text-left py-2 pr-3">TS</th>
                       <th className="text-left py-2 pr-3">WALLET</th>
                       <th className="text-left py-2 pr-3">KIND</th>
@@ -1101,11 +1101,11 @@ export const VaultDashboard: React.FC = () => {
                   <tbody>
                     {activityLedger.map((e: VaultActivityRecord) => (
                       <tr key={e.id} className="border-b border-grey/10">
-                        <td className="py-2 pr-3 text-grey/70">{formatTs(e.ts)}</td>
-                        <td className="py-2 pr-3 text-white">{shortHex(e.wallet_address)}</td>
-                        <td className="py-2 pr-3 text-white">{e.kind}</td>
-                        <td className="py-2 pr-3 text-right text-white">{formatUsd(e.amount_usdc, 2)}</td>
-                        <td className="py-2 text-right text-white">{formatMaybe(e.shares, 6)}</td>
+                        <td className="py-2 pr-3 text-fg/80">{formatTs(e.ts)}</td>
+                        <td className="py-2 pr-3 text-fg">{shortHex(e.wallet_address)}</td>
+                        <td className="py-2 pr-3 text-fg">{e.kind}</td>
+                        <td className="py-2 pr-3 text-right text-fg">{formatUsd(e.amount_usdc, 2)}</td>
+                        <td className="py-2 text-right text-fg">{formatMaybe(e.shares, 6)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1123,14 +1123,14 @@ export const VaultDashboard: React.FC = () => {
             {activityError ? (
               <div className="text-[11px] font-mono text-danger">{activityError}</div>
             ) : activityLoading ? (
-              <div className="text-[11px] font-mono text-grey/70">LOADING…</div>
+              <div className="text-[11px] font-mono text-fg/80">LOADING…</div>
             ) : !activityTrades.length ? (
-              <div className="text-[11px] font-mono text-grey/70">NO TRADES LOGGED.</div>
+              <div className="text-[11px] font-mono text-fg/80">NO TRADES LOGGED.</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-[11px] font-mono">
                   <thead>
-                    <tr className="text-grey/70 border-b border-grey/20">
+                    <tr className="text-fg/80 border-b border-grey/20">
                       <th className="text-left py-2 pr-3">TS</th>
                       <th className="text-left py-2 pr-3">STRAT</th>
                       <th className="text-left py-2 pr-3">MARKET</th>
@@ -1145,15 +1145,15 @@ export const VaultDashboard: React.FC = () => {
                   <tbody>
                     {activityTrades.map((e: VaultActivityRecord) => (
                       <tr key={e.id} className="border-b border-grey/10">
-                        <td className="py-2 pr-3 text-grey/70">{formatTs(e.ts)}</td>
-                        <td className="py-2 pr-3 text-grey/70">{e.strategy || '---'}</td>
-                        <td className="py-2 pr-3 text-white max-w-[420px] truncate">{e.market_slug || e.token_id || '---'}</td>
-                        <td className="py-2 pr-3 text-white">{e.outcome || '---'}</td>
-                        <td className="py-2 pr-3 text-white">{e.side || '---'}</td>
-                        <td className="py-2 pr-3 text-right text-white">{formatPx(e.price, 4)}</td>
-                        <td className="py-2 pr-3 text-right text-white">{formatUsd(e.notional_usdc, 2)}</td>
-                        <td className="py-2 pr-3 text-right text-white">{formatMaybe(e.shares, 4)}</td>
-                        <td className="py-2 text-grey/70">{e.decision_id ? e.decision_id.slice(0, 10) : '---'}</td>
+                        <td className="py-2 pr-3 text-fg/80">{formatTs(e.ts)}</td>
+                        <td className="py-2 pr-3 text-fg/80">{e.strategy || '---'}</td>
+                        <td className="py-2 pr-3 text-fg max-w-[420px] truncate">{e.market_slug || e.token_id || '---'}</td>
+                        <td className="py-2 pr-3 text-fg">{e.outcome || '---'}</td>
+                        <td className="py-2 pr-3 text-fg">{e.side || '---'}</td>
+                        <td className="py-2 pr-3 text-right text-fg">{formatPx(e.price, 4)}</td>
+                        <td className="py-2 pr-3 text-right text-fg">{formatUsd(e.notional_usdc, 2)}</td>
+                        <td className="py-2 pr-3 text-right text-fg">{formatMaybe(e.shares, 4)}</td>
+                        <td className="py-2 text-fg/80">{e.decision_id ? e.decision_id.slice(0, 10) : '---'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1178,7 +1178,7 @@ export const VaultDashboard: React.FC = () => {
                 value={llmMarketInput}
                 onChange={(e) => setLlmMarketInput(e.target.value)}
                 placeholder="market_slug filter (optional)"
-                className="bg-black/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-white w-full md:w-[520px]"
+                className="bg-void/50 border border-grey/20 px-3 py-2 text-[12px] font-mono text-fg w-full md:w-[520px]"
               />
               <button
                 type="button"
@@ -1186,7 +1186,7 @@ export const VaultDashboard: React.FC = () => {
                   setLlmExpandedDecisionId(null);
                   setLlmMarketFilter(llmMarketInput.trim());
                 }}
-                className="text-[11px] font-mono border border-grey/20 px-3 py-2 text-grey/80 hover:text-white hover:border-grey/40"
+                className="text-[11px] font-mono border border-grey/20 px-3 py-2 text-fg/90 hover:text-fg hover:border-grey/40"
               >
                 [APPLY]
               </button>
@@ -1197,14 +1197,14 @@ export const VaultDashboard: React.FC = () => {
                   setLlmMarketInput('');
                   setLlmMarketFilter('');
                 }}
-                className="text-[11px] font-mono border border-grey/20 px-3 py-2 text-grey/80 hover:text-white hover:border-grey/40"
+                className="text-[11px] font-mono border border-grey/20 px-3 py-2 text-fg/90 hover:text-fg hover:border-grey/40"
               >
                 [CLEAR]
               </button>
               <button
                 type="button"
                 onClick={refreshLlmDecisions}
-                className="text-[11px] font-mono border border-grey/20 px-3 py-2 text-grey/80 hover:text-white hover:border-grey/40"
+                className="text-[11px] font-mono border border-grey/20 px-3 py-2 text-fg/90 hover:text-fg hover:border-grey/40"
               >
                 [REFRESH]
               </button>
@@ -1213,14 +1213,14 @@ export const VaultDashboard: React.FC = () => {
             {llmError ? (
               <div className="text-[11px] font-mono text-danger">{llmError}</div>
             ) : llmLoading ? (
-              <div className="text-[11px] font-mono text-grey/70">LOADING…</div>
+              <div className="text-[11px] font-mono text-fg/80">LOADING…</div>
             ) : !llmDecisions.length ? (
-              <div className="text-[11px] font-mono text-grey/70">NO DECISIONS LOGGED.</div>
+              <div className="text-[11px] font-mono text-fg/80">NO DECISIONS LOGGED.</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-[11px] font-mono">
                   <thead>
-                    <tr className="text-grey/70 border-b border-grey/20">
+                    <tr className="text-fg/80 border-b border-grey/20">
                       <th className="text-left py-2 pr-3">TS</th>
                       <th className="text-left py-2 pr-3">MARKET</th>
                       <th className="text-left py-2 pr-3">ACTION</th>
@@ -1247,47 +1247,47 @@ export const VaultDashboard: React.FC = () => {
                               if (!expanded) ensureLlmModels(d.decision_id);
                             }}
                           >
-                            <td className="py-2 pr-3 text-grey/70">{formatTs(d.created_at)}</td>
-                            <td className="py-2 pr-3 text-white max-w-[380px] truncate">{d.market_slug}</td>
-                            <td className="py-2 pr-3 text-white">{d.action}</td>
-                            <td className="py-2 pr-3 text-white">{d.outcome_text || (typeof d.outcome_index === 'number' ? String(d.outcome_index) : '---')}</td>
-                            <td className="py-2 pr-3 text-right text-white">{formatMaybe(d.p_true, 3)}</td>
-                            <td className="py-2 pr-3 text-right text-white">{formatMaybe(d.p_eff, 3)}</td>
-                            <td className="py-2 pr-3 text-right text-white">{formatMaybe(d.edge, 3)}</td>
-                            <td className="py-2 pr-3 text-right text-white">{formatMaybe(d.size_mult, 2)}</td>
-                            <td className="py-2 pr-3 text-grey/70">{d.consensus_models || '---'}</td>
-                            <td className="py-2 pr-3 text-grey/70">{d.flags || '---'}</td>
-                            <td className="py-2 text-grey/70">{d.decision_id.slice(0, 10)}</td>
+                            <td className="py-2 pr-3 text-fg/80">{formatTs(d.created_at)}</td>
+                            <td className="py-2 pr-3 text-fg max-w-[380px] truncate">{d.market_slug}</td>
+                            <td className="py-2 pr-3 text-fg">{d.action}</td>
+                            <td className="py-2 pr-3 text-fg">{d.outcome_text || (typeof d.outcome_index === 'number' ? String(d.outcome_index) : '---')}</td>
+                            <td className="py-2 pr-3 text-right text-fg">{formatMaybe(d.p_true, 3)}</td>
+                            <td className="py-2 pr-3 text-right text-fg">{formatMaybe(d.p_eff, 3)}</td>
+                            <td className="py-2 pr-3 text-right text-fg">{formatMaybe(d.edge, 3)}</td>
+                            <td className="py-2 pr-3 text-right text-fg">{formatMaybe(d.size_mult, 2)}</td>
+                            <td className="py-2 pr-3 text-fg/80">{d.consensus_models || '---'}</td>
+                            <td className="py-2 pr-3 text-fg/80">{d.flags || '---'}</td>
+                            <td className="py-2 text-fg/80">{d.decision_id.slice(0, 10)}</td>
                           </tr>
 
                           {expanded ? (
                             <tr className="border-b border-grey/10">
                               <td colSpan={11} className="py-3">
                                 {llmModelsLoading[d.decision_id] ? (
-                                  <div className="text-[11px] font-mono text-grey/70">LOADING MODELS…</div>
+                                  <div className="text-[11px] font-mono text-fg/80">LOADING MODELS…</div>
                                 ) : (
                                   <div className="space-y-3">
                                     {(llmModelsByDecision[d.decision_id] || []).map((m: VaultLlmModelRecordRow) => (
-                                      <div key={m.id} className="border border-grey/20 bg-black/40 p-3">
+                                      <div key={m.id} className="border border-grey/20 bg-void/40 p-3">
                                         <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono">
-                                          <div className="text-white">
+                                          <div className="text-fg">
                                             {m.model} // {m.parsed_ok ? 'PARSED_OK' : 'PARSE_FAIL'}
                                           </div>
-                                          <div className="text-grey/70">
+                                          <div className="text-fg/80">
                                             LAT {m.latency_ms ?? '---'}ms // TOK {m.total_tokens ?? '---'}
                                           </div>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-2 text-[11px] font-mono">
-                                          <div className="text-grey/70">ACTION: <span className="text-white">{m.action || '---'}</span></div>
-                                          <div className="text-grey/70">OUTCOME: <span className="text-white">{typeof m.outcome_index === 'number' ? String(m.outcome_index) : '---'}</span></div>
-                                          <div className="text-grey/70">P_TRUE: <span className="text-white">{formatMaybe(m.p_true, 3)}</span></div>
-                                          <div className="text-grey/70">SIZE: <span className="text-white">{formatMaybe(m.size_mult, 2)}</span></div>
+                                          <div className="text-fg/80">ACTION: <span className="text-fg">{m.action || '---'}</span></div>
+                                          <div className="text-fg/80">OUTCOME: <span className="text-fg">{typeof m.outcome_index === 'number' ? String(m.outcome_index) : '---'}</span></div>
+                                          <div className="text-fg/80">P_TRUE: <span className="text-fg">{formatMaybe(m.p_true, 3)}</span></div>
+                                          <div className="text-fg/80">SIZE: <span className="text-fg">{formatMaybe(m.size_mult, 2)}</span></div>
                                         </div>
                                         {m.error ? (
                                           <div className="mt-2 text-[11px] font-mono text-danger">{m.error}</div>
                                         ) : null}
                                         {m.raw_dsl ? (
-                                          <pre className="mt-2 text-[10px] font-mono text-grey/80 whitespace-pre-wrap break-words max-h-56 overflow-y-auto bg-black/60 p-2 border border-grey/10">
+                                          <pre className="mt-2 text-[10px] font-mono text-fg/90 whitespace-pre-wrap break-words max-h-56 overflow-y-auto bg-void/60 p-2 border border-grey/10">
                                             {m.raw_dsl}
                                           </pre>
                                         ) : null}
@@ -1295,7 +1295,7 @@ export const VaultDashboard: React.FC = () => {
                                     ))}
                                     {Array.isArray(llmModelsByDecision[d.decision_id]) &&
                                     llmModelsByDecision[d.decision_id].length === 0 ? (
-                                      <div className="text-[11px] font-mono text-grey/70">NO MODEL RECORDS.</div>
+                                      <div className="text-[11px] font-mono text-fg/80">NO MODEL RECORDS.</div>
                                     ) : null}
                                   </div>
                                 )}
@@ -1313,7 +1313,7 @@ export const VaultDashboard: React.FC = () => {
 
           <Panel title="FAST15M ATTRIBUTION" right="COMING SOON" className="relative overflow-hidden">
             <Watermark text={paperMode ? 'PAPER' : 'LIVE'} />
-            <div className="text-[11px] font-mono text-grey/70">
+            <div className="text-[11px] font-mono text-fg/80">
               Will render p_up inputs (start/now mid, sigma, shrink, orderbook) once stored/exposed.
             </div>
           </Panel>
