@@ -568,19 +568,51 @@ async fn main() -> Result<()> {
         let reactive_cfg = crate::vault::ReactiveFast15mConfig::from_env();
         let price_rx = app_state.binance_feed.subscribe();
 
-        // Use paper execution adapter (concrete type for generics)
-        let exec = Arc::new(crate::vault::PaperExecutionAdapter::default());
+        // Use live or paper execution based on VAULT_ENGINE_PAPER env var
+        let vault_paper = env::var("VAULT_ENGINE_PAPER")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+            .unwrap_or(true);
 
-        let registry = crate::vault::spawn_reactive_fast15m(
-            Arc::new(app_state.clone()),
-            exec,
-            reactive_cfg,
-            price_rx,
-        )
-        .await;
-
-        // Store registry for API access
-        *app_state.fast15m_latency_registry.write() = Some(registry);
+        if vault_paper {
+            info!("📝 Reactive FAST15M: PAPER mode");
+            let exec = Arc::new(crate::vault::PaperExecutionAdapter::default());
+            let registry = crate::vault::spawn_reactive_fast15m(
+                Arc::new(app_state.clone()),
+                exec,
+                reactive_cfg,
+                price_rx,
+            )
+            .await;
+            *app_state.fast15m_latency_registry.write() = Some(registry);
+        } else {
+            // Live mode - use Polymarket CLOB adapter
+            match crate::vault::PolymarketClobAdapter::from_env() {
+                Some(clob) => {
+                    info!("🔴 Reactive FAST15M: LIVE mode (Polymarket CLOB)");
+                    let exec = Arc::new(clob);
+                    let registry = crate::vault::spawn_reactive_fast15m(
+                        Arc::new(app_state.clone()),
+                        exec,
+                        reactive_cfg,
+                        price_rx,
+                    )
+                    .await;
+                    *app_state.fast15m_latency_registry.write() = Some(registry);
+                }
+                None => {
+                    warn!("VAULT_ENGINE_PAPER=false but POLYMARKET_CLOB_* env vars not set; falling back to paper");
+                    let exec = Arc::new(crate::vault::PaperExecutionAdapter::default());
+                    let registry = crate::vault::spawn_reactive_fast15m(
+                        Arc::new(app_state.clone()),
+                        exec,
+                        reactive_cfg,
+                        price_rx,
+                    )
+                    .await;
+                    *app_state.fast15m_latency_registry.write() = Some(registry);
+                }
+            }
+        }
 
         info!("✅ Reactive FAST15M engine started");
     } else if reactive_fast15m_enabled {
