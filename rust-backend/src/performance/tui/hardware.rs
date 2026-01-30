@@ -142,7 +142,7 @@ impl HardwareMonitor {
     }
 
     /// Check if interface supports hardware timestamping
-    fn check_hw_timestamp(_interface: &str) -> bool {
+    fn check_hw_timestamp(interface: &str) -> bool {
         // On Linux, would check /sys/class/net/{interface}/device/
         // For now, return false as placeholder
         #[cfg(target_os = "linux")]
@@ -156,11 +156,12 @@ impl HardwareMonitor {
                     || driver.contains("ice");
             }
         }
+        let _ = interface; // silence unused warning on non-linux
         false
     }
 
     /// Check if interface is bound to DPDK
-    fn check_dpdk_bound(_interface: &str) -> bool {
+    fn check_dpdk_bound(interface: &str) -> bool {
         #[cfg(target_os = "linux")]
         {
             // Would check /sys/class/net/{interface} doesn't exist
@@ -171,6 +172,7 @@ impl HardwareMonitor {
                 return std::path::Path::new("/dev/hugepages").exists();
             }
         }
+        let _ = interface; // silence unused warning on non-linux
         false
     }
 
@@ -253,8 +255,9 @@ impl HardwareMonitor {
 
         unsafe {
             let mut set = MaybeUninit::<cpu_set_t>::uninit();
-            CPU_ZERO(set.as_mut_ptr());
-            CPU_SET(core, set.as_mut_ptr());
+            let set_ptr = set.as_mut_ptr();
+            CPU_ZERO(&mut *set_ptr);
+            CPU_SET(core, &mut *set_ptr);
 
             let result = sched_setaffinity(0, std::mem::size_of::<cpu_set_t>(), set.as_ptr());
             if result == 0 {
