@@ -162,13 +162,5 @@ name = "backtest_run"
 path = "src/bin/backtest_run.rs"
 
 [[bin]]
-name = "dome_replay_ingest"
-path = "src/bin/dome_replay_ingest.rs"
-
-[[bin]]
-name = "dome_replay_sanity"
-path = "src/bin/dome_replay_sanity.rs"
-
-[[bin]]
 name = "replay_dome_window"
 path = "src/bin/replay_dome_window.rs"
