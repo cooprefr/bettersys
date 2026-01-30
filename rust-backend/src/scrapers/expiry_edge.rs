@@ -71,13 +71,11 @@ impl ExpiryEdgeScanner {
         let now = Utc::now();
         let end_window = now + Duration::hours(4);
 
-        // Build API request with date filters
-        // NOTE: GAMMA API doesn't support 'active' or 'closed' parameters - removed to fix 422 error
+        // Build API request - fetch markets and filter client-side
+        // NOTE: GAMMA API date params can be finicky, so we fetch broadly and filter
         let url = format!(
-            "{}/markets?end_date_min={}&end_date_max={}&limit=100",
-            self.api_base,
-            now.to_rfc3339(),
-            end_window.to_rfc3339()
+            "{}/markets?limit=200&active=true",
+            self.api_base
         );
 
         info!(
