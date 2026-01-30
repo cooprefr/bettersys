@@ -981,38 +981,70 @@ impl RunGrade {
     }
     
     /// Get the banner for report output (80-char wide).
+    /// Uses theme-aware colors that work on both dark and light backgrounds.
     pub fn format_banner(&self) -> String {
+        use crate::backtest_v2::theme::Theme;
+        
         let mut banner = String::new();
-        banner.push_str("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+        
+        // Select colors based on grade
+        let (border_color, title_color) = match self {
+            Self::ProductionGrade => (Theme::fg_green(), Theme::fg_green()),
+            Self::ExploratoryGrade => (Theme::fg_yellow(), Theme::fg_yellow()),
+            Self::SimulationOnly => (Theme::fg_red(), Theme::fg_red()),
+        };
+        
+        // Top border
+        banner.push_str(&format!(
+            "{}╔══════════════════════════════════════════════════════════════════════════════╗{}\n",
+            border_color, Theme::reset()
+        ));
         
         match self {
             Self::ProductionGrade => {
-                banner.push_str("║  ✓ PRODUCTION GRADE                                                          ║\n");
-                banner.push_str("║  Execution-realistic simulation suitable for production deployment           ║\n");
+                banner.push_str(&format!(
+                    "{}║{}  {}{}✓ PRODUCTION GRADE{}                                                          {}║{}\n",
+                    border_color, Theme::reset(), title_color, Theme::bold(), Theme::reset(), border_color, Theme::reset()
+                ));
+                banner.push_str(&format!(
+                    "{}║{}  Execution-realistic simulation suitable for production deployment           {}║{}\n",
+                    border_color, Theme::reset(), border_color, Theme::reset()
+                ));
             }
             Self::ExploratoryGrade => {
-                banner.push_str("║  ⚠️  EXPLORATORY GRADE - NOT EXECUTION-REALISTIC                              ║\n");
-                banner.push_str("║                                                                              ║\n");
-                banner.push_str("║  Snapshot-only data CANNOT validate:                                        ║\n");
-                banner.push_str("║    • Queue position tracking                                                 ║\n");
-                banner.push_str("║    • Maker (passive) fill timing                                             ║\n");
-                banner.push_str("║    • Cancel-fill race resolution                                             ║\n");
-                banner.push_str("║                                                                              ║\n");
-                banner.push_str("║  Results are INDICATIVE only. Do NOT deploy based on these results.         ║\n");
+                banner.push_str(&format!(
+                    "{}║{}  {}{}⚠️  EXPLORATORY GRADE - NOT EXECUTION-REALISTIC{}                              {}║{}\n",
+                    border_color, Theme::reset(), title_color, Theme::bold(), Theme::reset(), border_color, Theme::reset()
+                ));
+                banner.push_str(&format!("{}║{}                                                                              {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}  Snapshot-only data CANNOT validate:                                        {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}    • Queue position tracking                                                 {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}    • Maker (passive) fill timing                                             {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}    • Cancel-fill race resolution                                             {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}                                                                              {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}  Results are INDICATIVE only. Do NOT deploy based on these results.         {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
             }
             Self::SimulationOnly => {
-                banner.push_str("║  🚫 SIMULATION ONLY - RESULTS NOT RELIABLE                                   ║\n");
-                banner.push_str("║                                                                              ║\n");
-                banner.push_str("║  Missing required data streams:                                              ║\n");
-                banner.push_str("║    • Orderbook history may be absent                                         ║\n");
-                banner.push_str("║    • Trade prints may be absent                                              ║\n");
-                banner.push_str("║    • Timestamps may be unusable                                              ║\n");
-                banner.push_str("║                                                                              ║\n");
-                banner.push_str("║  For EXPLORATION ONLY. Never use for production decisions.                  ║\n");
+                banner.push_str(&format!(
+                    "{}║{}  {}{}🚫 SIMULATION ONLY - RESULTS NOT RELIABLE{}                                   {}║{}\n",
+                    border_color, Theme::reset(), title_color, Theme::bold(), Theme::reset(), border_color, Theme::reset()
+                ));
+                banner.push_str(&format!("{}║{}                                                                              {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}  Missing required data streams:                                              {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}    • Orderbook history may be absent                                         {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}    • Trade prints may be absent                                              {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}    • Timestamps may be unusable                                              {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}                                                                              {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
+                banner.push_str(&format!("{}║{}  For EXPLORATION ONLY. Never use for production decisions.                  {}║{}\n", border_color, Theme::reset(), border_color, Theme::reset()));
             }
         }
         
-        banner.push_str("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+        // Bottom border
+        banner.push_str(&format!(
+            "{}╚══════════════════════════════════════════════════════════════════════════════╝{}\n",
+            border_color, Theme::reset()
+        ));
+        
         banner
     }
     

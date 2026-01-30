@@ -60,6 +60,8 @@ pub mod clock;
 pub mod l2_delta;
 pub mod l2_storage;
 pub mod l2_replay;
+// Dome replay adapter for dome_replay_data_v3.db
+pub mod dome_replay_feed;
 // HFT-grade trade print recording and replay for slippage/impact attribution
 pub mod trade_print;
 pub mod trade_print_storage;
@@ -78,6 +80,8 @@ pub mod data_pipeline;
 pub mod disclaimers;
 pub mod equity_curve;
 pub mod maker_validation;
+// Polymarket 15M Up/Down fee schedule (time-dependent, introduced Jan 6 2025)
+pub mod fees_15m;
 // Pre-resolved market registry for hermetic backtesting
 pub mod market_registry;
 pub mod delta_recorder;
@@ -137,6 +141,8 @@ pub mod validation;
 pub mod window_pnl;
 pub mod visibility;
 pub mod honesty;
+// Theme configuration for console output (dark/light mode)
+pub mod theme;
 #[cfg(test)]
 mod gate_suite_tests;
 #[cfg(test)]
@@ -481,6 +487,10 @@ pub use publication::{
     PublicationDecision, PublicationError, PublicationGate, PublicationGateError,
     PublicationStatus,
 };
+// Theme configuration for console output (dark/light mode)
+pub use theme::{
+    BannerStyle, Theme, ThemeMode, format_banner, format_metric, format_status_line,
+};
 // HFT-grade L2 delta model, storage, and replay
 pub use l2_delta::{
     BookError, BookFingerprint, DeterministicBook, EventTime as L2EventTime, 
@@ -495,6 +505,8 @@ pub use l2_replay::{
     L2BookManager, L2ContractVerifier, L2DatasetClassification, L2Event, L2ReplayFeed,
     L2TrustGateExt,
 };
+// Dome replay adapter for dome_replay_data_v3.db
+pub use dome_replay_feed::{DomeOrderbookSnapshot, DomeReplayFeed};
 // Pre-resolved market registry for hermetic backtesting
 pub use market_registry::{
     ExtractedRegistryParams, FeeSchedule, MarketFlags, MarketKey, MarketMeta, MarketRegistry,
@@ -502,6 +514,11 @@ pub use market_registry::{
     SettlementRule, TokenIds, extract_registry_params, inject_registry_params,
     make_registry_handle, strategy_param_keys, REGISTRY_VERSION,
     TRUST_FAILURE_DATASET_INCOMPATIBLE, TRUST_FAILURE_INVALID_REGISTRY, TRUST_FAILURE_MISSING_REGISTRY,
+};
+// Polymarket 15M Up/Down fee schedule (time-dependent, introduced Jan 6 2025)
+pub use fees_15m::{
+    calculate_fee_15m, calculate_fee_15m_secs, fee_per_share_15m, fees_enabled, fees_enabled_secs,
+    FEE_START_TIMESTAMP_NS, FEE_START_TIMESTAMP_SECS,
 };
 // Taker slippage and fill model for realistic execution modeling
 pub use taker_slippage::{

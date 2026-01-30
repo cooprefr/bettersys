@@ -21,9 +21,17 @@
 :root[data-theme='light'] {
   color-scheme: light;
 
+  /* Base colors */
   --c-bg: 250 250 250;
-  --c-surface: 242 243 245;
-  --c-fg: 8 8 8;
+  --c-surface: 255 255 255;
+  --c-fg: 20 20 20;
+  
+  /* UI colors - adjusted for light background */
+  --c-grey: 100 110 140;
+  --c-accent: 0 50 200;
+  --c-success: 0 150 0;
+  --c-danger: 200 0 0;
+  --c-warning: 180 120 0;
 }
 
 * {

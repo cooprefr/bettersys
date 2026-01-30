@@ -38,6 +38,7 @@
 
 use crate::backtest_v2::event_time::VisibleNanos;
 use crate::backtest_v2::events::{OrderId, Price, Side, Size, TimeInForce};
+use crate::backtest_v2::fees_15m;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -78,7 +79,7 @@ pub fn tick_to_price(tick: PriceTick, tick_size: Price) -> Price {
 pub struct TakerSlippageConfig {
     /// Tick size for price levels.
     pub tick_size: Price,
-    /// Taker fee rate (e.g., 0.001 = 10 bps).
+    /// Taker fee rate (e.g., 0.001 = 10 bps). Only used if `use_15m_fee_schedule` is false.
     pub taker_fee_rate: f64,
     /// Minimum order size.
     pub min_order_size: Size,
@@ -90,18 +91,25 @@ pub struct TakerSlippageConfig {
     pub reject_on_empty_book: bool,
     /// Whether to label results as not production-grade when using snapshot-only data.
     pub is_snapshot_only: bool,
+    /// Whether to use the Polymarket 15M Up/Down fee schedule (price-dependent, time-dependent).
+    /// When true, uses `fees_15m::calculate_fee_15m` which:
+    /// - Returns 0 fees before January 6, 2025
+    /// - Uses the official Polymarket price-dependent fee table after January 6, 2025
+    #[serde(default)]
+    pub use_15m_fee_schedule: bool,
 }
 
 impl Default for TakerSlippageConfig {
     fn default() -> Self {
         Self {
             tick_size: DEFAULT_TICK_SIZE,
-            taker_fee_rate: 0.001, // 10 bps
+            taker_fee_rate: 0.001, // 10 bps (fallback, not used when use_15m_fee_schedule=true)
             min_order_size: MIN_ORDER_SIZE,
             max_order_size: 1_000_000.0,
             allow_partial_fills: true,
             reject_on_empty_book: false,
             is_snapshot_only: false,
+            use_15m_fee_schedule: false, // Default to old behavior for backwards compatibility
         }
     }
 }
@@ -123,16 +131,32 @@ impl TakerSlippageConfig {
         }
     }
 
-    /// Polymarket-specific configuration.
+    /// Polymarket-specific configuration (legacy flat fee).
     pub fn polymarket() -> Self {
         Self {
             tick_size: 0.01,
-            taker_fee_rate: 0.001, // Polymarket typical taker fee
+            taker_fee_rate: 0.001, // Polymarket typical taker fee (legacy)
             min_order_size: 1.0,
             max_order_size: 100_000.0,
             allow_partial_fills: true,
             reject_on_empty_book: false,
             is_snapshot_only: false,
+            use_15m_fee_schedule: false,
+        }
+    }
+
+    /// Polymarket 15M Up/Down configuration with correct fee schedule.
+    /// Uses price-dependent fees and respects the January 6, 2025 fee start date.
+    pub fn polymarket_15m_updown() -> Self {
+        Self {
+            tick_size: 0.01,
+            taker_fee_rate: 0.0, // Not used when use_15m_fee_schedule=true
+            min_order_size: 1.0,
+            max_order_size: 100_000.0,
+            allow_partial_fills: true,
+            reject_on_empty_book: false,
+            is_snapshot_only: false,
+            use_15m_fee_schedule: true,
         }
     }
 }
@@ -703,7 +727,7 @@ impl TakerFillModel {
         }
 
         // Sweep the book
-        let fills = self.sweep_book(order, book);
+        let fills = self.sweep_book(order, book, visible_ts);
 
         // Compute totals
         let total_filled: Size = fills.iter().map(|f| f.size).sum();
@@ -820,6 +844,23 @@ impl TakerFillModel {
         None
     }
 
+    /// Calculate fee for a fill based on configuration.
+    ///
+    /// If `use_15m_fee_schedule` is enabled, uses the Polymarket 15M Up/Down
+    /// price-dependent fee schedule (which also respects the January 6, 2025 start date).
+    /// Otherwise, uses the flat `taker_fee_rate` from config.
+    #[inline]
+    fn calculate_fill_fee(&self, price: f64, size: f64, visible_ts: VisibleNanos) -> f64 {
+        if self.config.use_15m_fee_schedule {
+            // Use 15M fee schedule: price-dependent, time-dependent
+            fees_15m::calculate_fee_15m(price, size, visible_ts.0)
+        } else {
+            // Use flat fee rate (legacy behavior)
+            let notional = price * size;
+            notional * self.config.taker_fee_rate
+        }
+    }
+
     /// Sweep the book and generate fills.
     ///
     /// This implements the core price-walk algorithm:
@@ -827,7 +868,7 @@ impl TakerFillModel {
     /// - For sells: iterate bids from highest to lowest
     /// - At each level: fill min(remaining, level_size)
     /// - Stop when filled, limit exceeded, or book exhausted
-    fn sweep_book(&self, order: &TakerOrderRequest, book: &mut SimulatedL2Book) -> Vec<LevelFill> {
+    fn sweep_book(&self, order: &TakerOrderRequest, book: &mut SimulatedL2Book, visible_ts: VisibleNanos) -> Vec<LevelFill> {
         let mut fills = Vec::new();
         let mut remaining = order.size;
         let limit_tick = price_to_tick(order.limit_price, self.config.tick_size);
@@ -856,8 +897,7 @@ impl TakerFillModel {
                     let fill_size = level.consume(remaining);
                     if fill_size > 0.0 {
                         let price = tick_to_price(tick, self.config.tick_size);
-                        let notional = price * fill_size;
-                        let fee = notional * self.config.taker_fee_rate;
+                        let fee = self.calculate_fill_fee(price, fill_size, visible_ts);
 
                         fills.push(LevelFill::new(price, fill_size, fee, tick));
                         remaining -= fill_size;
@@ -892,8 +932,7 @@ impl TakerFillModel {
                     let fill_size = level.consume(remaining);
                     if fill_size > 0.0 {
                         let price = tick_to_price(tick, self.config.tick_size);
-                        let notional = price * fill_size;
-                        let fee = notional * self.config.taker_fee_rate;
+                        let fee = self.calculate_fill_fee(price, fill_size, visible_ts);
 
                         fills.push(LevelFill::new(price, fill_size, fee, tick));
                         remaining -= fill_size;

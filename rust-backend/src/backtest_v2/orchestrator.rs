@@ -273,28 +273,80 @@ pub fn determine_operating_mode(
 }
 
 /// Format a startup banner showing the operating mode and truth boundaries.
+/// Uses theme-aware colors for both dark and light terminal backgrounds.
 pub fn format_operating_mode_banner(mode: BacktestOperatingMode) -> String {
+    use crate::backtest_v2::theme::Theme;
+    
+    // Select colors based on mode
+    let (border_color, title_color, check_color, cross_color) = match mode {
+        BacktestOperatingMode::ProductionGrade => (
+            Theme::fg_green(), Theme::fg_green(), Theme::fg_green(), Theme::fg_red()
+        ),
+        BacktestOperatingMode::ResearchGrade => (
+            Theme::fg_yellow(), Theme::fg_yellow(), Theme::fg_green(), Theme::fg_red()
+        ),
+        BacktestOperatingMode::TakerOnly => (
+            Theme::fg_cyan(), Theme::fg_cyan(), Theme::fg_green(), Theme::fg_red()
+        ),
+    };
+    
     let mut out = String::new();
     out.push_str("\n");
-    out.push_str("╔══════════════════════════════════════════════════════════════════════════════╗\n");
-    out.push_str("║                      BACKTEST OPERATING MODE                                 ║\n");
-    out.push_str("╠══════════════════════════════════════════════════════════════════════════════╣\n");
-    out.push_str(&format!("║  MODE: {:69} ║\n", mode.description()));
-    out.push_str("╠══════════════════════════════════════════════════════════════════════════════╣\n");
-    out.push_str("║  ALLOWED CLAIMS:                                                             ║\n");
+    out.push_str(&format!(
+        "{}╔══════════════════════════════════════════════════════════════════════════════╗{}\n",
+        border_color, Theme::reset()
+    ));
+    out.push_str(&format!(
+        "{}║{}                      {}{}BACKTEST OPERATING MODE{}                                 {}║{}\n",
+        border_color, Theme::reset(), title_color, Theme::bold(), Theme::reset(), border_color, Theme::reset()
+    ));
+    out.push_str(&format!(
+        "{}╠══════════════════════════════════════════════════════════════════════════════╣{}\n",
+        border_color, Theme::reset()
+    ));
+    out.push_str(&format!(
+        "{}║{}  MODE: {}{:69}{} {}║{}\n",
+        border_color, Theme::reset(), title_color, mode.description(), Theme::reset(), border_color, Theme::reset()
+    ));
+    out.push_str(&format!(
+        "{}╠══════════════════════════════════════════════════════════════════════════════╣{}\n",
+        border_color, Theme::reset()
+    ));
+    out.push_str(&format!(
+        "{}║{}  {}ALLOWED CLAIMS:{}                                                             {}║{}\n",
+        border_color, Theme::reset(), Theme::fg_dim(), Theme::reset(), border_color, Theme::reset()
+    ));
     for claim in mode.allowed_claims() {
-        out.push_str(&format!("║    ✓ {:70} ║\n", claim));
+        out.push_str(&format!(
+            "{}║{}    {}✓{} {:70} {}║{}\n",
+            border_color, Theme::reset(), check_color, Theme::reset(), claim, border_color, Theme::reset()
+        ));
     }
-    out.push_str("╠══════════════════════════════════════════════════════════════════════════════╣\n");
-    out.push_str("║  PROHIBITED CLAIMS:                                                          ║\n");
+    out.push_str(&format!(
+        "{}╠══════════════════════════════════════════════════════════════════════════════╣{}\n",
+        border_color, Theme::reset()
+    ));
+    out.push_str(&format!(
+        "{}║{}  {}PROHIBITED CLAIMS:{}                                                          {}║{}\n",
+        border_color, Theme::reset(), Theme::fg_dim(), Theme::reset(), border_color, Theme::reset()
+    ));
     if mode.prohibited_claims().is_empty() {
-        out.push_str("║    (none - all claims allowed)                                               ║\n");
+        out.push_str(&format!(
+            "{}║{}    {}(none - all claims allowed){}                                               {}║{}\n",
+            border_color, Theme::reset(), Theme::fg_dim(), Theme::reset(), border_color, Theme::reset()
+        ));
     } else {
         for claim in mode.prohibited_claims() {
-            out.push_str(&format!("║    ✗ {:70} ║\n", claim));
+            out.push_str(&format!(
+                "{}║{}    {}✗{} {:70} {}║{}\n",
+                border_color, Theme::reset(), cross_color, Theme::reset(), claim, border_color, Theme::reset()
+            ));
         }
     }
-    out.push_str("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+    out.push_str(&format!(
+        "{}╚══════════════════════════════════════════════════════════════════════════════╝{}\n",
+        border_color, Theme::reset()
+    ));
     out
 }
 
@@ -3798,15 +3850,23 @@ impl BacktestOrchestrator {
             }
         }
 
-        // Calculate max drawdown
-        let mut peak = 0.0f64;
-        let mut max_dd = 0.0f64;
-        for &pnl in &self.pnl_history {
-            peak = peak.max(pnl);
-            let dd = peak - pnl;
-            max_dd = max_dd.max(dd);
+        // Calculate max drawdown from equity curve (not pnl_history)
+        // The equity curve captures true economic drawdown including unrealized P&L,
+        // while pnl_history only tracks realized P&L at each fill.
+        if let Some(ref curve) = self.results.equity_curve {
+            use crate::backtest_v2::ledger::from_amount;
+            self.results.max_drawdown = from_amount(curve.max_drawdown());
+        } else {
+            // Fallback to pnl_history if no equity curve (legacy/non-ledger mode)
+            let mut peak = 0.0f64;
+            let mut max_dd = 0.0f64;
+            for &pnl in &self.pnl_history {
+                peak = peak.max(pnl);
+                let dd = peak - pnl;
+                max_dd = max_dd.max(dd);
+            }
+            self.results.max_drawdown = max_dd;
         }
-        self.results.max_drawdown = max_dd;
 
         // Calculate win rate
         if self.pnl_history.len() > 1 {

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TradeBetter Terminal - Coming Soon</title>
+  <meta name="description" content="TradeBetter Terminal - Elite trading signals for prediction markets. Coming soon.">
+  <link rel="icon" type="image/svg+xml" href="/logo-better.svg">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      background: #0a0e14;
+      color: #ffffff;
+      font-family: 'Times New Roman', Times, serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .nebula-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: url('/nebula.png') no-repeat center center;
+      background-size: cover;
+      z-index: 0;
+    }
+
+    .twinkle {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .twinkle span {
+      position: absolute;
+      width: 2px;
+      height: 2px;
+      background: white;
+      border-radius: 50%;
+      opacity: 0.5;
+    }
+
+    .twinkle span:nth-child(1) { top: 8%; left: 12%; animation: twinkle 8s ease-in-out 2s infinite; }
+    .twinkle span:nth-child(2) { top: 22%; left: 42%; animation: twinkle 10s ease-in-out 4s infinite; }
+    .twinkle span:nth-child(3) { top: 12%; left: 78%; animation: twinkle 7s ease-in-out 1s infinite; }
+    .twinkle span:nth-child(4) { top: 38%; left: 8%; animation: twinkle 9s ease-in-out 6s infinite; }
+    .twinkle span:nth-child(5) { top: 32%; left: 88%; animation: twinkle 11s ease-in-out 3s infinite; }
+    .twinkle span:nth-child(6) { top: 58%; left: 5%; animation: twinkle 8s ease-in-out 7s infinite; }
+    .twinkle span:nth-child(7) { top: 65%; left: 92%; animation: twinkle 12s ease-in-out 5s infinite; }
+    .twinkle span:nth-child(8) { top: 75%; left: 15%; animation: twinkle 9s ease-in-out 8s infinite; }
+    .twinkle span:nth-child(9) { top: 82%; left: 75%; animation: twinkle 10s ease-in-out 2.5s infinite; }
+    .twinkle span:nth-child(10) { top: 88%; left: 25%; animation: twinkle 7s ease-in-out 9s infinite; }
+
+    @keyframes twinkle {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
+    }
+
+    .container {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 3rem 4rem;
+      background: radial-gradient(ellipse at center, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.25) 30%, rgba(0,0,0,0.1) 50%, rgba(0,0,0,0.03) 70%, transparent 100%);
+    }
+
+    .logo-container {
+      position: relative;
+    }
+
+    .star-logo {
+      width: 120px;
+      height: auto;
+      filter: drop-shadow(0 0 15px rgba(0,0,0,0.5)) drop-shadow(0 0 30px rgba(255,255,255,0.25));
+    }
+
+    .text-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .title {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: #ffffff;
+      line-height: 1.1;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.3);
+    }
+
+    .subtitle {
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: #ffffff;
+      line-height: 1.1;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.6), 0 0 20px rgba(255,255,255,0.3);
+    }
+
+    .corner-star {
+      position: fixed;
+      bottom: 30px;
+      right: 30px;
+      width: 40px;
+      height: auto;
+      opacity: 0.7;
+      z-index: 10;
+      filter: drop-shadow(0 0 10px rgba(255,255,255,0.5));
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        flex-direction: column;
+        text-align: center;
+        gap: 1.5rem;
+      }
+      
+      .star-logo {
+        width: 100px;
+      }
+      
+      .title, .subtitle {
+        font-size: 1.25rem;
+      }
+      
+      .corner-star {
+        width: 30px;
+        bottom: 20px;
+        right: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="nebula-bg"></div>
+  
+  <div class="twinkle">
+    <span></span><span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span><span></span>
+  </div>
+  
+  <div class="container">
+    <div class="logo-container">
+      <svg class="star-logo" viewBox="0 0 450 376" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M343.999 0L272.765 155.846L441.95 183.024L236.528 210.201L99.9667 366.048L171.201 210.201L2.01537 183.024L207.438 155.846L343.999 0Z" fill="white"/>
+        <path d="M450.483 54L429.991 98.8337L478.662 106.652L419.566 114.471L380.28 159.304L400.773 114.471L352.102 106.652L411.197 98.8337L450.483 54Z" fill="white"/>
+        <path d="M354.321 43.0586H358.653L356.745 47.2347H350.66L354.321 43.0586Z" fill="white"/>
+        <path d="M351.974 57.6798H341.512L345.172 53.502H353.882L351.974 57.6798Z" fill="white"/>
+        <path d="M347.203 68.1192H332.363L336.024 63.9414H349.111L347.203 68.1192Z" fill="white"/>
+        <path d="M323.215 78.5629L328.706 72.297L330.506 70.2422V74.3851H344.342L342.431 78.5629H323.215Z" fill="white"/>
+        <path d="M314.066 89.0042L319.556 82.7383H330.507V84.828H339.567L337.659 89.0042H314.066Z" fill="white"/>
+        <path d="M304.918 99.4478L310.407 93.1836H330.508V95.2717H334.796L332.887 99.4478H304.918Z" fill="white"/>
+        <path d="M328.11 109.891H295.762L301.253 103.625H330.504V104.652L328.11 109.891Z" fill="white"/>
+        <path d="M323.337 120.332H286.613L292.103 114.066H326.2L323.337 120.332Z" fill="white"/>
+        <path d="M318.566 130.774H277.465L282.954 124.508H321.429L318.566 130.774Z" fill="white"/>
+        <path d="M313.789 141.217H268.311L273.802 134.951H316.652L313.789 141.217Z" fill="white"/>
+        <path d="M308.063 153.748H257.332L264.652 145.395H311.881L308.063 153.748Z" fill="white"/>
+        <path d="M302.334 166.278H246.352L253.671 157.924H306.153L302.334 166.278Z" fill="white"/>
+        <path d="M298.965 178.809H233.02L235.683 178.457L242.693 170.455H300.428L296.771 178.457L298.965 178.809Z" fill="white"/>
+        <path d="M330.504 210.138V208.05H182.223H163.773L169.5 216.404H360.258L407.618 210.138H330.504ZM201.002 231.022L198.138 237.288H255.874L261.363 231.022H201.002ZM191.456 251.908L188.592 258.172H237.573L243.063 251.908H191.456ZM182.223 314.562V312.474H163.773L159.954 320.828H182.223V321.34L182.672 320.828L188.163 314.562H182.223ZM154.227 333.358L150.408 341.712H164.371L171.693 333.358H154.227ZM138.954 366.773L135.183 375.023L142.412 366.773H138.954ZM149.454 343.8L145.637 352.154H155.223L162.543 343.8H149.454ZM139.908 364.685H144.242L153.392 354.242H144.681L139.908 364.685ZM159 322.916L155.181 331.27H173.522L180.841 322.916H159ZM182.223 304.12V302.03H168.546L164.727 310.384H191.824L197.312 304.12H182.223ZM182.223 293.678V291.588H173.319L169.5 299.942H200.972L206.462 293.678H182.223ZM182.223 283.234V281.146H178.092L174.273 289.5H210.123L215.614 283.234H182.223ZM182.223 272.792V272.107L179.046 279.058H219.273L224.762 272.792H182.223ZM186.683 262.35L183.819 268.616H228.423L233.913 262.35H186.683ZM196.228 241.466L193.365 247.73H246.724L252.213 241.466H196.228ZM182.223 220.58V218.492H186.683L178.092 226.846H281.331L328.692 220.58H182.223ZM415.982 197.608H330.504V195.518H182.223V193.43H122.512L150.408 203.872H454.979L415.982 197.608ZM337.97 185.076L330.504 183.878L324.972 182.988H201.439L138.295 191.342H376.976L337.97 185.076Z" fill="white"/>
+      </svg>
+    </div>
+    
+    <div class="text-container">
+      <span class="title">TERMINAL</span>
+      <span class="subtitle">SOON</span>
+    </div>
+  </div>
+
+  <svg class="corner-star" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M50 0L45 45L0 50L45 55L50 100L55 55L100 50L55 45L50 0Z" fill="white"/>
+  </svg>
+</body>
+</html>
