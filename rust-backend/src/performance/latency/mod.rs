@@ -7,22 +7,33 @@
 //! - REST API response times
 //! - WebSocket broadcast latency
 //! - Tick-to-trade for trading engines
+//!
+//! P99.9 OPTIMIZATION: Uses atomic counters for lock-free recording in hot paths.
+//! RwLock is only used for cold-path operations (recent_spans, component_status).
 
 use parking_lot::RwLock;
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
     time::Instant,
 };
 
+pub mod binance_harness;
 pub mod comprehensive;
 pub mod histogram;
+pub mod regression;
+pub mod socket_tuning;
 pub mod spans;
+pub mod time_sync;
 
 pub use comprehensive::*;
 pub use histogram::*;
+pub use regression::*;
+pub use socket_tuning::*;
 pub use spans::*;
+pub use time_sync::*;
 
 /// System-wide latency registry
 /// Thread-safe singleton that collects metrics from all components
@@ -66,8 +77,8 @@ pub struct SystemLatencyRegistry {
     pub ws_client_rtt: LatencyHistogram,
     pub ws_broadcast_latency: LatencyHistogram,
 
-    // === Counters ===
-    pub counters: RwLock<LatencyCounters>,
+    // === Counters (P99.9 OPTIMIZATION: lock-free atomics) ===
+    pub counters: AtomicLatencyCounters,
 
     // === Recent Spans (for debugging) ===
     pub recent_spans: RwLock<VecDeque<LatencySpan>>,
@@ -78,6 +89,63 @@ pub struct SystemLatencyRegistry {
 
     // === Time series for dashboard ===
     pub time_series: RwLock<LatencyTimeSeries>,
+}
+
+/// P99.9 OPTIMIZATION: Lock-free atomic counters for hot-path metrics.
+/// All increments are atomic; reads snapshot the current values.
+#[derive(Debug, Default)]
+pub struct AtomicLatencyCounters {
+    // Market data
+    pub binance_updates: AtomicU64,
+    pub dome_ws_events: AtomicU64,
+    pub dome_rest_calls: AtomicU64,
+    pub polymarket_book_updates: AtomicU64,
+
+    // Signals
+    pub signals_detected: AtomicU64,
+    pub signals_stored: AtomicU64,
+    pub signals_broadcast: AtomicU64,
+
+    // Trading
+    pub fast15m_evaluations: AtomicU64,
+    pub fast15m_trades: AtomicU64,
+    pub long_evaluations: AtomicU64,
+    pub long_trades: AtomicU64,
+
+    // API
+    pub api_requests: AtomicU64,
+    pub api_errors: AtomicU64,
+
+    // Cache
+    pub cache_hits: AtomicU64,
+    pub cache_misses: AtomicU64,
+}
+
+impl AtomicLatencyCounters {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Snapshot all counters into a serializable struct (cold path)
+    pub fn snapshot(&self) -> LatencyCounters {
+        LatencyCounters {
+            binance_updates: self.binance_updates.load(Ordering::Relaxed),
+            dome_ws_events: self.dome_ws_events.load(Ordering::Relaxed),
+            dome_rest_calls: self.dome_rest_calls.load(Ordering::Relaxed),
+            polymarket_book_updates: self.polymarket_book_updates.load(Ordering::Relaxed),
+            signals_detected: self.signals_detected.load(Ordering::Relaxed),
+            signals_stored: self.signals_stored.load(Ordering::Relaxed),
+            signals_broadcast: self.signals_broadcast.load(Ordering::Relaxed),
+            fast15m_evaluations: self.fast15m_evaluations.load(Ordering::Relaxed),
+            fast15m_trades: self.fast15m_trades.load(Ordering::Relaxed),
+            long_evaluations: self.long_evaluations.load(Ordering::Relaxed),
+            long_trades: self.long_trades.load(Ordering::Relaxed),
+            api_requests: self.api_requests.load(Ordering::Relaxed),
+            api_errors: self.api_errors.load(Ordering::Relaxed),
+            cache_hits: self.cache_hits.load(Ordering::Relaxed),
+            cache_misses: self.cache_misses.load(Ordering::Relaxed),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -188,8 +256,8 @@ impl SystemLatencyRegistry {
             ws_client_rtt: LatencyHistogram::new(),
             ws_broadcast_latency: LatencyHistogram::new(),
 
-            // Counters
-            counters: RwLock::new(LatencyCounters::default()),
+            // Counters (lock-free)
+            counters: AtomicLatencyCounters::new(),
 
             // Spans
             recent_spans: RwLock::new(VecDeque::with_capacity(1000)),
@@ -207,24 +275,28 @@ impl SystemLatencyRegistry {
     }
 
     /// Record a latency span and update relevant histograms
+    /// 
+    /// P99.9 OPTIMIZATION: Uses lock-free atomic increments for counters.
+    /// Only the recent_spans storage requires a lock (and can be disabled for max perf).
+    #[inline]
     pub fn record_span(&self, span: LatencySpan) {
-        // Update histogram based on span type
+        // Update histogram based on span type (histograms are now lock-free)
         match span.span_type {
             SpanType::BinanceWs => {
                 self.binance_ws_latency.record(span.duration_us);
-                self.counters.write().binance_updates += 1;
+                self.counters.binance_updates.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::DomeWs => {
                 self.dome_ws_latency.record(span.duration_us);
-                self.counters.write().dome_ws_events += 1;
+                self.counters.dome_ws_events.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::DomeRest => {
                 self.dome_rest_latency.record(span.duration_us);
-                self.counters.write().dome_rest_calls += 1;
+                self.counters.dome_rest_calls.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::PolymarketWs => {
                 self.polymarket_ws_latency.record(span.duration_us);
-                self.counters.write().polymarket_book_updates += 1;
+                self.counters.polymarket_book_updates.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::PolymarketRest => {
                 self.polymarket_rest_latency.record(span.duration_us);
@@ -234,18 +306,18 @@ impl SystemLatencyRegistry {
             }
             SpanType::SignalDetection => {
                 self.signal_detection_latency.record(span.duration_us);
-                self.counters.write().signals_detected += 1;
+                self.counters.signals_detected.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::SignalEnrichment => {
                 self.signal_enrichment_latency.record(span.duration_us);
             }
             SpanType::SignalBroadcast => {
                 self.signal_broadcast_latency.record(span.duration_us);
-                self.counters.write().signals_broadcast += 1;
+                self.counters.signals_broadcast.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::SignalStorage => {
                 self.signal_storage_latency.record(span.duration_us);
-                self.counters.write().signals_stored += 1;
+                self.counters.signals_stored.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::DbRead => {
                 self.db_read_latency.record(span.duration_us);
@@ -258,27 +330,27 @@ impl SystemLatencyRegistry {
             }
             SpanType::ApiSignals => {
                 self.api_signals_latency.record(span.duration_us);
-                self.counters.write().api_requests += 1;
+                self.counters.api_requests.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::ApiSearch => {
                 self.api_search_latency.record(span.duration_us);
-                self.counters.write().api_requests += 1;
+                self.counters.api_requests.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::ApiWalletAnalytics => {
                 self.api_wallet_analytics_latency.record(span.duration_us);
-                self.counters.write().api_requests += 1;
+                self.counters.api_requests.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::ApiMarketSnapshot => {
                 self.api_market_snapshot_latency.record(span.duration_us);
-                self.counters.write().api_requests += 1;
+                self.counters.api_requests.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::ApiVault => {
                 self.api_vault_latency.record(span.duration_us);
-                self.counters.write().api_requests += 1;
+                self.counters.api_requests.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::Fast15mT2T => {
                 self.fast15m_t2t_latency.record(span.duration_us);
-                self.counters.write().fast15m_evaluations += 1;
+                self.counters.fast15m_evaluations.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::Fast15mGamma => {
                 self.fast15m_gamma_lookup.record(span.duration_us);
@@ -288,11 +360,11 @@ impl SystemLatencyRegistry {
             }
             SpanType::Fast15mOrder => {
                 self.fast15m_order_submit.record(span.duration_us);
-                self.counters.write().fast15m_trades += 1;
+                self.counters.fast15m_trades.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::LongT2T => {
                 self.long_t2t_latency.record(span.duration_us);
-                self.counters.write().long_evaluations += 1;
+                self.counters.long_evaluations.fetch_add(1, Ordering::Relaxed);
             }
             SpanType::LongLlm => {
                 self.long_llm_latency.record(span.duration_us);
@@ -305,7 +377,8 @@ impl SystemLatencyRegistry {
             }
         }
 
-        // Store recent span
+        // Store recent span (cold path - only lock if we're storing spans)
+        // This is the only remaining lock in the hot path
         let mut spans = self.recent_spans.write();
         if spans.len() >= self.max_recent_spans {
             spans.pop_front();
@@ -330,24 +403,25 @@ impl SystemLatencyRegistry {
         entry.error_count += error_delta;
     }
 
-    /// Record cache hit/miss
+    /// Record cache hit/miss (lock-free)
+    #[inline]
     pub fn record_cache(&self, hit: bool) {
-        let mut counters = self.counters.write();
         if hit {
-            counters.cache_hits += 1;
+            self.counters.cache_hits.fetch_add(1, Ordering::Relaxed);
         } else {
-            counters.cache_misses += 1;
+            self.counters.cache_misses.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Record API error
+    /// Record API error (lock-free)
+    #[inline]
     pub fn record_api_error(&self) {
-        self.counters.write().api_errors += 1;
+        self.counters.api_errors.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Get comprehensive system summary
     pub fn summary(&self) -> SystemLatencySummary {
-        let counters = self.counters.read().clone();
+        let counters = self.counters.snapshot();
         let status: Vec<ComponentStatus> = self.component_status.read().values().cloned().collect();
 
         SystemLatencySummary {
@@ -403,22 +477,21 @@ impl SystemLatencyRegistry {
                 broadcast: self.ws_broadcast_latency.summary("ws_broadcast"),
             },
 
-            // Counters
-            counters,
-
             // Component status
             components: status,
 
-            // Cache stats
+            // Cache stats (computed from the snapshotted counters)
             cache_hit_rate: {
-                let c = self.counters.read();
-                let total = c.cache_hits + c.cache_misses;
+                let total = counters.cache_hits + counters.cache_misses;
                 if total > 0 {
-                    c.cache_hits as f64 / total as f64
+                    counters.cache_hits as f64 / total as f64
                 } else {
                     0.0
                 }
             },
+            
+            // Counters (must be last since it's moved)
+            counters,
         }
     }
 
@@ -461,7 +534,7 @@ impl SystemLatencyRegistry {
             api_p99_us: self.api_signals_latency.p99(),
             fast15m_p50_us: self.fast15m_t2t_latency.p50(),
             fast15m_p99_us: self.fast15m_t2t_latency.p99(),
-            sample_count: self.counters.read().api_requests,
+            sample_count: self.counters.api_requests.load(Ordering::Relaxed),
         };
 
         let mut ts = self.time_series.write();

@@ -1,0 +1,19 @@
+# Example terraform.tfvars - copy to terraform.tfvars and customize
+
+# SSH public key for accessing probe instances
+ssh_public_key = "ssh-ed25519 AAAA... user@host"
+
+# Deployment phase: 1 = EU only, 2 = EU + Asia/ME
+phase = 1
+
+# Instance types to test (start with fewer for cost control)
+instance_types_filter = ["c6i_large", "c6in_large"]
+
+# Warmup period before recording metrics
+warmup_sec = 300
+
+# Metrics HTTP port
+metrics_port = 9090
+
+# Restrict SSH access (recommended for production)
+# allowed_ssh_cidrs = ["YOUR_IP/32"]

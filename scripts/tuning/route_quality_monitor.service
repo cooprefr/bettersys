@@ -1,0 +1,58 @@
+# Systemd service file for Route Quality Monitor
+# Install: sudo cp route_quality_monitor.service /etc/systemd/system/
+# Enable: sudo systemctl enable route_quality_monitor
+# Start: sudo systemctl start route_quality_monitor
+
+[Unit]
+Description=Route Quality Monitor for Binance Endpoints
+Documentation=file:///opt/betterbot/docs/ROUTE_QUALITY_MONITOR_SPEC.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=betterbot
+Group=betterbot
+
+# Binary and configuration
+ExecStart=/opt/betterbot/bin/route_quality_monitor \
+    --config /opt/betterbot/config/route_quality.toml \
+    --metrics-port 9091 \
+    --log-level info
+
+# Working directory
+WorkingDirectory=/opt/betterbot
+
+# Environment
+Environment="RUST_LOG=info,route_quality=debug"
+Environment="RUST_BACKTRACE=1"
+
+# Capabilities for ICMP ping (alternative: setcap on binary)
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+
+# Resource limits
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Restart policy
+Restart=always
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/
+ReadWritePaths=/opt/betterbot/logs /opt/betterbot/data
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=route-quality-monitor
+
+[Install]
+WantedBy=multi-user.target

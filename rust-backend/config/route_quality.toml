@@ -1,0 +1,116 @@
+# Route Quality Monitor Configuration
+# 
+# This file configures the route quality monitoring service for Binance endpoints.
+# All duration values are in milliseconds.
+
+# Endpoints to monitor
+[[endpoints]]
+name = "binance-ws-primary"
+host = "stream.binance.com"
+port = 9443
+protocol = "wss"
+priority = 1
+weight = 100
+
+[[endpoints]]
+name = "binance-ws-backup1"
+host = "stream1.binance.com"
+port = 9443
+protocol = "wss"
+priority = 2
+weight = 50
+
+[[endpoints]]
+name = "binance-ws-backup2"
+host = "stream2.binance.com"
+port = 9443
+protocol = "wss"
+priority = 2
+weight = 50
+
+[[endpoints]]
+name = "binance-ws-backup3"
+host = "stream3.binance.com"
+port = 9443
+protocol = "wss"
+priority = 3
+weight = 25
+
+[[endpoints]]
+name = "binance-rest-primary"
+host = "api.binance.com"
+port = 443
+protocol = "https"
+priority = 1
+weight = 100
+
+# Probe intervals (milliseconds)
+[probe_intervals]
+icmp = 1000         # 1 second
+tcp = 5000          # 5 seconds
+tls = 10000         # 10 seconds
+dns = 30000         # 30 seconds
+traceroute = 60000  # 60 seconds
+http = 30000        # 30 seconds
+
+# Alert thresholds
+[thresholds]
+rtt_warning_sec = 0.05           # 50ms
+rtt_critical_sec = 0.1           # 100ms
+rtt_warning_sigma = 2.0          # 2 standard deviations above baseline
+rtt_critical_sigma = 4.0         # 4 standard deviations above baseline
+packet_loss_warning = 0.001      # 0.1%
+packet_loss_critical = 0.01      # 1%
+consecutive_failures_critical = 5
+tcp_connect_warning_sec = 0.02   # 20ms
+tcp_connect_critical_sec = 0.05  # 50ms
+tls_handshake_warning_sec = 0.1  # 100ms
+tls_handshake_critical_sec = 0.2 # 200ms
+dns_warning_sec = 0.05           # 50ms
+dns_critical_sec = 0.1           # 100ms
+hop_count_delta_alert = 2
+health_score_warning = 80.0
+health_score_critical = 50.0
+
+# DNS policy
+[dns_policy]
+refresh_interval = 300000        # 5 minutes
+min_ttl = 60000                  # 1 minute
+max_ttl = 3600000                # 1 hour
+use_cached_on_failure = true
+failure_retry_interval = 10000   # 10 seconds
+max_retries = 6
+resolvers = ["8.8.8.8", "1.1.1.1"]
+resolver_timeout = 2000          # 2 seconds
+
+# Connection policy
+[connection_policy]
+min_connections = 2
+max_connections = 5
+idle_timeout = 300000            # 5 minutes
+health_check_interval = 10000    # 10 seconds
+health_check_timeout = 5000      # 5 seconds
+unhealthy_threshold = 3
+healthy_threshold = 2
+max_age = 3600000                # 1 hour
+drain_timeout = 30000            # 30 seconds
+refresh_cooldown = 30000         # 30 seconds
+
+# Failover policy
+[failover_policy]
+enabled = true
+cooldown = 300000                # 5 minutes
+verify_candidate = true
+verify_timeout = 5000            # 5 seconds
+failback_enabled = true
+failback_check_interval = 60000  # 1 minute
+failback_stable_duration = 300000 # 5 minutes
+circuit_breaker_threshold = 5
+circuit_breaker_success = 3
+circuit_breaker_timeout = 60000  # 1 minute
+
+# Baseline calculation
+[baseline]
+window = 86400000                # 24 hours
+recalculate_interval = 3600000   # 1 hour
+outlier_sigma = 3.0

@@ -1,0 +1,159 @@
+# Prometheus scrape config for Route Quality Monitor
+# Add to your prometheus.yml scrape_configs section
+
+scrape_configs:
+  - job_name: 'route-quality-monitor'
+    scrape_interval: 5s
+    scrape_timeout: 4s
+    static_configs:
+      - targets: ['localhost:9091']
+        labels:
+          service: 'route-quality'
+          environment: 'production'
+
+# Recording rules for baselines and aggregations
+# Save as /etc/prometheus/rules/route_quality_rules.yml
+
+rule_files:
+  - /etc/prometheus/rules/route_quality_rules.yml
+
+---
+# /etc/prometheus/rules/route_quality_rules.yml
+
+groups:
+  - name: route_quality_baselines
+    interval: 1m
+    rules:
+      # RTT baseline (24h rolling)
+      - record: route_quality:rtt_p50:24h
+        expr: |
+          histogram_quantile(0.5,
+            sum(rate(route_quality_rtt_seconds_bucket{probe_type="icmp"}[24h])) by (endpoint, le)
+          )
+      
+      - record: route_quality:rtt_p99:24h
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(route_quality_rtt_seconds_bucket{probe_type="icmp"}[24h])) by (endpoint, le)
+          )
+      
+      - record: route_quality:rtt_stddev:1h
+        expr: |
+          stddev_over_time(route_quality_rtt_seconds{probe_type="icmp"}[1h])
+      
+      # Packet loss rate (5m window)
+      - record: route_quality:packet_loss:5m
+        expr: |
+          1 - (
+            sum(rate(route_quality_probe_success_total{probe_type="icmp"}[5m])) by (endpoint)
+            /
+            sum(rate(route_quality_probe_total{probe_type="icmp"}[5m])) by (endpoint)
+          )
+      
+      # Path stability (change detection)
+      - record: route_quality:path_changes:1h
+        expr: |
+          changes(route_quality_path_hash[1h])
+      
+      # DNS stability
+      - record: route_quality:dns_changes:1h
+        expr: |
+          sum(increase(route_quality_dns_ip_changed[1h])) by (endpoint)
+
+  - name: route_quality_alerts
+    rules:
+      # === Latency Alerts ===
+      
+      - alert: BinanceRttWarning
+        expr: |
+          route_quality_rtt_seconds{probe_type="icmp"} 
+          > route_quality:rtt_p99:24h + 2 * route_quality:rtt_stddev:1h
+        for: 2m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Elevated RTT to {{ $labels.endpoint }}"
+          description: "RTT {{ $value | humanizeDuration }} exceeds baseline by >2σ"
+      
+      - alert: BinanceRttCritical
+        expr: |
+          route_quality_rtt_seconds{probe_type="icmp"} > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          team: infrastructure
+        annotations:
+          summary: "Critical RTT to {{ $labels.endpoint }}"
+          description: "RTT {{ $value | humanizeDuration }} - consider failover"
+      
+      # === Packet Loss Alerts ===
+      
+      - alert: BinancePacketLossWarning
+        expr: route_quality:packet_loss:5m > 0.001
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Packet loss to {{ $labels.endpoint }}: {{ $value | humanizePercentage }}"
+      
+      - alert: BinancePacketLossCritical
+        expr: route_quality:packet_loss:5m > 0.01
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical packet loss to {{ $labels.endpoint }}"
+      
+      - alert: BinanceConsecutiveLoss
+        expr: route_quality_consecutive_failures >= 5
+        labels:
+          severity: critical
+        annotations:
+          summary: "5+ consecutive probe failures to {{ $labels.endpoint }}"
+      
+      # === Path Change Alerts ===
+      
+      - alert: BinanceRouteChanged
+        expr: changes(route_quality_path_hash[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Route to {{ $labels.endpoint }} changed"
+      
+      # === DNS Alerts ===
+      
+      - alert: BinanceDnsChanged
+        expr: route_quality_dns_ip_changed == 1
+        labels:
+          severity: info
+        annotations:
+          summary: "DNS IP changed for {{ $labels.endpoint }}"
+      
+      # === Health Score ===
+      
+      - alert: BinanceHealthDegraded
+        expr: route_quality_health_score < 80
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Route health degraded: {{ $value }}%"
+      
+      - alert: BinanceHealthCritical
+        expr: route_quality_health_score < 50
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Route health critical: {{ $value }}%"
+      
+      # === Service Health ===
+      
+      - alert: RouteQualityMonitorDown
+        expr: up{job="route-quality-monitor"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Route quality monitor is down"

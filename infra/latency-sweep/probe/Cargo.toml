@@ -1,0 +1,30 @@
+[package]
+name = "binance-latency-probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.35", features = ["full", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+barter-data = "0.10.2"
+barter-instrument = "0.3.1"
+# Pin smol_str to avoid Rust 1.89 requirement (barter-data pulls 0.3.x)
+smol_str = "=0.3.2"
+axum = "0.7"
+tower = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+quanta = "0.12"
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4.4", features = ["derive", "env"] }
+anyhow = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = 'abort'

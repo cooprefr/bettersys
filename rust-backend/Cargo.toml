@@ -99,6 +99,15 @@ memmap2 = "0.9"
 # High-precision timing
 quanta = "0.12"
 
+# High-performance JSON parsing (SIMD-accelerated)
+simd-json = "0.13"
+
+# Fast float parsing
+fast-float = "0.2"
+
+# CPU affinity for pinning tasks
+core_affinity = "0.8"
+
 # HMAC signing for Polymarket CLOB API
 hmac = "0.12"
 sha2 = "0.10"
@@ -106,7 +115,7 @@ base64 = "0.22"
 hex = "0.4"
 
 # CLI argument parsing
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "env"] }
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -164,3 +173,15 @@ path = "src/bin/backtest_run.rs"
 [[bin]]
 name = "replay_dome_window"
 path = "src/bin/replay_dome_window.rs"
+
+[[bin]]
+name = "binance_ingest_bench"
+path = "src/bin/binance_ingest_bench.rs"
+
+[[bin]]
+name = "route_quality_monitor"
+path = "src/bin/route_quality_monitor.rs"
+
+[[bin]]
+name = "edge_receiver"
+path = "src/bin/edge_receiver.rs"

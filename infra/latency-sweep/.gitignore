@@ -1,0 +1,20 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars
+
+# Rust
+probe/target/
+
+# Python
+orchestrate/__pycache__/
+orchestrate/*.pyc
+orchestrate/.venv/
+
+# Results
+orchestrate/results/
+
+# OS
+.DS_Store

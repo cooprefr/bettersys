@@ -52,7 +52,9 @@ use crate::{
     models::{Config, MarketSignal, SignalDetails, SignalType, WsServerEvent},
     risk::{RiskInput, RiskManager},
     scrapers::{
-        binance_price_feed::BinancePriceFeed, dome::DomeScraper, dome_rest::DomeRestClient,
+        binance_price_feed::BinancePriceFeed, 
+        binance_book_ticker::BinanceBookTickerFeed,
+        dome::DomeScraper, dome_rest::DomeRestClient,
         dome_tracker::DomeClient, hashdive_api::HashdiveScraper, polymarket_api::PolymarketScraper,
     },
     signals::{
@@ -203,6 +205,8 @@ struct AppState {
     binance_arb_feed: Arc<crate::scrapers::binance_arb_feed::BinanceArbFeed>,
     /// Alias for backward compatibility with API handlers
     binance_price_feed: Arc<BinancePriceFeed>,
+    /// Optimized bookTicker feed (simd-json, zero-alloc, last-value snapshot)
+    binance_book_ticker: Option<Arc<BinanceBookTickerFeed>>,
     vault: Arc<crate::vault::PooledVault>,
     /// Latency registry for reactive FAST15M engine (if enabled)
     fast15m_latency_registry:
@@ -294,7 +298,9 @@ async fn main() -> Result<()> {
     info!("💾 Existing signals in database: {}", signal_storage.len());
 
     // Initialize broadcast channel (signals + enrichment updates)
-    let (signal_tx, _signal_rx) = broadcast::channel::<WsServerEvent>(1000);
+    // P99.9 OPTIMIZATION: Increased capacity from 1000 to 8192 to absorb burst traffic
+    // and reduce RecvError::Lagged under high throughput scenarios.
+    let (signal_tx, _signal_rx) = broadcast::channel::<WsServerEvent>(8192);
 
     let dome_api_key = env::var("DOME_API_KEY")
         .or_else(|_| env::var("DOME_BEARER_TOKEN"))
@@ -344,6 +350,41 @@ async fn main() -> Result<()> {
                 crate::scrapers::binance_arb_feed::BinanceArbFeed::disabled()
             }
         }
+    };
+
+    // Optimized bookTicker feed (simd-json, zero-alloc hot path, last-value snapshots)
+    // Enable via BINANCE_BOOK_TICKER_ENABLED=1 (defaults to true if Binance is enabled)
+    let book_ticker_enabled = env::var("BINANCE_BOOK_TICKER_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "on" | "ON"))
+        .unwrap_or(binance_enabled);
+
+    let binance_book_ticker = if book_ticker_enabled && binance_enabled {
+        let (feed, gap_rx) = BinanceBookTickerFeed::new();
+        
+        // Determine CPU core for pinning (optional: BINANCE_FEED_CPU_CORE=N)
+        let pin_core = env::var("BINANCE_FEED_CPU_CORE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok());
+        
+        // Spawn the feed with optional CPU pinning
+        feed.clone().spawn_background(pin_core);
+        
+        // Spawn async metrics collection (off hot path)
+        let metrics_interval = Duration::from_secs(5);
+        let _metrics_rx = crate::scrapers::spawn_book_ticker_metrics(
+            feed.clone(),
+            gap_rx,
+            metrics_interval,
+        );
+        
+        info!("⚡ Binance bookTicker feed started (simd-json, zero-alloc hot path)");
+        if let Some(core) = pin_core {
+            info!("   CPU pinned to core {}", core);
+        }
+        
+        Some(feed)
+    } else {
+        None
     };
 
     // Phase 8: Pooled vault state (shares + paper ledger).
@@ -521,6 +562,7 @@ async fn main() -> Result<()> {
         binance_price_feed: binance_feed.clone(),
         binance_feed,
         binance_arb_feed,
+        binance_book_ticker,
         vault,
         fast15m_latency_registry: Arc::new(ParkingRwLock::new(None)), // Will be set if reactive engine is enabled
         latency_registry: latency_registry.clone(),
