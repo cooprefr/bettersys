@@ -8,7 +8,6 @@ pub mod backtest_v2;
 pub mod edge;
 pub mod performance;
 pub mod route_quality;
-pub mod scrapers;
 
 // Re-export latency at crate root for compatibility
 pub use performance::latency;

@@ -37,14 +37,14 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, trace, warn};
 
 use super::polymarket::{Order, OrderBook};
-use betterbot_backend::backtest_v2::book_recorder::{
+use crate::backtest_v2::book_recorder::{
     AsyncBookRecorder, BookSnapshotStorage, PriceLevel as RecordedPriceLevel,
     RecordedBookSnapshot, now_ns,
 };
-use betterbot_backend::backtest_v2::delta_recorder::{
+use crate::backtest_v2::delta_recorder::{
     AsyncDeltaRecorder, BookDeltaStorage, L2BookDeltaRecord,
 };
-use betterbot_backend::backtest_v2::trade_recorder::{
+use crate::backtest_v2::trade_recorder::{
     AsyncTradeRecorder, RecordedTradePrint, TradePrintStorage,
 };
 

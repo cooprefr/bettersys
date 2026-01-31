@@ -130,6 +130,9 @@ panic = 'abort'
 name = "betterbot_backend"
 path = "src/lib.rs"
 
+# Disable auto-discovery to prevent broken binaries from being built
+autobins = false
+
 [[bin]]
 name = "betterbot"
 path = "src/main.rs"
